@@ -302,19 +302,88 @@ namespace Stockfish::Eval::NNUE {
           const vec_t* in1 = reinterpret_cast<const vec_t*>(&(accumulation[perspectives[p]][HalfDimensions / 2]));
                 vec_t* out = reinterpret_cast<      vec_t*>(output + offset);
 
-          for (IndexType j = 0; j < NumOutputChunks; j += 1)
+          if (NumOutputChunks == 8)
           {
-              const vec_t sum0a = vec_max_16(vec_min_16(in0[j * 2 + 0], One), Zero);
-              const vec_t sum0b = vec_max_16(vec_min_16(in0[j * 2 + 1], One), Zero);
-              const vec_t sum1a = vec_max_16(vec_min_16(in1[j * 2 + 0], One), Zero);
-              const vec_t sum1b = vec_max_16(vec_min_16(in1[j * 2 + 1], One), Zero);
+              const vec_t sum0a0 = vec_max_16(vec_min_16(in0[0 * 2 + 0], One), Zero);
+              const vec_t sum0b0 = vec_max_16(vec_min_16(in0[0 * 2 + 1], One), Zero);
+              const vec_t sum1a0 = vec_max_16(vec_min_16(in1[0 * 2 + 0], One), Zero);
+              const vec_t sum1b0 = vec_max_16(vec_min_16(in1[0 * 2 + 1], One), Zero);
+              const vec_t pa0 = vec_mul_16(sum0a0, sum1a0);
+              const vec_t pb0 = vec_mul_16(sum0b0, sum1b0);
 
-              const vec_t pa = vec_mul_16(sum0a, sum1a);
-              const vec_t pb = vec_mul_16(sum0b, sum1b);
+              const vec_t sum0a1 = vec_max_16(vec_min_16(in0[1 * 2 + 0], One), Zero);
+              const vec_t sum0b1 = vec_max_16(vec_min_16(in0[1 * 2 + 1], One), Zero);
+              const vec_t sum1a1 = vec_max_16(vec_min_16(in1[1 * 2 + 0], One), Zero);
+              const vec_t sum1b1 = vec_max_16(vec_min_16(in1[1 * 2 + 1], One), Zero);
+              const vec_t pa1 = vec_mul_16(sum0a1, sum1a1);
+              const vec_t pb1 = vec_mul_16(sum0b1, sum1b1);
 
-              out[j] = vec_msb_pack_16(pa, pb);
+              const vec_t sum0a2 = vec_max_16(vec_min_16(in0[2 * 2 + 0], One), Zero);
+              const vec_t sum0b2 = vec_max_16(vec_min_16(in0[2 * 2 + 1], One), Zero);
+              const vec_t sum1a2 = vec_max_16(vec_min_16(in1[2 * 2 + 0], One), Zero);
+              const vec_t sum1b2 = vec_max_16(vec_min_16(in1[2 * 2 + 1], One), Zero);
+              const vec_t pa2 = vec_mul_16(sum0a2, sum1a2);
+              const vec_t pb2 = vec_mul_16(sum0b2, sum1b2);
+
+              const vec_t sum0a3 = vec_max_16(vec_min_16(in0[3 * 2 + 0], One), Zero);
+              const vec_t sum0b3 = vec_max_16(vec_min_16(in0[3 * 2 + 1], One), Zero);
+              const vec_t sum1a3 = vec_max_16(vec_min_16(in1[3 * 2 + 0], One), Zero);
+              const vec_t sum1b3 = vec_max_16(vec_min_16(in1[3 * 2 + 1], One), Zero);
+              const vec_t pa3 = vec_mul_16(sum0a3, sum1a3);
+              const vec_t pb3 = vec_mul_16(sum0b3, sum1b3);
+
+              const vec_t sum0a4 = vec_max_16(vec_min_16(in0[4 * 2 + 0], One), Zero);
+              const vec_t sum0b4 = vec_max_16(vec_min_16(in0[4 * 2 + 1], One), Zero);
+              const vec_t sum1a4 = vec_max_16(vec_min_16(in1[4 * 2 + 0], One), Zero);
+              const vec_t sum1b4 = vec_max_16(vec_min_16(in1[4 * 2 + 1], One), Zero);
+              const vec_t pa4 = vec_mul_16(sum0a4, sum1a4);
+              const vec_t pb4 = vec_mul_16(sum0b4, sum1b4);
+
+              const vec_t sum0a5 = vec_max_16(vec_min_16(in0[5 * 2 + 0], One), Zero);
+              const vec_t sum0b5 = vec_max_16(vec_min_16(in0[5 * 2 + 1], One), Zero);
+              const vec_t sum1a5 = vec_max_16(vec_min_16(in1[5 * 2 + 0], One), Zero);
+              const vec_t sum1b5 = vec_max_16(vec_min_16(in1[5 * 2 + 1], One), Zero);
+              const vec_t pa5 = vec_mul_16(sum0a5, sum1a5);
+              const vec_t pb5 = vec_mul_16(sum0b5, sum1b5);
+
+              const vec_t sum0a6 = vec_max_16(vec_min_16(in0[6 * 2 + 0], One), Zero);
+              const vec_t sum0b6 = vec_max_16(vec_min_16(in0[6 * 2 + 1], One), Zero);
+              const vec_t sum1a6 = vec_max_16(vec_min_16(in1[6 * 2 + 0], One), Zero);
+              const vec_t sum1b6 = vec_max_16(vec_min_16(in1[6 * 2 + 1], One), Zero);
+              const vec_t pa6 = vec_mul_16(sum0a6, sum1a6);
+              const vec_t pb6 = vec_mul_16(sum0b6, sum1b6);
+
+              const vec_t sum0a7 = vec_max_16(vec_min_16(in0[7 * 2 + 0], One), Zero);
+              const vec_t sum0b7 = vec_max_16(vec_min_16(in0[7 * 2 + 1], One), Zero);
+              const vec_t sum1a7 = vec_max_16(vec_min_16(in1[7 * 2 + 0], One), Zero);
+              const vec_t sum1b7 = vec_max_16(vec_min_16(in1[7 * 2 + 1], One), Zero);
+              const vec_t pa7 = vec_mul_16(sum0a7, sum1a7);
+              const vec_t pb7 = vec_mul_16(sum0b7, sum1b7);
+
+              out[0] = vec_msb_pack_16(pa0, pb0);
+              out[1] = vec_msb_pack_16(pa1, pb1);
+              out[2] = vec_msb_pack_16(pa2, pb2);
+              out[3] = vec_msb_pack_16(pa3, pb3);
+              out[4] = vec_msb_pack_16(pa4, pb4);
+              out[5] = vec_msb_pack_16(pa5, pb5);
+              out[6] = vec_msb_pack_16(pa6, pb6);
+              out[7] = vec_msb_pack_16(pa7, pb7);
           }
+          else
+          {
+              for (IndexType j = 0; j < NumOutputChunks; j += 1)
+              {
+                  const vec_t sum0a = vec_max_16(vec_min_16(in0[j * 2 + 0], One), Zero);
+                  const vec_t sum0b = vec_max_16(vec_min_16(in0[j * 2 + 1], One), Zero);
+                  const vec_t sum1a = vec_max_16(vec_min_16(in1[j * 2 + 0], One), Zero);
+                  const vec_t sum1b = vec_max_16(vec_min_16(in1[j * 2 + 1], One), Zero);
 
+                  const vec_t pa = vec_mul_16(sum0a, sum1a);
+                  const vec_t pb = vec_mul_16(sum0b, sum1b);
+
+                  out[j] = vec_msb_pack_16(pa, pb);
+              }
+          }
 #else
 
           for (IndexType j = 0; j < HalfDimensions / 2; ++j) {

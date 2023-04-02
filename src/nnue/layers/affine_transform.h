@@ -328,49 +328,119 @@ namespace Stockfish::Eval::NNUE::Layers {
 #if defined (USE_SSSE3) || defined (USE_NEON)
       const in_vec_t* invec = reinterpret_cast<const in_vec_t*>(input);
 
-      // Perform accumulation to registers for each big block
-      for (IndexType bigBlock = 0; bigBlock < NumBigBlocks; ++bigBlock)
-      {
-        acc_vec_t acc[NumOutputRegs] = { vec_zero };
-
-        // Each big block has NumOutputRegs small blocks in each "row", one per register.
-        // We process two small blocks at a time to save on one addition without VNNI.
-        for (IndexType smallBlock = 0; smallBlock < NumSmallBlocksPerOutput; smallBlock += 2)
+        if (NumOutputRegs == 16)
         {
-          const weight_vec_t* weightvec =
-            reinterpret_cast<const weight_vec_t*>(
-                weights
-              + bigBlock * BigBlockSize
-              + smallBlock * SmallBlockSize * NumOutputRegs);
+            // Perform accumulation to registers for each big block
+            for (IndexType bigBlock = 0; bigBlock < NumBigBlocks; ++bigBlock)
+            {
+                acc_vec_t acc0 = vec_zero;
+                acc_vec_t acc1 = vec_zero;
+                acc_vec_t acc2 = vec_zero;
+                acc_vec_t acc3 = vec_zero;
+                acc_vec_t acc4 = vec_zero;
+                acc_vec_t acc5 = vec_zero;
+                acc_vec_t acc6 = vec_zero;
+                acc_vec_t acc7 = vec_zero;
+                acc_vec_t acc8 = vec_zero;
+                acc_vec_t acc9 = vec_zero;
+                acc_vec_t acc10 = vec_zero;
+                acc_vec_t acc11 = vec_zero;
+                acc_vec_t acc12 = vec_zero;
+                acc_vec_t acc13 = vec_zero;
+                acc_vec_t acc14 = vec_zero;
+                acc_vec_t acc15 = vec_zero;
 
-          const in_vec_t in0 = invec[smallBlock + 0];
-          const in_vec_t in1 = invec[smallBlock + 1];
+                // Each big block has NumOutputRegs small blocks in each "row", one per register.
+                // We process two small blocks at a time to save on one addition without VNNI.
+                for (IndexType smallBlock = 0; smallBlock < NumSmallBlocksPerOutput; smallBlock += 2)
+                {
+                    const weight_vec_t* weightvec =
+                        reinterpret_cast<const weight_vec_t*>(
+                            weights
+                            + bigBlock * BigBlockSize
+                            + smallBlock * SmallBlockSize * NumOutputRegs);
 
-          for (IndexType k = 0; k < NumOutputRegs; ++k)
-            vec_add_dpbusd_32x2(acc[k], in0, weightvec[k], in1, weightvec[k + NumOutputRegs]);
-        }
+                    const in_vec_t in0 = invec[smallBlock + 0];
+                    const in_vec_t in1 = invec[smallBlock + 1];
 
-        // Horizontally add all accumulators.
-        if constexpr (NumOutputRegs % 4 == 0)
-        {
-          bias_vec_t* outputvec = reinterpret_cast<bias_vec_t*>(output);
-          const bias_vec_t* biasvec = reinterpret_cast<const bias_vec_t*>(biases);
+                    vec_add_dpbusd_32x2(acc0, in0, weightvec[0], in1, weightvec[0 + 16]);
+                    vec_add_dpbusd_32x2(acc1, in0, weightvec[1], in1, weightvec[1 + 16]);
+                    vec_add_dpbusd_32x2(acc2, in0, weightvec[2], in1, weightvec[2 + 16]);
+                    vec_add_dpbusd_32x2(acc3, in0, weightvec[3], in1, weightvec[3 + 16]);
+                    vec_add_dpbusd_32x2(acc4, in0, weightvec[4], in1, weightvec[4 + 16]);
+                    vec_add_dpbusd_32x2(acc5, in0, weightvec[5], in1, weightvec[5 + 16]);
+                    vec_add_dpbusd_32x2(acc6, in0, weightvec[6], in1, weightvec[6 + 16]);
+                    vec_add_dpbusd_32x2(acc7, in0, weightvec[7], in1, weightvec[7 + 16]);
+                    vec_add_dpbusd_32x2(acc8, in0, weightvec[8], in1, weightvec[8 + 16]);
+                    vec_add_dpbusd_32x2(acc9, in0, weightvec[9], in1, weightvec[9 + 16]);
+                    vec_add_dpbusd_32x2(acc10, in0, weightvec[10], in1, weightvec[10 + 16]);
+                    vec_add_dpbusd_32x2(acc11, in0, weightvec[11], in1, weightvec[11 + 16]);
+                    vec_add_dpbusd_32x2(acc12, in0, weightvec[12], in1, weightvec[12 + 16]);
+                    vec_add_dpbusd_32x2(acc13, in0, weightvec[13], in1, weightvec[13 + 16]);
+                    vec_add_dpbusd_32x2(acc14, in0, weightvec[14], in1, weightvec[14 + 16]);
+                    vec_add_dpbusd_32x2(acc15, in0, weightvec[15], in1, weightvec[15 + 16]);
+                }
 
-          for (IndexType k = 0; k < NumOutputRegs; k += 4)
-          {
-            const IndexType idx = (bigBlock * NumOutputRegs + k) / 4;
-            outputvec[idx] = vec_haddx4(acc[k+0], acc[k+1], acc[k+2], acc[k+3], biasvec[idx]);
-          }
+                bias_vec_t* outputvec = reinterpret_cast<bias_vec_t*>(output);
+                const bias_vec_t* biasvec = reinterpret_cast<const bias_vec_t*>(biases);
+
+                const IndexType idx0  = (bigBlock * NumOutputRegs + 0 ) >> 2;
+                const IndexType idx4  = (bigBlock * NumOutputRegs + 4 ) >> 2;
+                const IndexType idx8  = (bigBlock * NumOutputRegs + 8 ) >> 2;
+                const IndexType idx12 = (bigBlock * NumOutputRegs + 12) >> 2;
+
+                outputvec[idx0 ] = vec_haddx4(acc0,   acc1,  acc2,  acc3, biasvec[idx0 ]);
+                outputvec[idx4 ] = vec_haddx4(acc4,   acc5,  acc6,  acc7, biasvec[idx4 ]);
+                outputvec[idx8 ] = vec_haddx4(acc8,   acc9, acc10, acc11, biasvec[idx8 ]);
+                outputvec[idx12] = vec_haddx4(acc12, acc13, acc14, acc15, biasvec[idx12]);
+            }
         }
         else
         {
-          for (IndexType k = 0; k < NumOutputRegs; ++k)
-          {
-            const IndexType idx = (bigBlock * NumOutputRegs + k);
-            output[idx] = vec_hadd(acc[k], biases[idx]);
-          }
+            // Perform accumulation to registers for each big block
+            for (IndexType bigBlock = 0; bigBlock < NumBigBlocks; ++bigBlock)
+            {
+                acc_vec_t acc[NumOutputRegs] = { vec_zero };
+
+                // Each big block has NumOutputRegs small blocks in each "row", one per register.
+                // We process two small blocks at a time to save on one addition without VNNI.
+                for (IndexType smallBlock = 0; smallBlock < NumSmallBlocksPerOutput; smallBlock += 2)
+                {
+                    const weight_vec_t* weightvec =
+                        reinterpret_cast<const weight_vec_t*>(
+                            weights
+                            + bigBlock * BigBlockSize
+                            + smallBlock * SmallBlockSize * NumOutputRegs);
+
+                    const in_vec_t in0 = invec[smallBlock + 0];
+                    const in_vec_t in1 = invec[smallBlock + 1];
+
+                    for (IndexType k = 0; k < NumOutputRegs; ++k)
+                        vec_add_dpbusd_32x2(acc[k], in0, weightvec[k], in1, weightvec[k + NumOutputRegs]);
+                }
+
+                // Horizontally add all accumulators.
+                if constexpr (NumOutputRegs % 4 == 0)
+                {
+                    bias_vec_t* outputvec = reinterpret_cast<bias_vec_t*>(output);
+                    const bias_vec_t* biasvec = reinterpret_cast<const bias_vec_t*>(biases);
+
+                    for (IndexType k = 0; k < NumOutputRegs; k += 4)
+                    {
+                        const IndexType idx = (bigBlock * NumOutputRegs + k) / 4;
+                        outputvec[idx] = vec_haddx4(acc[k + 0], acc[k + 1], acc[k + 2], acc[k + 3], biasvec[idx]);
+                    }
+                }
+                else
+                {
+                    for (IndexType k = 0; k < NumOutputRegs; ++k)
+                    {
+                        const IndexType idx = (bigBlock * NumOutputRegs + k);
+                        output[idx] = vec_hadd(acc[k], biases[idx]);
+                    }
+                }
+            }
         }
-      }
 
 # undef vec_zero
 # undef vec_add_dpbusd_32x2
