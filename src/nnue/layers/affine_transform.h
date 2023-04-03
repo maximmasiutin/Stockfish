@@ -350,6 +350,21 @@ namespace Stockfish::Eval::NNUE::Layers {
                 acc_vec_t acc14 = vec_zero;
                 acc_vec_t acc15 = vec_zero;
 
+                for (IndexType smallBlock = 0; smallBlock < NumSmallBlocksPerOutput; smallBlock += 2)
+                {
+                    const weight_vec_t* weightvec =
+                        reinterpret_cast<const weight_vec_t*>(
+                            weights
+                            + bigBlock * BigBlockSize
+                            + smallBlock * SmallBlockSize * NumOutputRegs);
+
+                    for (int i = 0; i < 32; ++i) {
+                        prefetch((void*)(&(weightvec[i])));
+                    }
+                    prefetch((void*)(&(invec[smallBlock + 0])));
+                    prefetch((void*)(&(invec[smallBlock + 1])));
+                }
+        
                 // Each big block has NumOutputRegs small blocks in each "row", one per register.
                 // We process two small blocks at a time to save on one addition without VNNI.
                 for (IndexType smallBlock = 0; smallBlock < NumSmallBlocksPerOutput; smallBlock += 2)

@@ -304,6 +304,10 @@ namespace Stockfish::Eval::NNUE {
 
           if (NumOutputChunks == 8)
           {
+              for (int i = 0; i < 16; ++i) { 
+                  prefetch((void*)(&(in0[i]))); 
+                  prefetch((void*)(&(in1[i])));
+              }
               const vec_t sum0a0 = vec_max_16(vec_min_16(in0[0 * 2 + 0], One), Zero);
               const vec_t sum0b0 = vec_max_16(vec_min_16(in0[0 * 2 + 1], One), Zero);
               const vec_t sum1a0 = vec_max_16(vec_min_16(in1[0 * 2 + 0], One), Zero);
