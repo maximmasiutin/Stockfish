@@ -358,9 +358,6 @@ namespace Stockfish::Eval::NNUE::Layers {
                             + bigBlock * BigBlockSize
                             + smallBlock * SmallBlockSize * NumOutputRegs);
 
-                    for (int i = 0; i < 32; ++i) {
-                        prefetch((void*)(&(weightvec[i])));
-                    }
                     prefetch((void*)(&(invec[smallBlock + 0])));
                     prefetch((void*)(&(invec[smallBlock + 1])));
                 }
@@ -374,6 +371,14 @@ namespace Stockfish::Eval::NNUE::Layers {
                             weights
                             + bigBlock * BigBlockSize
                             + smallBlock * SmallBlockSize * NumOutputRegs);
+
+                    prefetch((void*)(&(invec[smallBlock + 0])));
+                    prefetch((void*)(&(invec[smallBlock + 1])));
+
+
+                    for (int i = 0; i < 32; ++i) {
+                        prefetch((void*)(&(weightvec[i])));
+                    }
 
                     const in_vec_t in0 = invec[smallBlock + 0];
                     const in_vec_t in1 = invec[smallBlock + 1];
