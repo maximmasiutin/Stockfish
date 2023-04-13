@@ -336,14 +336,26 @@ namespace Stockfish::Eval::NNUE::Layers {
           // and happens faster than scattered loads mixed with other loads (such as from invec[] and weightvec[])
 
 
-          acc_vec_t acc0, acc1, acc2, acc3, acc4, acc5, acc6, acc7, acc8, acc9, acc10, acc11, acc12, acc13, acc14, acc15;
-          acc0 = acc1 = acc2 = acc3 = acc4 = acc5 = acc6 = acc7 = acc8 = acc9 = acc10 = acc11 = acc12 = acc13 = acc14 = acc15 = { vec_zero };
-
           const weight_vec_t* weightvec = reinterpret_cast<const weight_vec_t*>(weights + 0 * 2 * SmallBlockSize * NumOutputRegs);
-
           bias_vec_t* outputvec = reinterpret_cast<bias_vec_t*>(output);
           const bias_vec_t* biasvec = reinterpret_cast<const bias_vec_t*>(biases);
 
+          acc_vec_t  acc0 = { vec_zero };
+          acc_vec_t  acc1 = { vec_zero };
+          acc_vec_t  acc2 = { vec_zero };
+          acc_vec_t  acc3 = { vec_zero };
+          acc_vec_t  acc4 = { vec_zero };
+          acc_vec_t  acc5 = { vec_zero };
+          acc_vec_t  acc6 = { vec_zero };
+          acc_vec_t  acc7 = { vec_zero };
+          acc_vec_t  acc8 = { vec_zero };
+          acc_vec_t  acc9 = { vec_zero };
+          acc_vec_t acc10 = { vec_zero };
+          acc_vec_t acc11 = { vec_zero };
+          acc_vec_t acc12 = { vec_zero };
+          acc_vec_t acc13 = { vec_zero };
+          acc_vec_t acc14 = { vec_zero };
+          acc_vec_t acc15 = { vec_zero };
 
           const in_vec_t ina0 = invec[0 * 2 + 0];
           const in_vec_t inb0 = invec[0 * 2 + 1];
