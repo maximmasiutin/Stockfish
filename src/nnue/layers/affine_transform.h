@@ -337,7 +337,7 @@ namespace Stockfish::Eval::NNUE::Layers {
 
 
           acc_vec_t acc0, acc1, acc2, acc3, acc4, acc5, acc6, acc7, acc8, acc9, acc10, acc11, acc12, acc13, acc14, acc15;
-          acc0 = acc1 = acc2 = acc3 = acc4 = acc5 = acc6 = acc7 = acc8 = acc9 = acc10 = acc11 = acc12 = acc13 = acc14, acc15 = { vec_zero };
+          acc0 = acc1 = acc2 = acc3 = acc4 = acc5 = acc6 = acc7 = acc8 = acc9 = acc10 = acc11 = acc12 = acc13 = acc14 = acc15 = { vec_zero };
 
           const weight_vec_t* weightvec = reinterpret_cast<const weight_vec_t*>(weights + 0 * 2 * SmallBlockSize * NumOutputRegs);
 
