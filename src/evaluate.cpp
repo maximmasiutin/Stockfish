@@ -283,13 +283,44 @@ namespace {
 
 #undef S
 
+  // Theshold values. 
+
+  // If evaluation of a position of n pieces exceeds the theshold, use classical evalulation; otherwise use NNUE.
+
+  // If n falls outside the range for which values are given, 
+  // i.e. [minPiecesThreshold..minPiecesThreshold+numParamsThreshold-1] which means from 3 pieces up to and including 28 pieces,
+  // clamp n to get nearest given value.
+
   constexpr auto minPiecesThreshold = 3;
   constexpr auto numParamsThreshold = 26;
-  Value t0 = Value(2048), t1 = Value(2048), t2 = Value(2048), t3 = Value(2048), t4 = Value(2048), t5 = Value(2048), t6 = Value(2048), t7 = Value(2048), t8 = Value(2048), t9 = Value(2048), t10 = Value(2048), t11 = Value(2048), t12 = Value(2048), t13 = Value(2048), t14 = Value(2048), t15 = Value(2048), t16 = Value(2048), t17 = Value(2048), t18 = Value(2048), t19 = Value(2048), t20 = Value(2048), t21 = Value(2048), t22 = Value(2048), t23 = Value(2048), t24 = Value(2048), t25 = Value(2048);
-  Value thresholds[numParamsThreshold] = { t0, t1, t2, t3, t4, t5, t6, t7, t8, t9, t10, t11, t12, t13, t14, t15, t16, t17, t18, t19, t20, t21, t22, t23, t24, t25};
-  TUNE(t0, t1, t2, t3, t4, t5, t6, t7, t8, t9, t10, t11, t12, t13, t14, t15, t16, t17, t18, t19, t20, t21, t22, t23, t24, t25);
+  constexpr Value t3pcs = Value(2048);
+  constexpr Value t4pcs = Value(2048);
+  constexpr Value t5pcs = Value(2048);
+  constexpr Value t6pcs = Value(2048);
+  constexpr Value t7pcs = Value(2048);
+  constexpr Value t8pcs = Value(2048);
+  constexpr Value t9pcs = Value(2048);
+  constexpr Value t10pcs = Value(2048);
+  constexpr Value t11pcs = Value(2048);
+  constexpr Value t12pcs = Value(2048);
+  constexpr Value t13pcs = Value(2048);
+  constexpr Value t14pcs = Value(2048);
+  constexpr Value t15pcs = Value(2048);
+  constexpr Value t16pcs = Value(2048);
+  constexpr Value t17pcs = Value(2048);
+  constexpr Value t18pcs = Value(2048);
+  constexpr Value t19pcs = Value(2048);
+  constexpr Value t20pcs = Value(2048);
+  constexpr Value t21pcs = Value(2048);
+  constexpr Value t22pcs = Value(2048);
+  constexpr Value t23pcs = Value(2048);
+  constexpr Value t24pcs = Value(2048);
+  constexpr Value t25pcs = Value(2048);
+  constexpr Value t26pcs = Value(2048);
+  constexpr Value t27pcs = Value(2048);
+  constexpr Value t28pcs = Value(2048);
 
-
+  constexpr Value thresholdValues[numParamsThreshold] = {t3pcs, t4pcs, t5pcs, t6pcs, t7pcs, t8pcs, t9pcs, t10pcs, t11pcs, t12pcs, t13pcs, t14pcs, t15pcs, t16pcs, t17pcs, t18pcs, t19pcs, t20pcs, t21pcs, t22pcs, t23pcs, t24pcs, t25pcs, t26pcs, t27pcs, t28pcs};
 
   // Evaluation class computes and stores attacks tables and other working data
   template<Tracing T>
@@ -1066,7 +1097,7 @@ Value Eval::evaluate(const Position& pos) {
   // We use the much less accurate but faster Classical eval when the NNUE
   // option is set to false. Otherwise we use the NNUE eval unless the
   // PSQ advantage is decisive. (~4 Elo at STC, 1 Elo at LTC)
-  bool useClassical = !useNNUE || abs(psq) > thresholds[std::clamp(pos.count<ALL_PIECES>() - minPiecesThreshold, 0, numParamsThreshold-1)];
+  bool useClassical = !useNNUE || abs(psq) > thresholdValues[std::clamp(pos.count<ALL_PIECES>() - minPiecesThreshold, 0, numParamsThreshold-1)];
 
   if (useClassical)
       v = Evaluation<NO_TRACE>(pos).value();
