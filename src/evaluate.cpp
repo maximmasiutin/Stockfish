@@ -283,6 +283,14 @@ namespace {
 
 #undef S
 
+  constexpr auto minPiecesThreshold = 3;
+  constexpr auto numParamsThreshold = 26;
+  Value t0 = Value(2048), t1 = Value(2048), t2 = Value(2048), t3 = Value(2048), t4 = Value(2048), t5 = Value(2048), t6 = Value(2048), t7 = Value(2048), t8 = Value(2048), t9 = Value(2048), t10 = Value(2048), t11 = Value(2048), t12 = Value(2048), t13 = Value(2048), t14 = Value(2048), t15 = Value(2048), t16 = Value(2048), t17 = Value(2048), t18 = Value(2048), t19 = Value(2048), t20 = Value(2048), t21 = Value(2048), t22 = Value(2048), t23 = Value(2048), t24 = Value(2048), t25 = Value(2048);
+  Value thresholds[numParamsThreshold] = { t0, t1, t2, t3, t4, t5, t6, t7, t8, t9, t10, t11, t12, t13, t14, t15, t16, t17, t18, t19, t20, t21, t22, t23, t24, t25};
+  TUNE(t0, t1, t2, t3, t4, t5, t6, t7, t8, t9, t10, t11, t12, t13, t14, t15, t16, t17, t18, t19, t20, t21, t22, t23, t24, t25);
+
+
+
   // Evaluation class computes and stores attacks tables and other working data
   template<Tracing T>
   class Evaluation {
@@ -1046,6 +1054,7 @@ make_v:
 /// evaluate() is the evaluator for the outer world. It returns a static
 /// evaluation of the position from the point of view of the side to move.
 
+
 Value Eval::evaluate(const Position& pos) {
 
   assert(!pos.checkers());
@@ -1053,15 +1062,11 @@ Value Eval::evaluate(const Position& pos) {
   Value v;
   Value psq = pos.psq_eg_stm();
 
-  const auto minPieces = 3;
-  const auto numParams = 26;
-  static Value thresholds[numParams] = { Value(2048), Value(2048), Value(2048), Value(2048), Value(2048), Value(2048), Value(2048), Value(2048), Value(2048), Value(2048), Value(2048), Value(2048), Value(2048), Value(2048), Value(2048), Value(2048), Value(2048), Value(2048), Value(2048), Value(2048), Value(2048), Value(2048), Value(2048), Value(2048), Value(2048), Value(2048)};
-  TUNE(thresholds);
 
   // We use the much less accurate but faster Classical eval when the NNUE
   // option is set to false. Otherwise we use the NNUE eval unless the
   // PSQ advantage is decisive. (~4 Elo at STC, 1 Elo at LTC)
-  bool useClassical = !useNNUE || abs(psq) > thresholds[std::clamp(pos.count<ALL_PIECES>() - minPieces, 0, numParams-1)];
+  bool useClassical = !useNNUE || abs(psq) > thresholds[std::clamp(pos.count<ALL_PIECES>() - minPiecesThreshold, 0, numParamsThreshold-1)];
 
   if (useClassical)
       v = Evaluation<NO_TRACE>(pos).value();
