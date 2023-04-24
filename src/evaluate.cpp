@@ -1055,8 +1055,8 @@ Value Eval::evaluate(const Position& pos) {
 
   const auto minPieces = 3;
   const auto numParams = 26;
-  static const Value thresholds[numParams] = { Value(2048), Value(2048), Value(2048), Value(2048), Value(2048), Value(2048), Value(2048), Value(2048), Value(2048), Value(2048), Value(2048), Value(2048), Value(2048), Value(2048), Value(2048), Value(2048), Value(2048), Value(2048), Value(2048), Value(2048), Value(2048), Value(2048), Value(2048), Value(2048), Value(2048), Value(2048)};
-
+  static Value thresholds[numParams] = { Value(2048), Value(2048), Value(2048), Value(2048), Value(2048), Value(2048), Value(2048), Value(2048), Value(2048), Value(2048), Value(2048), Value(2048), Value(2048), Value(2048), Value(2048), Value(2048), Value(2048), Value(2048), Value(2048), Value(2048), Value(2048), Value(2048), Value(2048), Value(2048), Value(2048), Value(2048)};
+  TUNE(thresholds);
 
   // We use the much less accurate but faster Classical eval when the NNUE
   // option is set to false. Otherwise we use the NNUE eval unless the
