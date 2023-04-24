@@ -1053,10 +1053,39 @@ Value Eval::evaluate(const Position& pos) {
   Value v;
   Value psq = pos.psq_eg_stm();
 
+  bool useClassical;
+
   // We use the much less accurate but faster Classical eval when the NNUE
   // option is set to false. Otherwise we use the NNUE eval unless the
   // PSQ advantage is decisive. (~4 Elo at STC, 1 Elo at LTC)
-  bool useClassical = !useNNUE || abs(psq) > 2048;
+
+  if (!useNNUE)
+    useClassical = true;
+  else
+  {
+    Value treshold;
+    switch (pos.count<ALL_PIECES>())
+    {
+      case 3:
+        treshold = QueenValueEg - PawnValueEg * (-2);
+        break;
+      case 4:
+        treshold = QueenValueEg - PawnValueEg * (-1);
+        break;
+      case 5:
+        treshold = QueenValueEg - PawnValueEg * ( 0);
+        break;
+      case 6:
+        treshold = QueenValueEg - PawnValueEg * ( 1);
+        break;
+      case 7:
+        treshold = QueenValueEg - PawnValueEg * ( 2);
+        break;
+      default:
+        treshold = QueenValueEg - PawnValueEg * ( 3);
+    }
+    useClassical = abs(psq) > treshold;
+  }
 
   if (useClassical)
       v = Evaluation<NO_TRACE>(pos).value();
