@@ -283,6 +283,51 @@ namespace {
 
 #undef S
 
+  // Theshold values
+
+  // If evaluation of a position of n pieces exceeds the theshold, use classical evalulation; otherwise use NNUE.
+
+  // If n falls outside the range for which values are given, 
+  // i.e. [minPiecesThreshold..minPiecesThreshold+numParamsThreshold-1] which means from 3 pieces up to and including 28 pieces,
+  // clamp n to get nearest given value.
+
+  constexpr auto minPiecesThreshold = 3;
+  constexpr auto numParamsThreshold = 26;
+
+  // Using constant names with leading zeros for easier sorting
+
+  Value t03pcs = Value(1809);
+  Value t04pcs = Value(1933);
+  Value t05pcs = Value(2339);
+  Value t06pcs = Value(2253);
+  Value t07pcs = Value(2133);
+  Value t08pcs = Value(1963);
+  Value t09pcs = Value(2395);
+  Value t10pcs = Value(1642);
+  Value t11pcs = Value(1966);
+  Value t12pcs = Value(1726);
+  Value t13pcs = Value(2015);
+  Value t14pcs = Value(1800);
+  Value t15pcs = Value(1964);
+  Value t16pcs = Value(2168);
+  Value t17pcs = Value(2299);
+  Value t18pcs = Value(1903);
+  Value t19pcs = Value(2269);
+  Value t20pcs = Value(2206);
+  Value t21pcs = Value(2007);
+  Value t22pcs = Value(2289);
+  Value t23pcs = Value(2010);
+  Value t24pcs = Value(1710);
+  Value t25pcs = Value(2325);
+  Value t26pcs = Value(2318);
+  Value t27pcs = Value(1881);
+  Value t28pcs = Value(2273);
+
+  Value thresholdValues[numParamsThreshold] = {t03pcs, t04pcs, t05pcs, t06pcs, t07pcs, t08pcs, t09pcs, t10pcs, t11pcs, t12pcs, t13pcs, t14pcs, t15pcs, t16pcs, t17pcs, t18pcs, t19pcs, t20pcs, t21pcs, t22pcs, t23pcs, t24pcs, t25pcs, t26pcs, t27pcs, t28pcs};
+
+  TUNE(t08pcs, t09pcs, t13pcs, t18pcs, t23pcs, t24pcs, t27pcs);
+
+
   // Evaluation class computes and stores attacks tables and other working data
   template<Tracing T>
   class Evaluation {
@@ -1046,6 +1091,7 @@ make_v:
 /// evaluate() is the evaluator for the outer world. It returns a static
 /// evaluation of the position from the point of view of the side to move.
 
+
 Value Eval::evaluate(const Position& pos) {
 
   assert(!pos.checkers());
@@ -1053,10 +1099,11 @@ Value Eval::evaluate(const Position& pos) {
   Value v;
   Value psq = pos.psq_eg_stm();
 
+
   // We use the much less accurate but faster Classical eval when the NNUE
   // option is set to false. Otherwise we use the NNUE eval unless the
   // PSQ advantage is decisive. (~4 Elo at STC, 1 Elo at LTC)
-  bool useClassical = !useNNUE || abs(psq) > 2048;
+  bool useClassical = !useNNUE || abs(psq) > thresholdValues[std::clamp(pos.count<ALL_PIECES>() - minPiecesThreshold, 0, numParamsThreshold-1)];
 
   if (useClassical)
       v = Evaluation<NO_TRACE>(pos).value();
