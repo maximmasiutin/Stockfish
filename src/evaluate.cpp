@@ -296,32 +296,32 @@ namespace {
 
   // Using constant names with leading zeros for easier sorting
 
-  constexpr Value t03pcs = Value(1816);   // t0
-  constexpr Value t04pcs = Value(1925);   // t1
-  constexpr Value t05pcs = Value(2239);   // t2
-  constexpr Value t06pcs = Value(2430);   // t3
-  constexpr Value t07pcs = Value(2210);   // t4
-  constexpr Value t08pcs = Value(1932);   // t5
-  constexpr Value t09pcs = Value(2398);   // t6
-  constexpr Value t10pcs = Value(1671);   // t7
-  constexpr Value t11pcs = Value(1923);   // t8
-  constexpr Value t12pcs = Value(1734);   // t9
-  constexpr Value t13pcs = Value(2041);   // t10
-  constexpr Value t14pcs = Value(1909);   // t11
-  constexpr Value t15pcs = Value(1923);   // t12
-  constexpr Value t16pcs = Value(2016);   // t13
-  constexpr Value t17pcs = Value(2295);   // t14
-  constexpr Value t18pcs = Value(2039);   // t15
-  constexpr Value t19pcs = Value(2283);   // t16
-  constexpr Value t20pcs = Value(2221);   // t17
-  constexpr Value t21pcs = Value(1883);   // t18
-  constexpr Value t22pcs = Value(2210);   // t19
-  constexpr Value t23pcs = Value(1927);   // t20
-  constexpr Value t24pcs = Value(1592);   // t21
-  constexpr Value t25pcs = Value(2371);   // t22
-  constexpr Value t26pcs = Value(2465);   // t23
-  constexpr Value t27pcs = Value(1944);   // t24
-  constexpr Value t28pcs = Value(2174);   // t25
+  constexpr Value t03pcs = Value(1820);   // t0
+  constexpr Value t04pcs = Value(1882);   // t1
+  constexpr Value t05pcs = Value(2218);   // t2
+  constexpr Value t06pcs = Value(2397);   // t3
+  constexpr Value t07pcs = Value(2196);   // t4
+  constexpr Value t08pcs = Value(1947);   // t5
+  constexpr Value t09pcs = Value(2385);   // t6
+  constexpr Value t10pcs = Value(1687);   // t7
+  constexpr Value t11pcs = Value(1919);   // t8
+  constexpr Value t12pcs = Value(1724);   // t9
+  constexpr Value t13pcs = Value(2034);   // t10
+  constexpr Value t14pcs = Value(1920);   // t11
+  constexpr Value t15pcs = Value(1922);   // t12
+  constexpr Value t16pcs = Value(1996);   // t13
+  constexpr Value t17pcs = Value(2288);   // t14
+  constexpr Value t18pcs = Value(2057);   // t15
+  constexpr Value t19pcs = Value(2264);   // t16
+  constexpr Value t20pcs = Value(2263);   // t17
+  constexpr Value t21pcs = Value(1906);   // t18
+  constexpr Value t22pcs = Value(2200);   // t19
+  constexpr Value t23pcs = Value(1896);   // t20
+  constexpr Value t24pcs = Value(1584);   // t21
+  constexpr Value t25pcs = Value(2332);   // t22
+  constexpr Value t26pcs = Value(2475);   // t23
+  constexpr Value t27pcs = Value(1994);   // t24
+  constexpr Value t28pcs = Value(2190);   // t25
 
   constexpr Value thresholdValues[numParamsThreshold] = {t03pcs, t04pcs, t05pcs, t06pcs, t07pcs, t08pcs, t09pcs, t10pcs, t11pcs, t12pcs, t13pcs, t14pcs, t15pcs, t16pcs, t17pcs, t18pcs, t19pcs, t20pcs, t21pcs, t22pcs, t23pcs, t24pcs, t25pcs, t26pcs, t27pcs, t28pcs};
 
