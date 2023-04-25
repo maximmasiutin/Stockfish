@@ -281,7 +281,7 @@ namespace {
   constexpr Score WeakQueen           = S( 57, 19);
 
   // This value should be SPSA-tuned whenever EvalFileDefaultName changes
-  constexpr Value thresholdClassicAdv = Value(2159);
+  constexpr Value thresholdClassicAdv = Value(2231);
 
 #undef S
 
