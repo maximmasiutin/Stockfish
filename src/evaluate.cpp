@@ -296,32 +296,32 @@ namespace {
 
   // Using constant names with leading zeros for easier sorting
 
-  constexpr Value t03pcs = Value(2321);   
-  constexpr Value t04pcs = Value(2123);   
-  constexpr Value t05pcs = Value(2309);   
-  constexpr Value t06pcs = Value(2250);   
-  constexpr Value t07pcs = Value(2184);   
-  constexpr Value t08pcs = Value(2247);   
-  constexpr Value t09pcs = Value(2002);   
-  constexpr Value t10pcs = Value(2215);   
-  constexpr Value t11pcs = Value(2214);   
-  constexpr Value t12pcs = Value(2247);   
-  constexpr Value t13pcs = Value(2105);   
-  constexpr Value t14pcs = Value(2103);   
-  constexpr Value t15pcs = Value(2049);   
-  constexpr Value t16pcs = Value(2049);   
-  constexpr Value t17pcs = Value(2112);   
-  constexpr Value t18pcs = Value(2173);   
-  constexpr Value t19pcs = Value(2138);   
-  constexpr Value t20pcs = Value(2165);   
-  constexpr Value t21pcs = Value(2290);   
-  constexpr Value t22pcs = Value(2253);   
-  constexpr Value t23pcs = Value(2086);   
-  constexpr Value t24pcs = Value(2197);   
-  constexpr Value t25pcs = Value(2258);   
-  constexpr Value t26pcs = Value(2145);   
-  constexpr Value t27pcs = Value(2190);   
-  constexpr Value t28pcs = Value(2154);   
+  constexpr Value t03pcs = Value(2306);   
+  constexpr Value t04pcs = Value(2167);   
+  constexpr Value t05pcs = Value(2311);   
+  constexpr Value t06pcs = Value(2252);   
+  constexpr Value t07pcs = Value(2209);   
+  constexpr Value t08pcs = Value(2209);   
+  constexpr Value t09pcs = Value(2025);   
+  constexpr Value t10pcs = Value(2251);   
+  constexpr Value t11pcs = Value(2167);   
+  constexpr Value t12pcs = Value(2231);   
+  constexpr Value t13pcs = Value(2139);   
+  constexpr Value t14pcs = Value(2098);   
+  constexpr Value t15pcs = Value(2051);   
+  constexpr Value t16pcs = Value(2027);   
+  constexpr Value t17pcs = Value(2097);   
+  constexpr Value t18pcs = Value(2205);   
+  constexpr Value t19pcs = Value(2182);   
+  constexpr Value t20pcs = Value(2175);   
+  constexpr Value t21pcs = Value(2264);   
+  constexpr Value t22pcs = Value(2218);   
+  constexpr Value t23pcs = Value(2072);   
+  constexpr Value t24pcs = Value(2183);   
+  constexpr Value t25pcs = Value(2259);   
+  constexpr Value t26pcs = Value(2141);   
+  constexpr Value t27pcs = Value(2163);   
+  constexpr Value t28pcs = Value(2175);   
 
   constexpr Value thresholdValues[numParamsThreshold] = {t03pcs, t04pcs, t05pcs, t06pcs, t07pcs, t08pcs, t09pcs, t10pcs, t11pcs, t12pcs, t13pcs, t14pcs, t15pcs, t16pcs, t17pcs, t18pcs, t19pcs, t20pcs, t21pcs, t22pcs, t23pcs, t24pcs, t25pcs, t26pcs, t27pcs, t28pcs};
 
