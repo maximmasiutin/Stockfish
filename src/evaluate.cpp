@@ -280,8 +280,46 @@ namespace {
   constexpr Score WeakQueenProtection = S( 14,  0);
   constexpr Score WeakQueen           = S( 57, 19);
 
-
 #undef S
+
+  // Theshold values
+
+  // If evaluation of a position of n pieces exceeds the theshold, use classical evalulation; otherwise use NNUE;
+  // if n falls outside the range for which values are given,
+  // i.e. [minPiecesThreshold..minPiecesThreshold+numParamsThreshold-1] which means from 3 pieces up to and including 28 pieces,
+  // clamp n to get nearest given value.
+  constexpr auto minPiecesThreshold = 3;
+  constexpr auto numParamsThreshold = 26;
+
+  // Using constant names with leading zeros for easier sorting
+  constexpr Value t03pcs = Value(2500);
+  constexpr Value t04pcs = Value(2200);
+  constexpr Value t05pcs = Value(2300);
+  constexpr Value t06pcs = Value(2300);
+  constexpr Value t07pcs = Value(2250);
+  constexpr Value t08pcs = Value(2200);
+  constexpr Value t09pcs = Value(2200);
+  constexpr Value t10pcs = Value(2200);
+  constexpr Value t11pcs = Value(2200);
+  constexpr Value t12pcs = Value(2200);
+  constexpr Value t13pcs = Value(2100);
+  constexpr Value t14pcs = Value(2100);
+  constexpr Value t15pcs = Value(2050);
+  constexpr Value t16pcs = Value(1950);
+  constexpr Value t17pcs = Value(2050);
+  constexpr Value t18pcs = Value(2200);
+  constexpr Value t19pcs = Value(2200);
+  constexpr Value t20pcs = Value(2200);
+  constexpr Value t21pcs = Value(2200);
+  constexpr Value t22pcs = Value(2200);
+  constexpr Value t23pcs = Value(2200);
+  constexpr Value t24pcs = Value(2200);
+  constexpr Value t25pcs = Value(2200);
+  constexpr Value t26pcs = Value(2100);
+  constexpr Value t27pcs = Value(2100);
+  constexpr Value t28pcs = Value(2100);
+
+  constexpr Value thresholdValues[numParamsThreshold] = {t03pcs, t04pcs, t05pcs, t06pcs, t07pcs, t08pcs, t09pcs, t10pcs, t11pcs, t12pcs, t13pcs, t14pcs, t15pcs, t16pcs, t17pcs, t18pcs, t19pcs, t20pcs, t21pcs, t22pcs, t23pcs, t24pcs, t25pcs, t26pcs, t27pcs, t28pcs};
 
   // Evaluation class computes and stores attacks tables and other working data
   template<Tracing T>
@@ -1055,8 +1093,8 @@ Value Eval::evaluate(const Position& pos) {
 
   // We use the much less accurate but faster Classical eval when the NNUE
   // option is set to false. Otherwise we use the NNUE eval unless the
-  // PSQ advantage is decisive. (~4 Elo at STC, 1 Elo at LTC)
-  bool useClassical = !useNNUE || abs(psq) > 2048;
+  // PSQ advantage is decisive.
+  bool useClassical = !useNNUE || abs(psq) > thresholdValues[std::clamp(pos.count<ALL_PIECES>() - minPiecesThreshold, 0, numParamsThreshold - 1)];
 
   if (useClassical)
       v = Evaluation<NO_TRACE>(pos).value();
