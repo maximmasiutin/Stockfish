@@ -33,6 +33,7 @@
 #include "position.h"
 #include "search.h"
 #include "syzygy/tbprobe.h"
+#include "Allocator.h"
 #include "thread_win32_osx.h"
 
 namespace Stockfish {
@@ -41,6 +42,8 @@ namespace Stockfish {
 /// per-thread pawn and material hash tables so that once we get a
 /// pointer to an entry its life time is unlimited and we don't have
 /// to care about someone changing the entry under our feet.
+
+
 
 class Thread {
 
@@ -78,8 +81,15 @@ public:
   ContinuationHistory continuationHistory[2][2];
 
   typedef std::pair<Tablebases::WDLScore, Tablebases::ProbeState> TbCachePair;
-  std::map <Key, TbCachePair> tb_cache;
-  std::set<Key> tb_fail;
+
+  static constexpr size_t grow_size_set = 1024 * 1024;
+  typedef Moya::Allocator<Key, grow_size_set> SetMemoryPoolAllocator;
+  std::set<Key, std::less<Key>, SetMemoryPoolAllocator> tb_fail;
+
+  static constexpr size_t grow_size_map = 1024;
+  typedef Moya::Allocator<std::map<Key, TbCachePair>::value_type, grow_size_map> MapMemoryPoolAllocator;
+  std::map<Key, TbCachePair, std::less<Key>, MapMemoryPoolAllocator> tb_cache;
+
 
 };
 
