@@ -661,11 +661,18 @@ namespace {
         {
             TB::ProbeState err;
             TB::WDLScore wdl;
-            auto cached_wdl_iter = thisThread->tb_cache.find(posKey);
-            if (cached_wdl_iter == thisThread->tb_cache.end())
+            auto cached_wdl_iter = thisThread->tb_cache.lower_bound(posKey);
+            if ((cached_wdl_iter != thisThread->tb_cache.end()) && (cached_wdl_iter->first == posKey))
             {
-                auto fail_iter = thisThread->tb_fail.find(posKey);
-                if (fail_iter != thisThread->tb_fail.end())
+                const Thread::TbCachePair& cached_wdl_pair = cached_wdl_iter->second;
+                wdl = cached_wdl_pair.first;
+                err = cached_wdl_pair.second;
+            }
+            else
+            {
+                auto fail_iter = thisThread->tb_fail.lower_bound(posKey);
+
+                if ((fail_iter != thisThread->tb_fail.end()) && (*fail_iter == posKey))
                 {
                     err = TB::ProbeState::FAIL;
                     wdl = TB::WDLScore::WDLDraw;
@@ -675,20 +682,15 @@ namespace {
                     wdl = Tablebases::probe_wdl(pos, &err);
                     if (err == TB::ProbeState::FAIL)
                     {
-                        thisThread->tb_fail.insert(posKey);
+                        thisThread->tb_fail.emplace_hint(fail_iter, posKey);
                     }
                     else
                     {
-                        thisThread->tb_cache[posKey] = std::make_pair(wdl, err) ;
+                        thisThread->tb_cache.emplace_hint(cached_wdl_iter, posKey, std::make_pair(wdl, err));
                     }
                 }
             }
-            else
-            {
-                const Thread::TbCachePair &cached_wdl_pair = cached_wdl_iter->second;
-                wdl = cached_wdl_pair.first;
-                err = cached_wdl_pair.second;
-            }
+            
 
             // Force check of time on the next occasion
             if (thisThread == Threads.main())
