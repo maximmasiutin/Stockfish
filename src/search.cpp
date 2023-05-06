@@ -654,13 +654,25 @@ namespace {
     {
         int piecesCount = pos.count<ALL_PIECES>();
 
-        if (    piecesCount <= TB::Cardinality
-            && (piecesCount <  TB::Cardinality || depth >= TB::ProbeDepth)
-            &&  pos.rule50_count() == 0
+        if (piecesCount <= TB::Cardinality
+            && (piecesCount < TB::Cardinality || depth >= TB::ProbeDepth)
+            && pos.rule50_count() == 0
             && !pos.can_castle(ANY_CASTLING))
         {
             TB::ProbeState err;
-            TB::WDLScore wdl = Tablebases::probe_wdl(pos, &err);
+            TB::WDLScore wdl;
+            auto cached_wdl_iter = thisThread->tb_cache.find(posKey);
+            if (cached_wdl_iter == thisThread->tb_cache.end())
+            {
+               wdl = Tablebases::probe_wdl(pos, &err);
+               thisThread->tb_cache[posKey] = std::make_pair(wdl, err);
+            }
+            else
+            {
+                const Thread::TbCachePair &cached_wdl_pair = cached_wdl_iter->second;
+                wdl = cached_wdl_pair.first;
+                err = cached_wdl_pair.second;
+            }
 
             // Force check of time on the next occasion
             if (thisThread == Threads.main())

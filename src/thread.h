@@ -24,12 +24,14 @@
 #include <mutex>
 #include <thread>
 #include <vector>
+#include <map>
 
 #include "material.h"
 #include "movepick.h"
 #include "pawns.h"
 #include "position.h"
 #include "search.h"
+#include "syzygy/tbprobe.h"
 #include "thread_win32_osx.h"
 
 namespace Stockfish {
@@ -73,6 +75,10 @@ public:
   ButterflyHistory mainHistory;
   CapturePieceToHistory captureHistory;
   ContinuationHistory continuationHistory[2][2];
+
+  typedef std::pair<Tablebases::WDLScore, Tablebases::ProbeState> TbCachePair;
+  std::map <Key, TbCachePair> tb_cache;
+
 };
 
 
