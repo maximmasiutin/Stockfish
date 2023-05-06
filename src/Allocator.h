@@ -41,8 +41,8 @@ class MemoryPool
 
             Buffer *const next;
 
-            Buffer(Buffer *next) :
-                next(next)
+            Buffer(Buffer *a_next) :
+                next(a_next)
             {
             }
 
@@ -151,6 +151,7 @@ class Allocator : private MemoryPool<T, growSize>
             if (rebindAllocator)
                 return rebindAllocator->allocate(n, hint);
 #endif
+
 
             return MemoryPool<T, growSize>::allocate();
         }
