@@ -25,6 +25,7 @@
 #include <thread>
 #include <vector>
 #include <map>
+#include <set>
 
 #include "material.h"
 #include "movepick.h"
@@ -78,6 +79,7 @@ public:
 
   typedef std::pair<Tablebases::WDLScore, Tablebases::ProbeState> TbCachePair;
   std::map <Key, TbCachePair> tb_cache;
+  std::set<Key> tb_fail;
 
 };
 
