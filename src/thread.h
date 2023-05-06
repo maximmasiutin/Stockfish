@@ -89,8 +89,6 @@ public:
   static constexpr size_t grow_size_map = 1024;
   typedef Moya::Allocator<std::map<Key, TbCachePair>::value_type, grow_size_map> MapMemoryPoolAllocator;
   std::map<Key, TbCachePair, std::less<Key>, MapMemoryPoolAllocator> tb_cache;
-
-
 };
 
 
