@@ -152,9 +152,6 @@ class Allocator : private MemoryPool<T, growSize>
                 return rebindAllocator->allocate(n, hint);
 #endif
 
-            if (n != 1 || hint)
-                throw std::bad_alloc();
-
             return MemoryPool<T, growSize>::allocate();
         }
 
