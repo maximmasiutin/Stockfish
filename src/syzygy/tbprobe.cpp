@@ -51,6 +51,9 @@
 #include <windows.h>
 #endif
 
+#include "../incbin/incbin.h"
+
+
 using namespace Stockfish::Tablebases;
 
 int Stockfish::Tablebases::MaxCardinality;
@@ -168,6 +171,11 @@ static_assert(sizeof(LR) == 3, "LR tree entry must be 3 bytes");
 // class TBFile memory maps/unmaps the single .rtbw and .rtbz files. Files are
 // memory mapped for best performance. Files are mapped at first access: at init
 // time only existence of the file is checked.
+
+std::map<std::string, void*> memory_tables;
+
+
+
 class TBFile : public std::ifstream {
 
     std::string fname;
@@ -181,6 +189,8 @@ public:
     // C:\tb\wdl345;C:\tb\wdl6;D:\tb\dtz345;D:\tb\dtz6
     static std::string Paths;
 
+    void *dedicated_buffer=0;
+
     TBFile(const std::string& f) {
 
 #ifndef _WIN32
@@ -188,6 +198,16 @@ public:
 #else
         constexpr char SepChar = ';';
 #endif
+        if (Paths == "<internal>")
+        {
+            auto t = memory_tables.find(f);
+            if (t != memory_tables.end())
+            {
+                dedicated_buffer = t->second;
+            }
+            return;
+        }
+
         std::stringstream ss(Paths);
         std::string path;
 
@@ -200,8 +220,28 @@ public:
         }
     }
 
+    bool is_open()
+    {
+        return ((dedicated_buffer != nullptr) || std::ifstream::is_open());
+    }
+
     // Memory map the file and check it.
     uint8_t* map(void** baseAddress, uint64_t* mapping, TBType type) {
+
+        constexpr uint8_t Magics[][4] = { { 0xD7, 0x66, 0x0C, 0xA5 },
+                                          { 0x71, 0xE8, 0x23, 0x5D } };
+
+        if (dedicated_buffer != nullptr)
+        {
+            uint8_t* data = (uint8_t*)dedicated_buffer;
+            if (memcmp(data, Magics[type == WDL], 4))
+            {
+                std::cerr << "Corrupted table in file " << fname << std::endl;
+                return nullptr;
+            }
+            return data + 4;  // Skip Magics's header
+        }
+
         if (is_open())
             close(); // Need to re-open to get native file descriptor
 
@@ -270,9 +310,6 @@ public:
 #endif
         uint8_t* data = (uint8_t*)*baseAddress;
 
-        constexpr uint8_t Magics[][4] = { { 0xD7, 0x66, 0x0C, 0xA5 },
-                                          { 0x71, 0xE8, 0x23, 0x5D } };
-
         if (memcmp(data, Magics[type == WDL], 4))
         {
             std::cerr << "Corrupted table in file " << fname << std::endl;
@@ -284,6 +321,8 @@ public:
     }
 
     static void unmap(void* baseAddress, uint64_t mapping) {
+        if (mapping == 0)
+            return;
 
 #ifndef _WIN32
         munmap(baseAddress, mapping);
@@ -1256,6 +1295,91 @@ WDLScore search(Position& pos, ProbeState* result) {
 
 } // namespace
 
+#if !defined(_MSC_VER)
+
+INCBIN(KPvKrtbz,  "KPvK.rtbz");
+INCBIN(KPvKrtbw,  "KPvK.rtbw");
+INCBIN(KRvKrtbz,  "KRvK.rtbz");
+INCBIN(KRvKrtbw,  "KRvK.rtbw");
+INCBIN(KQvKrtbz,  "KQvK.rtbz");
+INCBIN(KQvKrtbw,  "KQvK.rtbw");
+INCBIN(KRRvKrtbz, "KRRvK.rtbz");
+INCBIN(KRRvKrtbw, "KRRvK.rtbw");
+INCBIN(KRNvKrtbz, "KRNvK.rtbz");
+INCBIN(KRNvKrtbw, "KRNvK.rtbw");
+INCBIN(KRBvKrtbz, "KRBvK.rtbz");
+INCBIN(KRBvKrtbw, "KRBvK.rtbw");
+INCBIN(KQNvKrtbz, "KQNvK.rtbz");
+INCBIN(KQNvKrtbw, "KQNvK.rtbw");
+INCBIN(KQRvKrtbz, "KQRvK.rtbz");
+INCBIN(KQRvKrtbw, "KQRvK.rtbw");
+INCBIN(KQBvKrtbz, "KQBvK.rtbz");
+INCBIN(KQBvKrtbw, "KQBvK.rtbw");
+INCBIN(KRPvKrtbz, "KRPvK.rtbz");
+INCBIN(KRPvKrtbw, "KRPvK.rtbw");
+INCBIN(KBvKPrtbz, "KBvKP.rtbz");
+INCBIN(KBvKPrtbw, "KBvKP.rtbw");
+INCBIN(KQvKBrtbz, "KQvKB.rtbz");
+INCBIN(KQvKBrtbw, "KQvKB.rtbw");
+INCBIN(KQQvKrtbz, "KQQvK.rtbz");
+INCBIN(KQQvKrtbw, "KQQvK.rtbw");
+INCBIN(KBNvKrtbz, "KBNvK.rtbz");
+INCBIN(KBNvKrtbw, "KBNvK.rtbw");
+INCBIN(KPPvKrtbz, "KPPvK.rtbz");
+INCBIN(KPPvKrtbw, "KPPvK.rtbw");
+INCBIN(KRvKBrtbz, "KRvKB.rtbz");
+INCBIN(KRvKBrtbw, "KRvKB.rtbw");
+INCBIN(KQvKNrtbz, "KQvKN.rtbz");
+INCBIN(KQvKNrtbw, "KQvKN.rtbw");
+INCBIN(KNvKPrtbz, "KNvKP.rtbz");
+INCBIN(KNvKPrtbw, "KNvKP.rtbw");
+INCBIN(KQPvKrtbz, "KQPvK.rtbz");
+INCBIN(KQPvKrtbw, "KQPvK.rtbw");
+INCBIN(KRvKRrtbz, "KRvKR.rtbz");
+INCBIN(KRvKRrtbw, "KRvKR.rtbw");
+INCBIN(KQvKQrtbz, "KQvKQ.rtbz");
+INCBIN(KQvKQrtbw, "KQvKQ.rtbw");
+INCBIN(KQvKRrtbz, "KQvKR.rtbz");
+INCBIN(KQvKRrtbw, "KQvKR.rtbw");
+INCBIN(KPPPvKrtbz,"KPPPvK.rtbz");
+INCBIN(KPPPvKrtbw,"KPPPvK.rtbw");
+INCBIN(KQQvKBrtbz,"KQQvKB.rtbz");
+INCBIN(KQQvKBrtbw,"KQQvKB.rtbw");
+INCBIN(KBBvKBrtbz,"KBBvKB.rtbz");
+INCBIN(KBBvKBrtbw,"KBBvKB.rtbw");
+INCBIN(KPvKPrtbz, "KPvKP.rtbz");
+INCBIN(KPvKPrtbw, "KPvKP.rtbw");
+INCBIN(KBBvKrtbz, "KBBvK.rtbz");
+INCBIN(KBBvKrtbw, "KBBvK.rtbw");
+INCBIN(KPPvKPrtbz,"KPPvKP.rtbz");
+INCBIN(KPPvKPrtbw,"KPPvKP.rtbw");
+
+static void register_memory_table(const unsigned char* ptr, const std::string& fname)
+{
+    memory_tables[fname] = (void*)ptr;
+}
+#else
+
+static void load_file(std::string fname)
+{
+    std::ifstream f(fname, std::ifstream::binary);
+    if (!f.is_open()) return;
+    f.seekg(0, f.end);
+    auto size = f.tellg();
+    f.seekg(0, f.beg);
+    if (size <= 0) return;
+    char* buf = new char[size];
+    f.read(buf, size);
+    f.close();
+    memory_tables[fname] = (void*)buf;
+    buf = nullptr;
+}
+#endif
+
+
+#if !defined(_MSC_VER)
+
+#endif
 
 /// Tablebases::init() is called at startup and after every change to
 /// "SyzygyPath" UCI option to (re)create the various tables. It is not thread
@@ -1267,7 +1391,134 @@ void Tablebases::init(const std::string& paths) {
     TBFile::Paths = paths;
 
     if (paths.empty() || paths == "<empty>")
-        return;
+    {
+        if (UCI::state == UCI::State::Looping)
+        {
+            TBFile::Paths = "<internal>";
+            if (memory_tables.begin() == memory_tables.end())
+            {
+#if !defined(_MSC_VER)
+                register_memory_table(gKPvKrtbzData, "KPvK.rtbz");
+                register_memory_table(gKPvKrtbwData, "KPvK.rtbw");
+                register_memory_table(gKRvKrtbzData, "KRvK.rtbz");
+                register_memory_table(gKRvKrtbwData, "KRvK.rtbw");
+                register_memory_table(gKQvKrtbzData, "KQvK.rtbz");
+                register_memory_table(gKQvKrtbwData, "KQvK.rtbw");
+                register_memory_table(gKRRvKrtbzData, "KRRvK.rtbz");
+                register_memory_table(gKRRvKrtbwData, "KRRvK.rtbw");
+                register_memory_table(gKRNvKrtbzData, "KRNvK.rtbz");
+                register_memory_table(gKRNvKrtbwData, "KRNvK.rtbw");
+                register_memory_table(gKRBvKrtbzData, "KRBvK.rtbz");
+                register_memory_table(gKRBvKrtbwData, "KRBvK.rtbw");
+                register_memory_table(gKQNvKrtbzData, "KQNvK.rtbz");
+                register_memory_table(gKQNvKrtbwData, "KQNvK.rtbw");
+                register_memory_table(gKQRvKrtbzData, "KQRvK.rtbz");
+                register_memory_table(gKQRvKrtbwData, "KQRvK.rtbw");
+                register_memory_table(gKQBvKrtbzData, "KQBvK.rtbz");
+                register_memory_table(gKQBvKrtbwData, "KQBvK.rtbw");
+                register_memory_table(gKRPvKrtbzData, "KRPvK.rtbz");
+                register_memory_table(gKRPvKrtbwData, "KRPvK.rtbw");
+                register_memory_table(gKBvKPrtbzData, "KBvKP.rtbz");
+                register_memory_table(gKBvKPrtbwData, "KBvKP.rtbw");
+                register_memory_table(gKQvKBrtbzData, "KQvKB.rtbz");
+                register_memory_table(gKQvKBrtbwData, "KQvKB.rtbw");
+                register_memory_table(gKQQvKrtbzData, "KQQvK.rtbz");
+                register_memory_table(gKQQvKrtbwData, "KQQvK.rtbw");
+                register_memory_table(gKBNvKrtbzData, "KBNvK.rtbz");
+                register_memory_table(gKBNvKrtbwData, "KBNvK.rtbw");
+                register_memory_table(gKPPvKrtbzData, "KPPvK.rtbz");
+                register_memory_table(gKPPvKrtbwData, "KPPvK.rtbw");
+                register_memory_table(gKRvKBrtbzData, "KRvKB.rtbz");
+                register_memory_table(gKRvKBrtbwData, "KRvKB.rtbw");
+                register_memory_table(gKQvKNrtbzData, "KQvKN.rtbz");
+                register_memory_table(gKQvKNrtbwData, "KQvKN.rtbw");
+                register_memory_table(gKNvKPrtbzData, "KNvKP.rtbz");
+                register_memory_table(gKNvKPrtbwData, "KNvKP.rtbw");
+                register_memory_table(gKQPvKrtbzData, "KQPvK.rtbz");
+                register_memory_table(gKQPvKrtbwData, "KQPvK.rtbw");
+                register_memory_table(gKRvKRrtbzData, "KRvKR.rtbz");
+                register_memory_table(gKRvKRrtbwData, "KRvKR.rtbw");
+                register_memory_table(gKQvKQrtbzData, "KQvKQ.rtbz");
+                register_memory_table(gKQvKQrtbwData, "KQvKQ.rtbw");
+                register_memory_table(gKQvKRrtbzData, "KQvKR.rtbz");
+                register_memory_table(gKQvKRrtbwData, "KQvKR.rtbw");
+                register_memory_table(gKPPPvKrtbzData, "KPPPvK.rtbz");
+                register_memory_table(gKPPPvKrtbwData, "KPPPvK.rtbw");
+                register_memory_table(gKQQvKBrtbzData, "KQQvKB.rtbz");
+                register_memory_table(gKQQvKBrtbwData, "KQQvKB.rtbw");
+                register_memory_table(gKBBvKBrtbzData, "KBBvKB.rtbz");
+                register_memory_table(gKBBvKBrtbwData, "KBBvKB.rtbw");
+                register_memory_table(gKPvKPrtbzData, "KPvKP.rtbz");
+                register_memory_table(gKPvKPrtbwData, "KPvKP.rtbw");
+                register_memory_table(gKBBvKrtbzData, "KBBvK.rtbz");
+                register_memory_table(gKBBvKrtbwData, "KBBvK.rtbw");
+                register_memory_table(gKPPvKPrtbzData, "KPPvKP.rtbz");
+                register_memory_table(gKPPvKPrtbwData, "KPPvKP.rtbw");
+#else
+				load_file("KPvK.rtbz");
+				load_file("KPvK.rtbw");
+				load_file("KRvK.rtbz");
+				load_file("KRvK.rtbw");
+				load_file("KQvK.rtbz");
+				load_file("KQvK.rtbw");
+				load_file("KRRvK.rtbz");
+				load_file("KRRvK.rtbw");
+				load_file("KRNvK.rtbz");
+				load_file("KRNvK.rtbw");
+				load_file("KRBvK.rtbz");
+				load_file("KRBvK.rtbw");
+				load_file("KQNvK.rtbz");
+				load_file("KQNvK.rtbw");
+				load_file("KQRvK.rtbz");
+				load_file("KQRvK.rtbw");
+				load_file("KQBvK.rtbz");
+				load_file("KQBvK.rtbw");
+				load_file("KRPvK.rtbz");
+				load_file("KRPvK.rtbw");
+				load_file("KBvKP.rtbz");
+				load_file("KBvKP.rtbw");
+				load_file("KQvKB.rtbz");
+				load_file("KQvKB.rtbw");
+				load_file("KQQvK.rtbz");
+				load_file("KQQvK.rtbw");
+				load_file("KBNvK.rtbz");
+				load_file("KBNvK.rtbw");
+				load_file("KPPvK.rtbz");
+				load_file("KPPvK.rtbw");
+				load_file("KRvKB.rtbz");
+				load_file("KRvKB.rtbw");
+				load_file("KQvKN.rtbz");
+				load_file("KQvKN.rtbw");
+				load_file("KNvKP.rtbz");
+				load_file("KNvKP.rtbw");
+				load_file("KQPvK.rtbz");
+				load_file("KQPvK.rtbw");
+				load_file("KRvKR.rtbz");
+				load_file("KRvKR.rtbw");
+				load_file("KQvKQ.rtbz");
+				load_file("KQvKQ.rtbw");
+				load_file("KQvKR.rtbz");
+				load_file("KQvKR.rtbw");
+				load_file("KPPPvK.rtbz");
+				load_file("KPPPvK.rtbw");
+				load_file("KQQvKB.rtbz");
+				load_file("KQQvKB.rtbw");
+				load_file("KBBvKB.rtbz");
+				load_file("KBBvKB.rtbw");
+				load_file("KPvKP.rtbz");
+				load_file("KPvKP.rtbw");
+				load_file("KBBvK.rtbz");
+				load_file("KBBvK.rtbw");
+				load_file("KPPvKP.rtbz");
+				load_file("KPPvKP.rtbw");
+#endif
+            }
+        }
+        else
+        {
+            return;
+        }
+    }
 
     // MapB1H1H7[] encodes a square below a1-h8 diagonal to 0..27
     int code = 0;
