@@ -35,6 +35,8 @@
 #include "uci.h"
 #include "syzygy/tbprobe.h"
 #include "nnue/evaluate_nnue.h"
+#include "Allocator.h"
+
 
 namespace Stockfish {
 
@@ -508,15 +510,14 @@ void Thread::search() {
 
 namespace {
 
+  typedef std::pair<Tablebases::WDLScore, Tablebases::ProbeState> TbCachePair;
 
-    typedef std::pair<Tablebases::WDLScore, Tablebases::ProbeState> TbCachePair;
+  static constexpr size_t grow_size_cache_map = 1024;
 
-    static constexpr size_t grow_size_cache_map = 1024;
+  typedef Moya::Allocator<std::map<Key, TbCachePair>::value_type, grow_size_cache_map> MapTbCacheMemoryPoolAllocator;
+  std::map<Key, TbCachePair, std::less<Key>, MapTbCacheMemoryPoolAllocator> tb_cache;
 
-    typedef Moya::Allocator<std::map<Key, TbCachePair>::value_type, grow_size_cache_map> MapTbCacheMemoryPoolAllocator;
-    std::map<Key, TbCachePair, std::less<Key>, MapTbCacheMemoryPoolAllocator> tb_cache;
-
-    std::mutex tb_cache_mutex;
+  std::mutex tb_cache_mutex;
 
 
   // search<>() is the main search function for both PV and non-PV nodes
