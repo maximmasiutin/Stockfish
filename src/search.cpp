@@ -22,6 +22,7 @@
 #include <cstring>   // For std::memset
 #include <iostream>
 #include <sstream>
+#include <fstream>
 
 #include "evaluate.h"
 #include "misc.h"
@@ -41,6 +42,7 @@ namespace Stockfish {
 namespace Search {
 
   LimitsType Limits;
+  bool BinsLoaded = false;
 }
 
 namespace Tablebases {
@@ -154,6 +156,41 @@ namespace {
     return nodes;
   }
 
+  typedef std::vector<uint64_t> TbKeys;
+
+  uint64_t load_bin(int n, TbKeys &v)
+  {
+      uint64_t num = 0;
+      std::string in = std::to_string(n);
+      std::string fname = in + ".bin";
+      std::ifstream file(fname, std::ios::binary);
+      auto current = file.tellg();
+      file.seekg(0, std::ios::end);
+      auto file_size = file.tellg() - current;
+      if ((file_size > 0) && (file_size % 8 == 0))
+      {
+          file.seekg(0, std::ios::beg);
+          num = file_size / 8;
+          v.resize(num);
+          char* buf = (char*) & v[0];
+          file.read(buf, file_size);
+      }
+      file.close();
+      return num;
+  }
+
+  TbKeys LossKeys, DrawKeys, WinKeys;
+  uint64_t TotalBins = 0;
+
+  void load_bins(void)
+  {
+	  TotalBins =
+		  load_bin(Stockfish::Tablebases::WDLScore::WDLLoss, LossKeys) +
+		  load_bin(Stockfish::Tablebases::WDLScore::WDLDraw, DrawKeys) +
+		  load_bin(Stockfish::Tablebases::WDLScore::WDLWin, WinKeys);
+  }
+
+
 } // namespace
 
 
@@ -163,6 +200,13 @@ void Search::init() {
 
   for (int i = 1; i < MAX_MOVES; ++i)
       Reductions[i] = int((19.47 + std::log(Threads.size()) / 2) * std::log(i));
+
+  if (!Search::BinsLoaded)
+  {
+      Search::BinsLoaded = true;
+      load_bins();
+  }
+
 }
 
 
@@ -649,21 +693,47 @@ namespace {
             return ttValue;
     }
 
+    bool hasBins = TotalBins > 0;
+
     // Step 5. Tablebases probe
-    if (!rootNode && !excludedMove && TB::Cardinality)
+    if (!rootNode && !excludedMove && (TB::Cardinality || hasBins))
     {
         int piecesCount = pos.count<ALL_PIECES>();
 
-        if (    piecesCount <= TB::Cardinality
-            && (piecesCount <  TB::Cardinality || depth >= TB::ProbeDepth)
-            &&  pos.rule50_count() == 0
-            && !pos.can_castle(ANY_CASTLING))
+        bool CheckBins = hasBins && (piecesCount <= 4);
+        bool CheckSyzygy = piecesCount <= TB::Cardinality && (piecesCount < TB::Cardinality || depth >= TB::ProbeDepth);
+		if ((CheckBins || CheckSyzygy)
+			&&  pos.rule50_count() == 0
+			&& !pos.can_castle(ANY_CASTLING))
         {
-            TB::ProbeState err;
-            TB::WDLScore wdl = Tablebases::probe_wdl(pos, &err);
+            TB::ProbeState err = TB::ProbeState::FAIL;
+            TB::WDLScore wdl = TB::WDLScore::WDLDraw;
+            
+            if (CheckBins)
+            {
+                if (std::binary_search(LossKeys.cbegin(), LossKeys.cend(), posKey))
+                {
+                    err = TB::ProbeState::OK;
+                    wdl = TB::WDLScore::WDLLoss;
+                } else
+                if (std::binary_search(DrawKeys.cbegin(), DrawKeys.cend(), posKey))
+                {
+                    err = TB::ProbeState::OK;
+                    wdl = TB::WDLScore::WDLDraw;
+                }
+                else
+                if (std::binary_search(WinKeys.cbegin(), WinKeys.cend(), posKey))
+                {
+                    err = TB::ProbeState::OK;
+                    wdl = TB::WDLScore::WDLWin;
+                }
+            }
+
+			if (CheckSyzygy && (err != TB::ProbeState::FAIL))
+				wdl = Tablebases::probe_wdl(pos, &err);
 
             // Force check of time on the next occasion
-            if (thisThread == Threads.main())
+            if (CheckSyzygy && (thisThread == Threads.main()))
                 static_cast<MainThread*>(thisThread)->callsCnt = 0;
 
             if (err != TB::ProbeState::FAIL)
