@@ -2013,10 +2013,9 @@ void Tablebases::rank_root_moves(Position& pos, Search::RootMoves& rootMoves) {
         std::stable_sort(rootMoves.begin(), rootMoves.end(),
                   [](const RootMove &a, const RootMove &b) { return a.tbRank > b.tbRank; } );
 
-        // Probe during search only if DTZ is not available and we are winning and we have tablebases of 5 pieces or more
-        if ((Cardinality >= 5) && (dtz_available || rootMoves[0].tbScore <= VALUE_DRAW))
-            Cardinality = 0;
-    }
+        // Probe during search only if DTZ is not available and we are winning
+        if (dtz_available || rootMoves[0].tbScore <= VALUE_DRAW)
+            Cardinality = 0;    }
     else
     {
         // Clean up if root_probe() and root_probe_wdl() have failed
