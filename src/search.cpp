@@ -670,23 +670,37 @@ namespace {
             }
             else
             {
-                auto fail_iter = thisThread->tb_fail.lower_bound(posKey);
-
-                if ((fail_iter != thisThread->tb_fail.end()) && (*fail_iter == posKey))
+                auto fail_set_iter = thisThread->tb_fail_set.lower_bound(posKey);
+                if ((fail_set_iter != thisThread->tb_fail_set.end()) && *fail_set_iter == posKey)
                 {
                     err = TB::ProbeState::FAIL;
                     wdl = TB::WDLScore::WDLDraw;
                 }
                 else
                 {
-                    wdl = Tablebases::probe_wdl(pos, &err);
-                    if (err == TB::ProbeState::FAIL)
+                    auto fail_map_iter = thisThread->tb_fail_map.lower_bound(posKey);
+
+                    if ((fail_map_iter != thisThread->tb_fail_map.end()) && (fail_map_iter->first == posKey))
                     {
-                        thisThread->tb_fail.emplace_hint(fail_iter, posKey);
+                        if (++fail_map_iter->second > 64)
+                        {
+                            thisThread->tb_fail_set.emplace_hint(fail_set_iter, posKey);
+                        }
+                        err = TB::ProbeState::FAIL;
+                        wdl = TB::WDLScore::WDLDraw;
                     }
                     else
                     {
-                        thisThread->tb_cache.emplace_hint(cached_wdl_iter, posKey, std::make_pair(wdl, err));
+                        wdl = Tablebases::probe_wdl(pos, &err);
+                        if (err == TB::ProbeState::FAIL)
+                        {
+                            constexpr uint64_t initial_counter = 0;
+                            thisThread->tb_fail_map.emplace_hint(fail_map_iter, posKey, initial_counter);
+                        }
+                        else
+                        {
+                            thisThread->tb_cache.emplace_hint(cached_wdl_iter, posKey, std::make_pair(wdl, err));
+                        }
                     }
                 }
             }
