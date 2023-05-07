@@ -178,7 +178,11 @@ std::map<std::string, void*> memory_tables;
 
 class TBFile : public std::ifstream {
 
+private:
     std::string fname;
+    
+    // if not null, then the TBFile is an internal tablebase rather than a disk file
+    void* dedicated_buffer = nullptr;
 
 public:
     // Look for and open the file among the Paths directories where the .rtbw
@@ -188,8 +192,6 @@ public:
     // Example:
     // C:\tb\wdl345;C:\tb\wdl6;D:\tb\dtz345;D:\tb\dtz6
     static std::string Paths;
-
-    void *dedicated_buffer=0;
 
     TBFile(const std::string& f) {
 
@@ -223,6 +225,13 @@ public:
     bool is_open()
     {
         return ((dedicated_buffer != nullptr) || std::ifstream::is_open());
+    }
+
+    void close()
+    {
+        if (dedicated_buffer == nullptr)
+            return;
+        std::ifstream::close();
     }
 
     // Memory map the file and check it.
@@ -1341,18 +1350,10 @@ INCBIN(KQvKQrtbz, "KQvKQ.rtbz");
 INCBIN(KQvKQrtbw, "KQvKQ.rtbw");
 INCBIN(KQvKRrtbz, "KQvKR.rtbz");
 INCBIN(KQvKRrtbw, "KQvKR.rtbw");
-INCBIN(KPPPvKrtbz,"KPPPvK.rtbz");
-INCBIN(KPPPvKrtbw,"KPPPvK.rtbw");
-INCBIN(KQQvKBrtbz,"KQQvKB.rtbz");
-INCBIN(KQQvKBrtbw,"KQQvKB.rtbw");
-INCBIN(KBBvKBrtbz,"KBBvKB.rtbz");
-INCBIN(KBBvKBrtbw,"KBBvKB.rtbw");
 INCBIN(KPvKPrtbz, "KPvKP.rtbz");
 INCBIN(KPvKPrtbw, "KPvKP.rtbw");
 INCBIN(KBBvKrtbz, "KBBvK.rtbz");
 INCBIN(KBBvKrtbw, "KBBvK.rtbw");
-INCBIN(KPPvKPrtbz,"KPPvKP.rtbz");
-INCBIN(KPPvKPrtbw,"KPPvKP.rtbw");
 
 static void register_memory_table(const unsigned char* ptr, const std::string& fname)
 {
@@ -1442,18 +1443,10 @@ void Tablebases::init(const std::string& paths) {
                 register_memory_table(gKQvKQrtbwData, "KQvKQ.rtbw");
                 register_memory_table(gKQvKRrtbzData, "KQvKR.rtbz");
                 register_memory_table(gKQvKRrtbwData, "KQvKR.rtbw");
-                register_memory_table(gKPPPvKrtbzData, "KPPPvK.rtbz");
-                register_memory_table(gKPPPvKrtbwData, "KPPPvK.rtbw");
-                register_memory_table(gKQQvKBrtbzData, "KQQvKB.rtbz");
-                register_memory_table(gKQQvKBrtbwData, "KQQvKB.rtbw");
-                register_memory_table(gKBBvKBrtbzData, "KBBvKB.rtbz");
-                register_memory_table(gKBBvKBrtbwData, "KBBvKB.rtbw");
                 register_memory_table(gKPvKPrtbzData, "KPvKP.rtbz");
                 register_memory_table(gKPvKPrtbwData, "KPvKP.rtbw");
                 register_memory_table(gKBBvKrtbzData, "KBBvK.rtbz");
                 register_memory_table(gKBBvKrtbwData, "KBBvK.rtbw");
-                register_memory_table(gKPPvKPrtbzData, "KPPvKP.rtbz");
-                register_memory_table(gKPPvKPrtbwData, "KPPvKP.rtbw");
 #else
 				load_file("KPvK.rtbz");
 				load_file("KPvK.rtbw");
@@ -1499,18 +1492,10 @@ void Tablebases::init(const std::string& paths) {
 				load_file("KQvKQ.rtbw");
 				load_file("KQvKR.rtbz");
 				load_file("KQvKR.rtbw");
-				load_file("KPPPvK.rtbz");
-				load_file("KPPPvK.rtbw");
-				load_file("KQQvKB.rtbz");
-				load_file("KQQvKB.rtbw");
-				load_file("KBBvKB.rtbz");
-				load_file("KBBvKB.rtbw");
 				load_file("KPvKP.rtbz");
 				load_file("KPvKP.rtbw");
 				load_file("KBBvK.rtbz");
 				load_file("KBBvK.rtbw");
-				load_file("KPPvKP.rtbz");
-				load_file("KPPvKP.rtbw");
 #endif
             }
         }
