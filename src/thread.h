@@ -79,22 +79,6 @@ public:
   ButterflyHistory mainHistory;
   CapturePieceToHistory captureHistory;
   ContinuationHistory continuationHistory[2][2];
-
-  typedef std::pair<Tablebases::WDLScore, Tablebases::ProbeState> TbCachePair;
-
-  static constexpr size_t grow_size_cache_map = 1024;
-  static constexpr size_t grow_size_fail_map = 16 * 1024;
-  static constexpr size_t grow_size_fail_set = 1024;
-
-  typedef Moya::Allocator<Key, grow_size_fail_set> SetFailMemoryPoolAllocator;
-  std::set<Key, std::less<Key>, SetFailMemoryPoolAllocator> tb_fail_set;
-
-  typedef Moya::Allocator<std::map<Key, uint64_t>::value_type, grow_size_fail_map> MapFailMemoryPoolAllocator;
-  std::map<Key, uint64_t, std::less<Key>, MapFailMemoryPoolAllocator> tb_fail_map;
-
-  typedef Moya::Allocator<std::map<Key, TbCachePair>::value_type, grow_size_cache_map> MapTbCacheMemoryPoolAllocator;
-  std::map<Key, TbCachePair, std::less<Key>, MapTbCacheMemoryPoolAllocator> tb_cache;
-
 };
 
 

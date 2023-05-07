@@ -39,6 +39,7 @@
 namespace Stockfish {
 
 namespace Search {
+  uint64_t tb_cache_hit = 0, tb_cache_miss = 0;
 
   LimitsType Limits;
 }
@@ -507,6 +508,17 @@ void Thread::search() {
 
 namespace {
 
+
+    typedef std::pair<Tablebases::WDLScore, Tablebases::ProbeState> TbCachePair;
+
+    static constexpr size_t grow_size_cache_map = 1024;
+
+    typedef Moya::Allocator<std::map<Key, TbCachePair>::value_type, grow_size_cache_map> MapTbCacheMemoryPoolAllocator;
+    std::map<Key, TbCachePair, std::less<Key>, MapTbCacheMemoryPoolAllocator> tb_cache;
+
+    std::mutex tb_cache_mutex;
+
+
   // search<>() is the main search function for both PV and non-PV nodes
 
   template <NodeType nodeType>
@@ -659,51 +671,29 @@ namespace {
             && pos.rule50_count() == 0
             && !pos.can_castle(ANY_CASTLING))
         {
-            TB::ProbeState err;
-            TB::WDLScore wdl;
-            auto cached_wdl_iter = thisThread->tb_cache.lower_bound(posKey);
-            if ((cached_wdl_iter != thisThread->tb_cache.end()) && (cached_wdl_iter->first == posKey))
-            {
-                const Thread::TbCachePair& cached_wdl_pair = cached_wdl_iter->second;
-                wdl = cached_wdl_pair.first;
-                err = cached_wdl_pair.second;
-            }
-            else
-            {
-                auto fail_set_iter = thisThread->tb_fail_set.lower_bound(posKey);
-                if ((fail_set_iter != thisThread->tb_fail_set.end()) && *fail_set_iter == posKey)
-                {
-                    err = TB::ProbeState::FAIL;
-                    wdl = TB::WDLScore::WDLDraw;
+			TB::ProbeState err;
+			TB::WDLScore wdl;
+            tb_cache_mutex.lock();
+			auto cached_wdl_iter = tb_cache.lower_bound(posKey);
+            tb_cache_mutex.unlock();
+			if ((cached_wdl_iter != tb_cache.end()) && (cached_wdl_iter->first == posKey))
+			{
+				const TbCachePair& cached_wdl_pair = cached_wdl_iter->second;
+				wdl = cached_wdl_pair.first;
+				err = cached_wdl_pair.second;
+                tb_cache_hit++;
+			}
+			else
+			{
+				wdl = Tablebases::probe_wdl(pos, &err);
+				if (err != TB::ProbeState::FAIL)
+				{
+                    tb_cache_mutex.lock();
+                    tb_cache.emplace_hint(cached_wdl_iter, posKey, std::make_pair(wdl, err));
+                    tb_cache_mutex.unlock();
+                    tb_cache_miss++;
                 }
-                else
-                {
-                    auto fail_map_iter = thisThread->tb_fail_map.lower_bound(posKey);
-
-                    if ((fail_map_iter != thisThread->tb_fail_map.end()) && (fail_map_iter->first == posKey))
-                    {
-                        if (++fail_map_iter->second > 64)
-                        {
-                            thisThread->tb_fail_set.emplace_hint(fail_set_iter, posKey);
-                        }
-                        err = TB::ProbeState::FAIL;
-                        wdl = TB::WDLScore::WDLDraw;
-                    }
-                    else
-                    {
-                        wdl = Tablebases::probe_wdl(pos, &err);
-                        if (err == TB::ProbeState::FAIL)
-                        {
-                            constexpr uint64_t initial_counter = 0;
-                            thisThread->tb_fail_map.emplace_hint(fail_map_iter, posKey, initial_counter);
-                        }
-                        else
-                        {
-                            thisThread->tb_cache.emplace_hint(cached_wdl_iter, posKey, std::make_pair(wdl, err));
-                        }
-                    }
-                }
-            }
+			}
             
 
             // Force check of time on the next occasion
@@ -2023,8 +2013,8 @@ void Tablebases::rank_root_moves(Position& pos, Search::RootMoves& rootMoves) {
         std::stable_sort(rootMoves.begin(), rootMoves.end(),
                   [](const RootMove &a, const RootMove &b) { return a.tbRank > b.tbRank; } );
 
-        // Probe during search only if DTZ is not available and we are winning
-        if (dtz_available || rootMoves[0].tbScore <= VALUE_DRAW)
+        // Probe during search only if DTZ is not available and we are winning and we have tablebases of 5 pieces or more
+        if ((Cardinality >= 5) && (dtz_available || rootMoves[0].tbScore <= VALUE_DRAW))
             Cardinality = 0;
     }
     else

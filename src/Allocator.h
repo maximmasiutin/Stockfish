@@ -151,8 +151,8 @@ class Allocator : private MemoryPool<T, growSize>
             if (rebindAllocator)
                 return rebindAllocator->allocate(n, hint);
 #endif
-            if (n != 1 || hint)
-                return nullptr;
+            assert(n == 1);
+            assert(!hint);
 
             return MemoryPool<T, growSize>::allocate();
         }
@@ -170,8 +170,8 @@ class Allocator : private MemoryPool<T, growSize>
                 return;
             }
 #endif
-            if (n != 1)
-                return;
+            assert(n == 1);
+
             MemoryPool<T, growSize>::deallocate(p);
         }
 

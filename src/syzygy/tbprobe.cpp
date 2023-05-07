@@ -242,6 +242,8 @@ public:
 
         if (dedicated_buffer != nullptr)
         {
+            *baseAddress = dedicated_buffer;
+            *mapping = 0;
             uint8_t* data = (uint8_t*)dedicated_buffer;
             if (memcmp(data, Magics[type == WDL], 4))
             {
@@ -330,6 +332,7 @@ public:
     }
 
     static void unmap(void* baseAddress, uint64_t mapping) {
+
         if (mapping == 0)
             return;
 
@@ -1386,11 +1389,11 @@ static void register_memory_table(const unsigned char* ptr, const std::string& f
 static void load_file(std::string fname)
 {
     std::ifstream f(fname, std::ifstream::binary);
-    if (!f.is_open()) return;
+    if (!f.is_open()) throw;
     f.seekg(0, f.end);
     auto size = f.tellg();
     f.seekg(0, f.beg);
-    if (size <= 0) return;
+    if (size <= 0) throw;
     char* buf = new char[size];
     f.read(buf, size);
     f.close();

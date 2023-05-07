@@ -31,6 +31,8 @@ class Position;
 
 namespace Search {
 
+    extern uint64_t tb_cache_hit, tb_cache_miss;
+
 
 /// Stack struct keeps track of the information we need to remember from nodes
 /// shallower and deeper in the tree during the search. Each search thread has
