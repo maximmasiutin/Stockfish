@@ -170,7 +170,8 @@ class Allocator : private MemoryPool<T, growSize>
                 return;
             }
 #endif
-
+            if (n != 1)
+                return;
             MemoryPool<T, growSize>::deallocate(p);
         }
 
