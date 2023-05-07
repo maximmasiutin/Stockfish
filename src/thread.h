@@ -24,16 +24,12 @@
 #include <mutex>
 #include <thread>
 #include <vector>
-#include <map>
-#include <set>
 
 #include "material.h"
 #include "movepick.h"
 #include "pawns.h"
 #include "position.h"
 #include "search.h"
-#include "syzygy/tbprobe.h"
-#include "Allocator.h"
 #include "thread_win32_osx.h"
 
 namespace Stockfish {
@@ -42,8 +38,6 @@ namespace Stockfish {
 /// per-thread pawn and material hash tables so that once we get a
 /// pointer to an entry its life time is unlimited and we don't have
 /// to care about someone changing the entry under our feet.
-
-
 
 class Thread {
 
