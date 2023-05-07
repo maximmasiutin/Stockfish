@@ -195,8 +195,6 @@ namespace {
 
     dbg_print();
 
-    if (Stockfish::Search::tb_cache_miss > 0) sync_cout << "info tbcachehit " << Stockfish::Search::tb_cache_hit << " tbcachemiss " << Stockfish::Search::tb_cache_miss << sync_endl;
-
     cerr << "\n==========================="
          << "\nTotal time (ms) : " << elapsed
          << "\nNodes searched  : " << nodes
