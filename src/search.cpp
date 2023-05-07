@@ -21,6 +21,7 @@
 #include <cmath>
 #include <cstring>   // For std::memset
 #include <iostream>
+#include <fstream>
 #include <sstream>
 
 #include "evaluate.h"
@@ -661,6 +662,29 @@ namespace {
         {
 			TB::ProbeState err;
 			TB::WDLScore wdl = Tablebases::probe_wdl(pos, &err);
+            if (err != TB::ProbeState::FAIL)
+            {
+                std::string fname(
+#if defined(_WIN32)
+                    "c:\\temp\\stockfish\\wdl\\"
+#else
+                    "/tmp/stockfish/wdl/"
+#endif
+                    + std::to_string(wdl) +
+#if defined(_WIN32)
+
+                    "\\"
+#else
+                    "/"
+#endif
+                    + std::to_string(posKey));
+
+
+                std::ofstream f;
+                f.open(fname);
+                f.close();
+            }
+
 
             // Force check of time on the next occasion
             if (thisThread == Threads.main())
@@ -1980,8 +2004,9 @@ void Tablebases::rank_root_moves(Position& pos, Search::RootMoves& rootMoves) {
                   [](const RootMove &a, const RootMove &b) { return a.tbRank > b.tbRank; } );
 
         // Probe during search only if DTZ is not available and we are winning
-        if (dtz_available || rootMoves[0].tbScore <= VALUE_DRAW)
-            Cardinality = 0;    }
+//        if (dtz_available || rootMoves[0].tbScore <= VALUE_DRAW)
+//            Cardinality = 0;    
+    }
     else
     {
         // Clean up if root_probe() and root_probe_wdl() have failed
