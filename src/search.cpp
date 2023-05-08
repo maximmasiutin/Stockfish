@@ -664,13 +664,28 @@ namespace {
 			TB::WDLScore wdl = Tablebases::probe_wdl(pos, &err);
             if (err != TB::ProbeState::FAIL)
             {
+                std::string wdlstring;
+                switch (wdl) {
+                case TB::WDLScore::WDLLoss:
+                    wdlstring = "los";
+                    break;
+                case TB::WDLScore::WDLDraw:
+                    wdlstring = "drw";
+                    break;
+                case TB::WDLScore::WDLWin:
+                    wdlstring = "win";
+                    break;
+                default:
+                    throw;
+                };
+
                 std::string fname(
 #if defined(_WIN32)
-                    "c:\\temp\\stockfish\\wdl\\"
+                    "c:\\temp\\wdl\\"
 #else
-                    "/tmp/stockfish/wdl/"
+                    "/tmp/wdl/"
 #endif
-                    + std::to_string(wdl) +
+                    + wdlstring +
 #if defined(_WIN32)
 
                     "\\"
