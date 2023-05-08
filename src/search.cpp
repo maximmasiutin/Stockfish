@@ -676,7 +676,7 @@ namespace {
                     wdlstring = "win";
                     break;
                 default:
-                    wdlsting = "unk";
+                    wdlstring = "unk";
                 };
 
                 std::string fname(
