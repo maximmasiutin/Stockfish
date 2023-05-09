@@ -37,7 +37,7 @@
 #include "uci.h"
 #include "syzygy/tbprobe.h"
 #include "nnue/evaluate_nnue.h"
-
+#include <bitset>
 
 namespace Stockfish {
 
@@ -157,11 +157,22 @@ namespace {
     return nodes;
   }
 
-  typedef std::vector<uint64_t> TbKeys;
+  typedef std::bitset<0x100000000> BitSet;
 
-  uint64_t load_bin(const std::string &fnamebase, TbKeys& v)
+  inline uint32_t compress_key(const Key& key)
   {
-      uint64_t num = 0;
+	  const uint64_t& k = static_cast<uint64_t>(key);
+	  const uint32_t& l = static_cast<uint32_t>(k);
+	  const uint64_t ks = k >> 32;
+	  const uint32_t h = static_cast<uint32_t>(ks);
+	  return l ^ h;
+  }
+
+  static uint64_t load_bin(const std::string &fnamebase, BitSet &b)
+  {
+	  typedef std::vector<uint64_t> TbKeys;
+	  TbKeys v;
+	  uint64_t num = 0;
       std::string fname = fnamebase + ".bin";
       std::ifstream file(fname, std::ios::binary);
       auto current = file.tellg();
@@ -176,20 +187,27 @@ namespace {
           file.read(buf, file_size);
       }
       file.close();
+	  for (auto i = v.cbegin(); i < v.cend(); ++i)
+	  {
+		  const uint64_t& i64 = *i;
+		  const uint32_t i32 = compress_key(i64);
+		  b.set(i32, true);
+	  }
       return num;
   }
 
-  TbKeys LossKeys, DrawKeys, WinKeys;
+  BitSet LossBitset, DrawBitset, WinBitset;
   uint64_t TotalBins = 0;
 
-  void load_bins(void)
+  inline void load_bins(void)
   {
       TotalBins =
-          load_bin("los", LossKeys) +
-          load_bin("drw", DrawKeys) +
-          load_bin("win", WinKeys);
+          load_bin("los", LossBitset) +
+          load_bin("drw", DrawBitset) +
+          load_bin("win", WinBitset);
   }
 
+  
 } // namespace
 
 
@@ -711,19 +729,20 @@ namespace {
 
             if (CheckBins)
             {
-                if (std::binary_search(LossKeys.cbegin(), LossKeys.cend(), posKey))
+				uint32_t key32 = compress_key(posKey);
+                if (LossBitset.test(key32))
                 {
                     err = TB::ProbeState::OK;
                     wdl = TB::WDLScore::WDLLoss;
                 }
                 else
-                    if (std::binary_search(DrawKeys.cbegin(), DrawKeys.cend(), posKey))
+                    if (DrawBitset.test(key32))
                     {
                         err = TB::ProbeState::OK;
                         wdl = TB::WDLScore::WDLDraw;
                     }
                     else
-                        if (std::binary_search(WinKeys.cbegin(), WinKeys.cend(), posKey))
+                        if (WinBitset.test(key32))
                         {
                             err = TB::ProbeState::OK;
                             wdl = TB::WDLScore::WDLWin;
@@ -733,6 +752,7 @@ namespace {
             if (CheckSyzygy && (err == TB::ProbeState::FAIL))
             {
                 wdl = Tablebases::probe_wdl(pos, &err);
+				/*
 				if (err != TB::ProbeState::FAIL)
 				{
 					std::string wdlstring;
@@ -770,6 +790,7 @@ namespace {
 					f.open(fname);
 					f.close();
 				}
+				*/
 
 			}
 
