@@ -730,7 +730,7 @@ namespace {
                         }
             }
 
-            if (CheckSyzygy && (err != TB::ProbeState::FAIL))
+            if (CheckSyzygy && (err == TB::ProbeState::FAIL))
                 wdl = Tablebases::probe_wdl(pos, &err);
 
             // Force check of time on the next occasion
