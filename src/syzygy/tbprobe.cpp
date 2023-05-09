@@ -1309,18 +1309,16 @@ WDLScore search(Position& pos, ProbeState* result) {
 
 #if !defined(_MSC_VER)
 
-#define INCLUDETB(a, b) INCBIN(a, "syzygy/3-pieces/" # b)
-
-INCLUDETB(KBvKrtbw, "KBvK.rtbw");
-INCLUDETB(KBvKrtbz, "KBvK.rtbz");
-INCLUDETB(KNvKrtbw, "KNvK.rtbw");
-INCLUDETB(KNvKrtbz, "KNvK.rtbz");
-INCLUDETB(KPvKrtbw, "KPvK.rtbw");
-INCLUDETB(KPvKrtbz, "KPvK.rtbz");
-INCLUDETB(KQvKrtbw, "KQvK.rtbw");
-INCLUDETB(KQvKrtbz, "KQvK.rtbz");
-INCLUDETB(KRvKrtbw, "KRvK.rtbw");
-INCLUDETB(KRvKrtbz, "KRvK.rtbz");
+INCBIN(KBvKrtbw, "syzygy/3-pieces/KBvK.rtbw");
+INCBIN(KBvKrtbz, "syzygy/3-pieces/KBvK.rtbz");
+INCBIN(KNvKrtbw, "syzygy/3-pieces/KNvK.rtbw");
+INCBIN(KNvKrtbz, "syzygy/3-pieces/KNvK.rtbz");
+INCBIN(KPvKrtbw, "syzygy/3-pieces/KPvK.rtbw");
+INCBIN(KPvKrtbz, "syzygy/3-pieces/KPvK.rtbz");
+INCBIN(KQvKrtbw, "syzygy/3-pieces/KQvK.rtbw");
+INCBIN(KQvKrtbz, "syzygy/3-pieces/KQvK.rtbz");
+INCBIN(KRvKrtbw, "syzygy/3-pieces/KRvK.rtbw");
+INCBIN(KRvKrtbz, "syzygy/3-pieces/KRvK.rtbz");
 
 static void register_memory_table(const unsigned char* ptr, const std::string& fname)
 {
