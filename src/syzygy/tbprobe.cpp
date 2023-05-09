@@ -51,6 +51,9 @@
 #include <windows.h>
 #endif
 
+#include "../incbin/incbin.h"
+
+
 using namespace Stockfish::Tablebases;
 
 int Stockfish::Tablebases::MaxCardinality;
@@ -168,9 +171,18 @@ static_assert(sizeof(LR) == 3, "LR tree entry must be 3 bytes");
 // class TBFile memory maps/unmaps the single .rtbw and .rtbz files. Files are
 // memory mapped for best performance. Files are mapped at first access: at init
 // time only existence of the file is checked.
+
+std::map<std::string, void*> memory_tables;
+
+
+
 class TBFile : public std::ifstream {
 
+private:
     std::string fname;
+    
+    // if not null, then the TBFile is an internal tablebase rather than a disk file
+    void* dedicated_buffer = nullptr;
 
 public:
     // Look for and open the file among the Paths directories where the .rtbw
@@ -188,6 +200,16 @@ public:
 #else
         constexpr char SepChar = ';';
 #endif
+        if (Paths == "<internal>")
+        {
+            auto t = memory_tables.find(f);
+            if (t != memory_tables.end())
+            {
+                dedicated_buffer = t->second;
+            }
+            return;
+        }
+
         std::stringstream ss(Paths);
         std::string path;
 
@@ -200,8 +222,37 @@ public:
         }
     }
 
+    bool is_open()
+    {
+        return ((dedicated_buffer != nullptr) || std::ifstream::is_open());
+    }
+
+    void close()
+    {
+        if (dedicated_buffer == nullptr)
+            return;
+        std::ifstream::close();
+    }
+
     // Memory map the file and check it.
     uint8_t* map(void** baseAddress, uint64_t* mapping, TBType type) {
+
+        constexpr uint8_t Magics[][4] = { { 0xD7, 0x66, 0x0C, 0xA5 },
+                                          { 0x71, 0xE8, 0x23, 0x5D } };
+
+        if (dedicated_buffer != nullptr)
+        {
+            *baseAddress = dedicated_buffer;
+            *mapping = 0;
+            uint8_t* data = (uint8_t*)dedicated_buffer;
+            if (memcmp(data, Magics[type == WDL], 4))
+            {
+                std::cerr << "Corrupted table in file " << fname << std::endl;
+                return nullptr;
+            }
+            return data + 4;  // Skip Magics's header
+        }
+
         if (is_open())
             close(); // Need to re-open to get native file descriptor
 
@@ -270,9 +321,6 @@ public:
 #endif
         uint8_t* data = (uint8_t*)*baseAddress;
 
-        constexpr uint8_t Magics[][4] = { { 0xD7, 0x66, 0x0C, 0xA5 },
-                                          { 0x71, 0xE8, 0x23, 0x5D } };
-
         if (memcmp(data, Magics[type == WDL], 4))
         {
             std::cerr << "Corrupted table in file " << fname << std::endl;
@@ -284,6 +332,9 @@ public:
     }
 
     static void unmap(void* baseAddress, uint64_t mapping) {
+
+        if (mapping == 0)
+            return;
 
 #ifndef _WIN32
         munmap(baseAddress, mapping);
@@ -1256,6 +1307,47 @@ WDLScore search(Position& pos, ProbeState* result) {
 
 } // namespace
 
+#if !defined(_MSC_VER)
+
+#define INCLUDETB(a, b) INCBIN(a, "syzygy/3-pieces/" # b)
+
+INCLUDETB(KBvKrtbw, "KBvK.rtbw");
+INCLUDETB(KBvKrtbz, "KBvK.rtbz");
+INCLUDETB(KNvKrtbw, "KNvK.rtbw");
+INCLUDETB(KNvKrtbz, "KNvK.rtbz");
+INCLUDETB(KPvKrtbw, "KPvK.rtbw");
+INCLUDETB(KPvKrtbz, "KPvK.rtbz");
+INCLUDETB(KQvKrtbw, "KQvK.rtbw");
+INCLUDETB(KQvKrtbz, "KQvK.rtbz");
+INCLUDETB(KRvKrtbw, "KRvK.rtbw");
+INCLUDETB(KRvKrtbz, "KRvK.rtbz");
+
+static void register_memory_table(const unsigned char* ptr, const std::string& fname)
+{
+    memory_tables[fname] = (void*)ptr;
+}
+#else
+
+static void load_file(std::string fname)
+{
+    std::ifstream f(fname, std::ifstream::binary);
+    if (!f.is_open()) throw;
+    f.seekg(0, f.end);
+    auto size = f.tellg();
+    f.seekg(0, f.beg);
+    if (size <= 0) throw;
+    char* buf = new char[size];
+    f.read(buf, size);
+    f.close();
+    memory_tables[fname] = (void*)buf;
+    buf = nullptr;
+}
+#endif
+
+
+#if !defined(_MSC_VER)
+
+#endif
 
 /// Tablebases::init() is called at startup and after every change to
 /// "SyzygyPath" UCI option to (re)create the various tables. It is not thread
@@ -1267,7 +1359,43 @@ void Tablebases::init(const std::string& paths) {
     TBFile::Paths = paths;
 
     if (paths.empty() || paths == "<empty>")
-        return;
+    {
+        if (UCI::state == UCI::State::Looping)
+        {
+            TBFile::Paths = "<internal>";
+            if (memory_tables.begin() == memory_tables.end())
+            {
+#if !defined(_MSC_VER)
+                register_memory_table(gKBvKrtbwData, "KBvK.rtbw");
+                register_memory_table(gKBvKrtbzData, "KBvK.rtbz");
+                register_memory_table(gKNvKrtbwData, "KNvK.rtbw");
+                register_memory_table(gKNvKrtbzData, "KNvK.rtbz");
+                register_memory_table(gKPvKrtbwData, "KPvK.rtbw");
+                register_memory_table(gKPvKrtbzData, "KPvK.rtbz");
+                register_memory_table(gKQvKrtbwData, "KQvK.rtbw");
+                register_memory_table(gKQvKrtbzData, "KQvK.rtbz");
+                register_memory_table(gKRvKrtbwData, "KRvK.rtbw");
+                register_memory_table(gKRvKrtbzData, "KRvK.rtbz");
+
+#else
+                load_file("KBvK.rtbw");
+                load_file("KBvK.rtbz");
+                load_file("KNvK.rtbw");
+                load_file("KNvK.rtbz");
+                load_file("KPvK.rtbw");
+                load_file("KPvK.rtbz");
+                load_file("KQvK.rtbw");
+                load_file("KQvK.rtbz");
+                load_file("KRvK.rtbw");
+                load_file("KRvK.rtbz");
+#endif
+            }
+        }
+        else
+        {
+            return;
+        }
+    }
 
     // MapB1H1H7[] encodes a square below a1-h8 diagonal to 0..27
     int code = 0;
