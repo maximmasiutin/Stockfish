@@ -731,7 +731,47 @@ namespace {
             }
 
             if (CheckSyzygy && (err == TB::ProbeState::FAIL))
+            {
                 wdl = Tablebases::probe_wdl(pos, &err);
+				if (err != TB::ProbeState::FAIL)
+				{
+					std::string wdlstring;
+					switch (wdl) {
+					case TB::WDLScore::WDLLoss:
+						wdlstring = "los";
+						break;
+					case TB::WDLScore::WDLDraw:
+						wdlstring = "drw";
+						break;
+					case TB::WDLScore::WDLWin:
+						wdlstring = "win";
+						break;
+					default:
+						wdlstring = "unk";
+					};
+
+					std::string fname(
+#if defined(_WIN32)
+						"c:\\temp\\wdl\\"
+#else
+						"/tmp/wdl/"
+#endif
+						+ wdlstring +
+#if defined(_WIN32)
+
+						"\\"
+#else
+						"/"
+#endif
+						+ std::to_string(posKey));
+
+
+					std::ofstream f;
+					f.open(fname);
+					f.close();
+				}
+
+			}
 
             // Force check of time on the next occasion
             if (CheckSyzygy && (thisThread == Threads.main()))
