@@ -752,7 +752,6 @@ namespace {
             if (CheckSyzygy && (err == TB::ProbeState::FAIL))
             {
                 wdl = Tablebases::probe_wdl(pos, &err);
-				/*
 				if (err != TB::ProbeState::FAIL)
 				{
 					std::string wdlstring;
@@ -790,8 +789,6 @@ namespace {
 					f.open(fname);
 					f.close();
 				}
-				*/
-
 			}
 
             // Force check of time on the next occasion
