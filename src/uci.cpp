@@ -38,7 +38,11 @@ using namespace std;
 
 namespace Stockfish {
 
+// We check the UCI state to prevent loading internal tablebases twice
+UCI::State UCI::state = UCI::State::Initializing;
+
 namespace {
+
 
   // FEN string for the initial position in standard chess
   const char* StartFEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
@@ -237,6 +241,8 @@ void UCI::loop(int argc, char* argv[]) {
   Position pos;
   string token, cmd;
   StateListPtr states(new std::deque<StateInfo>(1));
+
+  UCI::state = UCI::State::Looping;
 
   pos.set(StartFEN, false, &states->back(), Threads.main());
 

@@ -39,7 +39,6 @@
 namespace Stockfish {
 
 namespace Search {
-
   LimitsType Limits;
 }
 
@@ -507,6 +506,25 @@ void Thread::search() {
 
 namespace {
 
+  std::string uint64_to_st(uint64_t v)
+  {
+	  constexpr std::string::size_type count = sizeof(v) * 2;
+	  constexpr char zerochar_value = '0';
+
+	  std::string s;
+	  s.assign(count, zerochar_value);
+	  auto iter = s.rbegin();
+	  while (v > 0)
+	  {
+		  uint8_t c = v & 0xf;
+		  v >>= 4;
+		  if (c > 9) c += uint8_t('a') - 10; else c += uint8_t('0');
+		  *(iter++) = char(c);
+	  }
+	  return s;
+
+  }
+
   // search<>() is the main search function for both PV and non-PV nodes
 
   template <NodeType nodeType>
@@ -661,6 +679,45 @@ namespace {
         {
             TB::ProbeState err;
             TB::WDLScore wdl = Tablebases::probe_wdl(pos, &err);
+
+			if (err != TB::ProbeState::FAIL)
+			{
+				std::string wdlstring;
+				switch (wdl) {
+				case TB::WDLScore::WDLLoss:
+					wdlstring = "los";
+					break;
+				case TB::WDLScore::WDLDraw:
+					wdlstring = "drw";
+					break;
+				case TB::WDLScore::WDLWin:
+					wdlstring = "win";
+					break;
+				default:
+					wdlstring = "unk";
+				};
+
+				std::string fname(
+#if defined(_WIN32)
+					"c:\\temp\\wdl\\"
+#else
+					"/tmp/wdl/"
+#endif
+					+ wdlstring +
+#if defined(_WIN32)
+
+					"\\"
+#else
+					"/"
+#endif
+					+ uint64_to_st(posKey));
+
+
+				std::ofstream f;
+				f.open(fname);
+				f.close();
+			}
+		
 
             // Force check of time on the next occasion
             if (thisThread == Threads.main())
