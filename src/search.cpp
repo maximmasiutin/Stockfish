@@ -21,6 +21,7 @@
 #include <cmath>
 #include <cstring>   // For std::memset
 #include <iostream>
+#include <fstream>
 #include <sstream>
 
 #include "evaluate.h"
