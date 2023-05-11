@@ -38,7 +38,7 @@
 #include "nnue/evaluate_nnue.h"
 
 #if !defined(_MSC_VER)
-#include "../incbin/incbin.h"
+#include "incbin/incbin.h"
 #endif
 
 
