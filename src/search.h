@@ -105,6 +105,7 @@ struct LimitsType {
 };
 
 extern LimitsType Limits;
+extern bool BinsLoaded;
 
 void init();
 void clear();

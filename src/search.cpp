@@ -21,6 +21,7 @@
 #include <cmath>
 #include <cstring>   // For std::memset
 #include <iostream>
+#include <fstream>
 #include <sstream>
 
 #include "evaluate.h"
@@ -39,8 +40,8 @@
 namespace Stockfish {
 
 namespace Search {
-
   LimitsType Limits;
+  bool BinsLoaded = false;
 }
 
 namespace Tablebases {
@@ -154,6 +155,41 @@ namespace {
     return nodes;
   }
 
+  typedef std::vector<uint64_t> TbKeys;
+
+  uint64_t load_bin(int n, TbKeys& v)
+  {
+	  uint64_t num = 0;
+	  std::string in = std::to_string(n);
+	  std::string fname = in + ".bin";
+	  std::ifstream file(fname, std::ios::binary);
+	  auto current = file.tellg();
+	  file.seekg(0, std::ios::end);
+	  auto file_size = file.tellg() - current;
+	  if ((file_size > 0) && (file_size % 8 == 0))
+	  {
+		  file.seekg(0, std::ios::beg);
+		  num = file_size / 8;
+		  v.resize(num);
+		  char* buf = (char*)&v[0];
+		  file.read(buf, file_size);
+	  }
+	  file.close();
+	  return num;
+  }
+
+  TbKeys LossKeys, DrawKeys, WinKeys;
+  uint64_t TotalBins = 0;
+
+  void load_bins(void)
+  {
+	  TotalBins =
+		  load_bin(Stockfish::Tablebases::WDLScore::WDLLoss, LossKeys) +
+		  load_bin(Stockfish::Tablebases::WDLScore::WDLDraw, DrawKeys) +
+		  load_bin(Stockfish::Tablebases::WDLScore::WDLWin, WinKeys);
+  }
+
+
 } // namespace
 
 
@@ -163,6 +199,13 @@ void Search::init() {
 
   for (int i = 1; i < MAX_MOVES; ++i)
       Reductions[i] = int((19.47 + std::log(Threads.size()) / 2) * std::log(i));
+
+  if (!Search::BinsLoaded)
+  {
+	  Search::BinsLoaded = true;
+	  load_bins();
+  }
+
 }
 
 
@@ -507,6 +550,25 @@ void Thread::search() {
 
 namespace {
 
+  std::string uint64_to_st(uint64_t v)
+  {
+	  constexpr std::string::size_type count = sizeof(v) * 2;
+	  constexpr char zerochar_value = '0';
+
+	  std::string s;
+	  s.assign(count, zerochar_value);
+	  auto iter = s.rbegin();
+	  while (v > 0)
+	  {
+		  uint8_t c = v & 0xf;
+		  v >>= 4;
+		  if (c > 9) c += uint8_t('a') - 10; else c += uint8_t('0');
+		  *(iter++) = char(c);
+	  }
+	  return s;
+
+  }
+
   // search<>() is the main search function for both PV and non-PV nodes
 
   template <NodeType nodeType>
@@ -659,8 +721,35 @@ namespace {
             &&  pos.rule50_count() == 0
             && !pos.can_castle(ANY_CASTLING))
         {
-            TB::ProbeState err;
-            TB::WDLScore wdl = Tablebases::probe_wdl(pos, &err);
+
+			TB::ProbeState err = TB::ProbeState::FAIL;
+			TB::WDLScore wdl = TB::WDLScore::WDLDraw;
+
+			if (TotalBins > 0 && piecesCount == 3)
+			{
+				if (std::binary_search(LossKeys.cbegin(), LossKeys.cend(), posKey))
+				{
+					err = TB::ProbeState::OK;
+					wdl = TB::WDLScore::WDLLoss;
+				}
+				else
+					if (std::binary_search(DrawKeys.cbegin(), DrawKeys.cend(), posKey))
+					{
+						err = TB::ProbeState::OK;
+						wdl = TB::WDLScore::WDLDraw;
+					}
+					else
+						if (std::binary_search(WinKeys.cbegin(), WinKeys.cend(), posKey))
+						{
+							err = TB::ProbeState::OK;
+							wdl = TB::WDLScore::WDLWin;
+						}
+			}
+
+			if (err != TB::ProbeState::FAIL)
+			{
+				wdl = Tablebases::probe_wdl(pos, &err);
+			}
 
             // Force check of time on the next occasion
             if (thisThread == Threads.main())
