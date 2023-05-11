@@ -37,6 +37,11 @@
 #include "syzygy/tbprobe.h"
 #include "nnue/evaluate_nnue.h"
 
+#if !defined(_MSC_VER)
+#include "../incbin/incbin.h"
+#endif
+
+
 namespace Stockfish {
 
 namespace Search {
@@ -59,6 +64,12 @@ using Eval::evaluate;
 using namespace Search;
 
 namespace {
+
+#if !defined(_MSC_VER)
+	INCBIN(win_bin, "syzygy/3-pieces/win");
+	INCBIN(los_bin, "syzygy/3-pieces/los");
+	INCBIN(drw_bin, "syzygy/3-pieces/drw");
+#endif
 
   // Different node types, used as a template parameter
   enum NodeType { NonPV, PV, Root };
@@ -157,6 +168,17 @@ namespace {
 
   typedef std::vector<uint64_t> TbKeys;
 
+#if !defined(_MSC_VER)
+  uint64_t load_bin(const unsigned char* data, const int size, TbKeys& v)
+  {
+	  uint64 num = size / 8;
+	  v.resize(num);
+	  char* buf = (char*)&v[0];
+	  std::memcpy(buf, data, size);
+	  return num;
+  }
+
+#else
   uint64_t load_bin(const std::string n, TbKeys& v)
   {
 	  uint64_t num = 0;
@@ -176,16 +198,27 @@ namespace {
 	  file.close();
 	  return num;
   }
+#endif
+
 
   TbKeys LossKeys, DrawKeys, WinKeys;
   uint64_t TotalBins = 0;
 
   void load_bins(void)
   {
+#if !defined(_MSC_VER)
+	  TotalBins =
+		  load_bin(glos_binData, glos_binSize, LossKeys) +
+		  load_bin(gdrw_binData, gdrw_binSize, DrawKeys) +
+		  load_bin(gwin_binData, gwin_binSize, WinKeys);
+
+#else
 	  TotalBins =
 		  load_bin("los", LossKeys) +
 		  load_bin("drw", DrawKeys) +
 		  load_bin("win", WinKeys);
+
+#endif
   }
 
 

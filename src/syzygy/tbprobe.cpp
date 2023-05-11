@@ -51,7 +51,9 @@
 #include <windows.h>
 #endif
 
+#if !defined(_MSC_VER)
 #include "../incbin/incbin.h"
+#endif
 
 
 using namespace Stockfish::Tablebases;
