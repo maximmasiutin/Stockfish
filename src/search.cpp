@@ -66,9 +66,9 @@ using namespace Search;
 namespace {
 
 #if !defined(_MSC_VER)
-	INCBIN(win_bin, "syzygy/3-pieces/win");
-	INCBIN(los_bin, "syzygy/3-pieces/los");
-	INCBIN(drw_bin, "syzygy/3-pieces/drw");
+	INCBIN(win_bin, "syzygy/3-pieces/win.bin");
+	INCBIN(los_bin, "syzygy/3-pieces/los.bin");
+	INCBIN(drw_bin, "syzygy/3-pieces/drw.bin");
 #endif
 
   // Different node types, used as a template parameter
