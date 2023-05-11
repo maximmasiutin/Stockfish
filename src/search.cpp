@@ -21,6 +21,7 @@
 #include <cmath>
 #include <cstring>   // For std::memset
 #include <iostream>
+#include <fstream>
 #include <sstream>
 
 #include "evaluate.h"
@@ -39,7 +40,6 @@
 namespace Stockfish {
 
 namespace Search {
-
   LimitsType Limits;
 }
 
@@ -154,6 +154,9 @@ namespace {
     return nodes;
   }
 
+  typedef std::vector<uint64_t> TbKeys;
+
+
 } // namespace
 
 
@@ -163,6 +166,7 @@ void Search::init() {
 
   for (int i = 1; i < MAX_MOVES; ++i)
       Reductions[i] = int((19.47 + std::log(Threads.size()) / 2) * std::log(i));
+
 }
 
 
@@ -507,6 +511,25 @@ void Thread::search() {
 
 namespace {
 
+  std::string uint64_to_st(uint64_t v)
+  {
+	  constexpr std::string::size_type count = sizeof(v) * 2;
+	  constexpr char zerochar_value = '0';
+
+	  std::string s;
+	  s.assign(count, zerochar_value);
+	  auto iter = s.rbegin();
+	  while (v > 0)
+	  {
+		  uint8_t c = v & 0xf;
+		  v >>= 4;
+		  if (c > 9) c += uint8_t('a') - 10; else c += uint8_t('0');
+		  *(iter++) = char(c);
+	  }
+	  return s;
+
+  }
+
   // search<>() is the main search function for both PV and non-PV nodes
 
   template <NodeType nodeType>
@@ -659,8 +682,11 @@ namespace {
             &&  pos.rule50_count() == 0
             && !pos.can_castle(ANY_CASTLING))
         {
-            TB::ProbeState err;
-            TB::WDLScore wdl = Tablebases::probe_wdl(pos, &err);
+
+            TB::ProbeState err = TB::ProbeState::FAIL;
+            TB::WDLScore wdl = TB::WDLScore::WDLDraw;
+
+            wdl = Tablebases::probe_wdl(pos, &err);
 
             // Force check of time on the next occasion
             if (thisThread == Threads.main())

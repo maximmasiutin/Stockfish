@@ -30,6 +30,10 @@ class Position;
 
 namespace UCI {
 
+enum State {Starting, Initializing, Looping};
+extern State state;
+
+
 // Normalizes the internal value as reported by evaluate or search
 // to the UCI centipawn result used in output. This value is derived from
 // the win_rate_model() such that Stockfish outputs an advantage of
