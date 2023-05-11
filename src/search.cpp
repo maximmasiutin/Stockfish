@@ -157,11 +157,10 @@ namespace {
 
   typedef std::vector<uint64_t> TbKeys;
 
-  uint64_t load_bin(int n, TbKeys& v)
+  uint64_t load_bin(const std::string n, TbKeys& v)
   {
 	  uint64_t num = 0;
-	  std::string in = std::to_string(n);
-	  std::string fname = in + ".bin";
+	  std::string fname = n + ".bin";
 	  std::ifstream file(fname, std::ios::binary);
 	  auto current = file.tellg();
 	  file.seekg(0, std::ios::end);
@@ -184,9 +183,9 @@ namespace {
   void load_bins(void)
   {
 	  TotalBins =
-		  load_bin(Stockfish::Tablebases::WDLScore::WDLLoss, LossKeys) +
-		  load_bin(Stockfish::Tablebases::WDLScore::WDLDraw, DrawKeys) +
-		  load_bin(Stockfish::Tablebases::WDLScore::WDLWin, WinKeys);
+		  load_bin("los", LossKeys) +
+		  load_bin("drw", DrawKeys) +
+		  load_bin("win", WinKeys);
   }
 
 
@@ -746,7 +745,7 @@ namespace {
 						}
 			}
 
-			if (err != TB::ProbeState::FAIL)
+			if (err == TB::ProbeState::FAIL)
 			{
 				wdl = Tablebases::probe_wdl(pos, &err);
 			}
