@@ -171,7 +171,7 @@ namespace {
 #if !defined(_MSC_VER)
   uint64_t load_bin(const unsigned char* data, const int size, TbKeys& v)
   {
-	  uint64 num = size / 8;
+	  uint64_t num = size / 8;
 	  v.resize(num);
 	  char* buf = (char*)&v[0];
 	  std::memcpy(buf, data, size);
