@@ -1212,6 +1212,11 @@ moves_loop:  // When in check, search starts here
         // Decrease/increase reduction for moves with a good/bad history
         r -= ss->statScore * 850 / 8192;
 
+        // At cut nodes deep in the search tree, we expect to fail high.
+        // Being more aggressive with reduction at high ply is safer.
+        if (cutNode && ss->ply > 10)
+            r += 300;
+
         // Step 17. Late moves reduction / extension (LMR)
         if (depth >= 2 && moveCount > 1)
         {
