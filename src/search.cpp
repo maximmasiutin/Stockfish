@@ -1113,6 +1113,19 @@ moves_loop:  // When in check, search starts here
         // and if the result is lower than ttValue minus a margin, then we will
         // extend the ttMove. Recursive singular search is avoided.
 
+        // Advanced pawn extension: extend quiet pawn moves to 6th/7th rank
+        // Near-promotion pawns create critical threats requiring deeper search
+        if (!capture && !givesCheck && extension == 0 && type_of(movedPiece) == PAWN)
+        {
+            // Compute relative rank (0-7 for white, 7-0 for black)
+            int toRank  = int(move.to_sq()) / 8;
+            int relRank = us == WHITE ? toRank : 7 - toRank;
+
+            // Extend if pawn reaches 6th or 7th rank (relRank 5 or 6 in 0-indexed)
+            if (relRank >= 5)
+                extension = 1;
+        }
+
         // (*Scaler) Generally, higher singularBeta (i.e closer to ttValue)
         // and lower extension margins scale well.
         if (!rootNode && move == ttData.move && !excludedMove && depth >= 6 + ss->ttPv
