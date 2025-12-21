@@ -341,7 +341,19 @@ void Search::Worker::iterative_deepening() {
             selDepth = 0;
 
             // Reset aspiration window starting size
-            delta     = 5 + threadIdx % 8 + std::abs(rootMoves[pvIdx].meanSquaredScore) / 9000;
+            // Base delta considers score volatility
+            int baseDelta = 5 + threadIdx % 8 + std::abs(rootMoves[pvIdx].meanSquaredScore) / 9000;
+
+            // Complexity factor: material asymmetry increases uncertainty
+            Value ourMaterial = rootPos.non_pawn_material(us);
+            Value theirMaterial = rootPos.non_pawn_material(~us);
+            int materialAsymmetry = std::abs(ourMaterial - theirMaterial) / 256;
+
+            // Piece count factor: fewer pieces = simpler = tighter windows
+            int pieceCount = rootPos.count<ALL_PIECES>() - 2;
+            int simplicityBonus = std::max(0, (32 - pieceCount) / 8);
+
+            delta = baseDelta + materialAsymmetry - simplicityBonus;
             Value avg = rootMoves[pvIdx].averageScore;
             alpha     = std::max(avg - delta, -VALUE_INFINITE);
             beta      = std::min(avg + delta, VALUE_INFINITE);
