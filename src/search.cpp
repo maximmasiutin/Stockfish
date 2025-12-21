@@ -1172,6 +1172,19 @@ moves_loop:  // When in check, search starts here
         // Step 16. Make the move
         do_move(pos, move, st, givesCheck, ss);
 
+        // Threat-responsive LMR: reduce less when responding to opponent's capture
+        // After opponent captures our piece, recaptures and counterattacks are critical
+        int threatResponseBonus = 0;
+        if (priorCapture && !givesCheck)
+        {
+            // Strong bonus for recapturing on the same square
+            if (move.to_sq() == prevSq && capture)
+                threatResponseBonus = 1536;
+            // Moderate bonus for counter-captures elsewhere
+            else if (capture)
+                threatResponseBonus = 768;
+        }
+
         // Add extension to new depth
         newDepth += extension;
         uint64_t nodeCount = rootNode ? uint64_t(nodes) : 0;
@@ -1210,7 +1223,7 @@ moves_loop:  // When in check, search starts here
                           + (*contHist[1])[movedPiece][move.to_sq()];
 
         // Decrease/increase reduction for moves with a good/bad history
-        r -= ss->statScore * 850 / 8192;
+        r -= ss->statScore * 850 / 8192 + threatResponseBonus;
 
         // Step 17. Late moves reduction / extension (LMR)
         if (depth >= 2 && moveCount > 1)
