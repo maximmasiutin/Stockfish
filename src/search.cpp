@@ -1209,6 +1209,10 @@ moves_loop:  // When in check, search starts here
         if (move == ttData.move)
             r -= 2151;
 
+        // If TT suggested a capture but we're trying a quiet move, reduce more
+        if (ttCapture && !capture)
+            r += 350;
+
         if (capture)
             ss->statScore = 868 * int(PieceValue[pos.captured_piece()]) / 128
                           + captureHistory[movedPiece][move.to_sq()][type_of(pos.captured_piece())];
