@@ -1050,7 +1050,7 @@ moves_loop:  // When in check, search starts here
             // Skip quiet moves if movecount exceeds our FutilityMoveCount threshold
             // Less aggressive when eval is above beta to ensure we don't miss tactics
             int evalMarginBonus = (ss->staticEval > beta + 100) ? 1 : 0;
-            if (moveCount >= (3 + depth * depth) / (2 - improving - evalMarginBonus))
+            if (moveCount >= (3 + depth * depth) / std::max(1, 2 - improving - evalMarginBonus))
                 mp.skip_quiet_moves();
 
             // Reduced depth of the next LMR search
