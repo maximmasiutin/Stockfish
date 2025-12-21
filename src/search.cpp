@@ -1113,6 +1113,12 @@ moves_loop:  // When in check, search starts here
         // and if the result is lower than ttValue minus a margin, then we will
         // extend the ttMove. Recursive singular search is avoided.
 
+        // Extension when recapturing opponent's last capture
+        if (priorCapture && move.to_sq() == prevSq && !givesCheck && extension == 0)
+        {
+            extension = 1;
+        }
+
         // (*Scaler) Generally, higher singularBeta (i.e closer to ttValue)
         // and lower extension margins scale well.
         if (!rootNode && move == ttData.move && !excludedMove && depth >= 6 + ss->ttPv
