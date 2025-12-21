@@ -1257,8 +1257,9 @@ moves_loop:  // When in check, search starts here
         else if (!PvNode || moveCount > 1)
         {
             // Increase reduction if ttMove is not present
+            // At ALL nodes, increase more (higher uncertainty without ttMove)
             if (!ttData.move)
-                r += 1140;
+                r += 1140 + allNode * 384;
 
             // Note that if expected reduction is high, we reduce search depth here
             value = -search<NonPV>(pos, ss + 1, -(alpha + 1), -alpha,
