@@ -1209,6 +1209,15 @@ moves_loop:  // When in check, search starts here
                           + (*contHist[0])[movedPiece][move.to_sq()]
                           + (*contHist[1])[movedPiece][move.to_sq()];
 
+        // If the position is complex due to high correction history,
+        // dampen the reduction to search this node more thoroughly.
+        if (depth > 6)
+        {
+            int complexity =
+              std::abs(pawnCorrectionHistory[pawn_correction_history_index(pos)][us]);
+            r -= complexity / 512;
+        }
+
         // Decrease/increase reduction for moves with a good/bad history
         r -= ss->statScore * 850 / 8192;
 
