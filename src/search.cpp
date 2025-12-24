@@ -1239,12 +1239,16 @@ moves_loop:  // When in check, search starts here
             // (*Scaler) Shallower searches here don't scale well
             if (value > alpha)
             {
-                // Adjust full-depth search based on LMR results - if the result was
-                // good enough search deeper, if it was bad enough search shallower.
-                const bool doDeeperSearch    = d < newDepth && value > (bestValue + newDepth + 44);
-                const bool doShallowerSearch = value < bestValue + 9;
-
-                newDepth += doDeeperSearch - doShallowerSearch;
+                // Adjust full-depth search based on LMR results - tiered depth adjustment
+                // captures more information (1.6 bits vs 1 bit for binary decision)
+                int depthAdjust = 0;
+                if (d < newDepth && value > bestValue + newDepth + 60)
+                    depthAdjust = 2;
+                else if (d < newDepth && value > bestValue + newDepth + 44)
+                    depthAdjust = 1;
+                else if (value < bestValue + 9)
+                    depthAdjust = -1;
+                newDepth += depthAdjust;
 
                 if (newDepth > d)
                     value = -search<NonPV>(pos, ss + 1, -(alpha + 1), -alpha, newDepth, !cutNode);
