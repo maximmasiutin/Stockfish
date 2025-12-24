@@ -1430,6 +1430,10 @@ moves_loop:  // When in check, search starts here
         bonusScale += 147 * (!ss->inCheck && bestValue <= ss->staticEval - 107);
         bonusScale += 156 * (!(ss - 1)->inCheck && bestValue <= -(ss - 1)->staticEval - 65);
 
+        // Compound Momentum-Surprise: amplify bonus in high-information context
+        int evalTrend = (ss->ply >= 2) ? (ss->staticEval - (ss - 2)->staticEval) : 0;
+        bonusScale += 40 * cutNode + 20 * (evalTrend > 50);
+
         bonusScale = std::max(bonusScale, 0);
 
         // scaledBonus ranges from 0 to roughly 2.3M, overflows happen for multipliers larger than 900
