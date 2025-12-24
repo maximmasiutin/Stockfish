@@ -756,9 +756,11 @@ Value Search::Worker::search(
     if (priorReduction >= 2 && depth >= 2 && ss->staticEval + (ss - 1)->staticEval > 173)
         depth--;
 
-    // Sustained momentum: extend when we've improved over two consecutive turns.
-    // This indicates strong positional progress worth exploring more deeply.
-    if (improving && (ss - 2)->staticEval > (ss - 4)->staticEval && depth >= 4)
+    // Sustained momentum: extend at cut nodes when we've improved significantly
+    // over two consecutive turns. Requires meaningful improvement (50+ centipawns)
+    // to avoid triggering too frequently.
+    if (cutNode && improving && (ss - 2)->staticEval > (ss - 4)->staticEval + 50
+        && !ss->inCheck && depth >= 6)
         depth++;
 
     // At non-PV nodes we check for an early TT cutoff
