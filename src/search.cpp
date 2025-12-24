@@ -756,6 +756,11 @@ Value Search::Worker::search(
     if (priorReduction >= 2 && depth >= 2 && ss->staticEval + (ss - 1)->staticEval > 173)
         depth--;
 
+    // Sustained momentum: extend when we've improved over two consecutive turns.
+    // This indicates strong positional progress worth exploring more deeply.
+    if (improving && (ss - 2)->staticEval > (ss - 4)->staticEval && depth >= 4)
+        depth++;
+
     // At non-PV nodes we check for an early TT cutoff
     if (!PvNode && !excludedMove && ttData.depth > depth - (ttData.value <= beta)
         && is_valid(ttData.value)  // Can happen when !ttHit or when access race in probe()
