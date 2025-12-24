@@ -1430,6 +1430,10 @@ moves_loop:  // When in check, search starts here
         bonusScale += 147 * (!ss->inCheck && bestValue <= ss->staticEval - 107);
         bonusScale += 156 * (!(ss - 1)->inCheck && bestValue <= -(ss - 1)->staticEval - 65);
 
+        // Self-referential scaling: only at allNodes when behind (LTC-safe)
+        if (allNode && bestValue <= ss->staticEval)
+            bonusScale += bonusScale / 12;
+
         bonusScale = std::max(bonusScale, 0);
 
         // scaledBonus ranges from 0 to roughly 2.3M, overflows happen for multipliers larger than 900
