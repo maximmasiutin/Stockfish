@@ -890,7 +890,8 @@ Value Search::Worker::search(
     }
 
     // Step 9. Null move search with verification search
-    if (cutNode && ss->staticEval >= beta - 18 * depth + 350 && !excludedMove
+    // Lower the margin when opponent's position is worsening, as we're more likely to find refutation.
+    if (cutNode && ss->staticEval >= beta - 18 * depth + 350 - 25 * opponentWorsening && !excludedMove
         && pos.non_pawn_material(us) && ss->ply >= nmpMinPly && !is_loss(beta))
     {
         assert((ss - 1)->currentMove != Move::null());
