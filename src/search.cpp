@@ -890,8 +890,14 @@ Value Search::Worker::search(
     }
 
     // Step 9. Null move search with verification search
-    if (cutNode && ss->staticEval >= beta - 18 * depth + 350 && !excludedMove
-        && pos.non_pawn_material(us) && ss->ply >= nmpMinPly && !is_loss(beta))
+    // Tiered eval margin: more aggressive NMP when position is strongly above beta
+    if (cutNode
+        && ss->staticEval >= beta - 18 * depth + 350
+                               - ((ss->staticEval - beta) / 100 > 3   ? 150
+                                  : (ss->staticEval - beta) / 100 > 2 ? 100
+                                  : (ss->staticEval - beta) / 100 > 1 ? 50
+                                                                      : 0)
+        && !excludedMove && pos.non_pawn_material(us) && ss->ply >= nmpMinPly && !is_loss(beta))
     {
         assert((ss - 1)->currentMove != Move::null());
 
