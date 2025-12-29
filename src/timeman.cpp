@@ -110,7 +110,7 @@ void TimeManagement::init(Search::LimitsType& limits,
 
         // Calculate time constants based on current time left.
         double logTimeInSec = std::log10(scaledTime / 1000.0);
-        double optConstant  = std::min(0.0032116 + 0.000321123 * logTimeInSec, 0.00508017);
+        double optConstant  = 0.004427 - 126.0 / (scaledTime + 76393);
         double maxConstant  = std::max(3.3977 + 3.03950 * logTimeInSec, 2.94761);
 
         optScale = std::min(0.0121431 + std::pow(ply + 2.94693, 0.461073) * optConstant,
