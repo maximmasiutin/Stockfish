@@ -1208,6 +1208,9 @@ moves_loop:  // When in check, search starts here
         if ((ss + 1)->cutoffCnt > 1)
             r += 256 + 1024 * ((ss + 1)->cutoffCnt > 2) + 1024 * allNode;
 
+        if (allNode && !improving && (ss + 1)->cutoffCnt > 3 && moveCount > 4)
+            r += 512;
+
         // For first picked move (ttMove) reduce reduction
         if (move == ttData.move)
             r -= 2151;
