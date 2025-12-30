@@ -1227,6 +1227,10 @@ moves_loop:  // When in check, search starts here
         if (allNode)
             r += r / (depth + 1);
 
+        // Extra reduction for allNode with terrible history
+        if (allNode && ss->statScore < -15000)
+            r += 1024;
+
         // Step 17. Late moves reduction / extension (LMR)
         if (depth >= 2 && moveCount > 1)
         {
