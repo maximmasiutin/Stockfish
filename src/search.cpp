@@ -1223,6 +1223,11 @@ moves_loop:  // When in check, search starts here
         // Decrease/increase reduction for moves with a good/bad history
         r -= ss->statScore * 850 / 8192;
 
+        // Check rhythm: alternating checks indicate tactical forcing sequence
+        bool checkRhythm = ss->ply > 2 && ss->inCheck != (ss - 1)->inCheck
+                        && (ss - 1)->inCheck != (ss - 2)->inCheck;
+        r -= 1024 * checkRhythm;
+
         // Scale up reductions for expected ALL nodes
         if (allNode)
             r += r / (depth + 1);
