@@ -1203,6 +1203,10 @@ moves_loop:  // When in check, search starts here
             r += 120 + 1024 * ((ss + 1)->cutoffCnt > 2) + 100 * ((ss + 1)->cutoffCnt > 3)
                + 1024 * allNode;
 
+        // Depth-decaying aggressive reduction for allNodes
+        if (allNode && (ss + 1)->cutoffCnt > 2)
+            r += 1024 * 16 / (16 + depth);
+
         // For first picked move (ttMove) reduce reduction
         if (move == ttData.move)
             r -= 2151;
