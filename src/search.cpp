@@ -1227,6 +1227,10 @@ moves_loop:  // When in check, search starts here
         if (allNode)
             r += r / (depth + 1);
 
+        // Progressive reduction when allNode prediction confirmed by prior moves
+        if (allNode && moveCount > 2 && bestValue <= alpha - 50 && depth > 6)
+            r += 256 + 64 * std::min(moveCount - 2, 10);
+
         // Step 17. Late moves reduction / extension (LMR)
         if (depth >= 2 && moveCount > 1)
         {
