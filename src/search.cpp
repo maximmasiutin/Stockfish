@@ -1203,6 +1203,10 @@ moves_loop:  // When in check, search starts here
             r += 120 + 1024 * ((ss + 1)->cutoffCnt > 2) + 100 * ((ss + 1)->cutoffCnt > 3)
                + 1024 * allNode;
 
+        // High magnitude reduction for confirmed high instability (cutoffCnt > 3)
+        if (allNode && (ss + 1)->cutoffCnt > 3)
+            r += 1024;
+
         // For first picked move (ttMove) reduce reduction
         if (move == ttData.move)
             r -= 2151;
