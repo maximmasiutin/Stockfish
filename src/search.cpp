@@ -1208,6 +1208,10 @@ moves_loop:  // When in check, search starts here
         if ((ss + 1)->cutoffCnt > 1)
             r += 256 + 1024 * ((ss + 1)->cutoffCnt > 2) + 1024 * allNode;
 
+        // Aggressive allNode reduction for high cutoff instability
+        if (allNode && (ss + 1)->cutoffCnt > 2)
+            r += 1024;
+
         // For first picked move (ttMove) reduce reduction
         if (move == ttData.move)
             r -= 2151;
