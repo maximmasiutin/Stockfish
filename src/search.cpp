@@ -1203,6 +1203,10 @@ moves_loop:  // When in check, search starts here
             r += 120 + 1024 * ((ss + 1)->cutoffCnt > 2) + 100 * ((ss + 1)->cutoffCnt > 3)
                + 1024 * allNode;
 
+        // Linear scaling for allNodes based on cutoff count
+        if (allNode && (ss + 1)->cutoffCnt > 1)
+            r += 128 + 64 * ((ss + 1)->cutoffCnt);
+
         // For first picked move (ttMove) reduce reduction
         if (move == ttData.move)
             r -= 2151;
