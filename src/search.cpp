@@ -1208,6 +1208,11 @@ moves_loop:  // When in check, search starts here
         if ((ss + 1)->cutoffCnt > 1)
             r += 256 + 1024 * ((ss + 1)->cutoffCnt > 2) + 1024 * allNode;
 
+        // Vanishing aggression on clean signal
+        int decayBonus = 1024 - 32 * depth;
+        if (allNode && (ss + 1)->cutoffCnt > 3 && decayBonus > 0)
+            r += decayBonus;
+
         // For first picked move (ttMove) reduce reduction
         if (move == ttData.move)
             r -= 2151;
