@@ -1223,6 +1223,11 @@ moves_loop:  // When in check, search starts here
         // Decrease/increase reduction for moves with a good/bad history
         r -= ss->statScore * 850 / 8192;
 
+        // At high rootDepth (LTC-like deep search) with remaining depth budget,
+        // quiet moves can be reduced more - we have overall search budget to spare
+        if (!capture && rootDepth >= 16 && depth >= 8)
+            r += 192;
+
         // Scale up reductions for expected ALL nodes
         if (allNode)
             r += r / (depth + 1);
