@@ -44,6 +44,7 @@
 #include "../search.h"
 #include "../types.h"
 #include "../ucioption.h"
+#include "../embedded_tb_probe.h"
 
 #ifndef _WIN32
     #include <fcntl.h>
@@ -1349,7 +1350,7 @@ WDLScore search(Position& pos, ProbeState* result) {
 void Tablebases::init(const std::string& paths) {
 
     TBTables.clear();
-    MaxCardinality = 0;
+    MaxCardinality = 4;  // Minimum for embedded 3-4 piece tablebases
     TBFile::Paths  = paths;
 
     if (paths.empty())
@@ -1506,6 +1507,13 @@ void Tablebases::init(const std::string& paths) {
 WDLScore Tablebases::probe_wdl(Position& pos, ProbeState* result) {
 
     *result = OK;
+
+    // Try embedded tablebase first (O(1) lookup, no disk I/O)
+    int embedded_wdl;
+    if (Embedded::probe(pos, embedded_wdl)) {
+        return embedded_wdl > 0 ? WDLWin : embedded_wdl < 0 ? WDLLoss : WDLDraw;
+    }
+
     return search<false>(pos, result);
 }
 
