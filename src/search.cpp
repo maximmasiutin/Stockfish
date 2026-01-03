@@ -1223,6 +1223,10 @@ moves_loop:  // When in check, search starts here
         // Decrease/increase reduction for moves with a good/bad history
         r -= ss->statScore * 850 / 8192;
 
+        // TT confirms position has good moves - quiet moves less critical
+        if (!capture && ttHit && (ttData.bound & BOUND_LOWER) && depth >= 10)
+            r += 256;
+
         // Scale up reductions for expected ALL nodes
         if (allNode)
             r += r / (depth + 1);
