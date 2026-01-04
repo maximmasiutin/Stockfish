@@ -1223,6 +1223,17 @@ moves_loop:  // When in check, search starts here
         // Decrease/increase reduction for moves with a good/bad history
         r -= ss->statScore * 850 / 8192;
 
+        // Additive LMR with three independent signals
+        if (!capture && depth >= 12)
+        {
+            if (!PvNode)
+                r += 128;
+            if (type_of(movedPiece) != PAWN)
+                r += 128;
+            if (improving)
+                r += 64;
+        }
+
         // Scale up reductions for expected ALL nodes
         if (allNode)
             r += r / (depth + 1);
