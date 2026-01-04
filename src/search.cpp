@@ -1223,6 +1223,10 @@ moves_loop:  // When in check, search starts here
         // Decrease/increase reduction for moves with a good/bad history
         r -= ss->statScore * 850 / 8192;
 
+        // Non-checking quiet moves are the safest to reduce
+        if (!capture && !givesCheck && depth >= 12)
+            r += 256;
+
         // Scale up reductions for expected ALL nodes
         if (allNode)
             r += r / (depth + 1);
