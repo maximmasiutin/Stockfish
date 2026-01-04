@@ -1223,6 +1223,11 @@ moves_loop:  // When in check, search starts here
         // Decrease/increase reduction for moves with a good/bad history
         r -= ss->statScore * 850 / 8192;
 
+        // Minor piece quiet moves are often repositioning - safe to reduce
+        if (!capture && (type_of(movedPiece) == KNIGHT || type_of(movedPiece) == BISHOP)
+            && depth >= 12)
+            r += 384;
+
         // Scale up reductions for expected ALL nodes
         if (allNode)
             r += r / (depth + 1);
