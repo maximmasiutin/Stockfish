@@ -1223,6 +1223,12 @@ moves_loop:  // When in check, search starts here
         // Decrease/increase reduction for moves with a good/bad history
         r -= ss->statScore * 850 / 8192;
 
+        // Additive LMR for non-checking and non-pawn quiet moves
+        if (!capture && !givesCheck && depth >= 12)
+            r += 128;
+        if (!capture && type_of(movedPiece) != PAWN && depth >= 12)
+            r += 128;
+
         // Scale up reductions for expected ALL nodes
         if (allNode)
             r += r / (depth + 1);
