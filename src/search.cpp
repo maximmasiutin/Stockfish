@@ -1223,6 +1223,10 @@ moves_loop:  // When in check, search starts here
         // Decrease/increase reduction for moves with a good/bad history
         r -= ss->statScore * 850 / 8192;
 
+        // Reduce more for quiet non-checking moves in non-PV nodes
+        if (!capture && !PvNode && !givesCheck && depth >= 12)
+            r += 512;
+
         // Scale up reductions for expected ALL nodes
         if (allNode)
             r += r / (depth + 1);
