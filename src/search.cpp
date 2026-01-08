@@ -1200,6 +1200,10 @@ moves_loop:  // When in check, search starts here
         if (cutNode)
             r += 3372 + 997 * !ttData.move;
 
+        // Additional reduction for quiet moves at cut nodes
+        if (!capture && cutNode && depth >= 12)
+            r += 192;
+
         // Increase reduction if ttMove is a capture
         if (ttCapture)
             r += 1119;
