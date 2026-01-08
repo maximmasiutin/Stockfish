@@ -1223,6 +1223,10 @@ moves_loop:  // When in check, search starts here
         // Decrease/increase reduction for moves with a good/bad history
         r -= ss->statScore * 850 / 8192;
 
+        // Increase reduction for quiet moves at high depth (conservative)
+        if (!capture && depth >= 12)
+            r += 128;
+
         // Scale up reductions for expected ALL nodes
         if (allNode)
             r += r / (depth + 1);
