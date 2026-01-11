@@ -769,10 +769,6 @@ Value Search::Worker::search(
             if (!ttCapture)
                 update_quiet_histories(pos, ss, *this, ttData.move,
                                        std::min(132 * depth - 72, 985));
-
-            // Extra penalty for early quiet moves of the previous ply
-            if (prevSq != SQ_NONE && (ss - 1)->moveCount < 4 && !priorCapture)
-                update_continuation_histories(ss - 1, pos.piece_on(prevSq), prevSq, -2060);
         }
 
         // Partial workaround for the graph history interaction problem
