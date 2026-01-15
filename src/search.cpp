@@ -1703,9 +1703,6 @@ Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta)
         return mated_in(ss->ply);  // Plies to mate from the root
     }
 
-    if (!is_decisive(bestValue) && bestValue > beta)
-        bestValue = (bestValue + beta) / 2;
-
     Color us = pos.side_to_move();
     if (!ss->inCheck && !moveCount && !pos.non_pawn_material(us)
         && type_of(pos.captured_piece()) >= ROOK)
