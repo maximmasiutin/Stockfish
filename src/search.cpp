@@ -974,8 +974,7 @@ Value Search::Worker::search(
                 ttWriter.write(posKey, value_to_tt(value, ss->ply), ss->ttPv, BOUND_LOWER,
                                probCutDepth + 1, move, unadjustedStaticEval, tt.generation());
 
-                if (!is_decisive(value))
-                    return value - (probCutBeta - beta);
+                return value - (probCutBeta - beta);
             }
         }
     }
