@@ -150,8 +150,8 @@ using PieceToHistory = Stats<std::int16_t, 30000, PIECE_NB, SQUARE_NB>;
 using ContinuationHistory = MultiArray<PieceToHistory, PIECE_NB, SQUARE_NB>;
 
 // PawnHistory is addressed by the pawn structure and a move's [piece][to]
-using PawnHistory =
-  DynStats<AtomicStats<std::int16_t, 8192, PIECE_NB, SQUARE_NB>, PAWN_HISTORY_BASE_SIZE>;
+// Thread-local version (non-atomic, used by each Worker)
+using PawnHistory = Stats<std::int16_t, 8192, PAWN_HISTORY_BASE_SIZE, PIECE_NB, SQUARE_NB>;
 
 // Correction histories record differences between the static evaluation of
 // positions and their search score. It is used to improve the static evaluation
@@ -221,21 +221,12 @@ using TTMoveHistory = StatsEntry<std::int16_t, 8192>;
 // the indexing more efficient.
 struct SharedHistories {
     SharedHistories(size_t threadCount) :
-        correctionHistory(threadCount),
-        pawnHistory(threadCount) {
+        correctionHistory(threadCount) {
         assert((threadCount & (threadCount - 1)) == 0 && threadCount != 0);
-        sizeMinus1         = correctionHistory.get_size() - 1;
-        pawnHistSizeMinus1 = pawnHistory.get_size() - 1;
+        sizeMinus1 = correctionHistory.get_size() - 1;
     }
 
     size_t get_size() const { return sizeMinus1 + 1; }
-
-    auto& pawn_entry(const Position& pos) {
-        return pawnHistory[pos.pawn_key() & pawnHistSizeMinus1];
-    }
-    const auto& pawn_entry(const Position& pos) const {
-        return pawnHistory[pos.pawn_key() & pawnHistSizeMinus1];
-    }
 
     auto& pawn_correction_entry(const Position& pos) {
         return correctionHistory[pos.pawn_key() & sizeMinus1];
@@ -261,11 +252,9 @@ struct SharedHistories {
     }
 
     UnifiedCorrectionHistory correctionHistory;
-    PawnHistory              pawnHistory;
-
 
    private:
-    size_t sizeMinus1, pawnHistSizeMinus1;
+    size_t sizeMinus1;
 };
 
 }  // namespace Stockfish
