@@ -160,6 +160,9 @@ Search::Worker::Worker(SharedState&                    sharedState,
                        size_t                          numaTotalThreads,
                        NumaReplicatedAccessToken       token) :
     // Unpack the SharedState struct into member variables
+    pawnHistory(
+      make_unique_large_page<StatsEntry<std::int16_t, PAWN_HISTORY_LIMIT>[][PIECE_NB][SQUARE_NB]>(
+        PAWN_HISTORY_SIZE)),
     sharedHistory(sharedState.sharedHistories.at(token.get_numa_index())),
     threadIdx(threadId),
     numaThreadIdx(numaThreadId),
@@ -589,7 +592,12 @@ void Search::Worker::clear() {
 
     // Each thread is responsible for clearing their part of shared history
     sharedHistory.correctionHistory.clear_range(0, numaThreadIdx, numaTotal);
-    sharedHistory.pawnHistory.clear_range(-1238, numaThreadIdx, numaTotal);
+
+    // Clear thread-local pawn history
+    for (size_t i = 0; i < PAWN_HISTORY_SIZE; ++i)
+        for (size_t j = 0; j < PIECE_NB; ++j)
+            for (size_t k = 0; k < SQUARE_NB; ++k)
+                pawnHistory.get()[i][j][k] = -1238;
 
     ttMoveHistory = 0;
 
@@ -863,7 +871,7 @@ Value Search::Worker::search(
         mainHistory[~us][((ss - 1)->currentMove).raw()] << evalDiff * 9;
         if (!ttHit && type_of(pos.piece_on(prevSq)) != PAWN
             && ((ss - 1)->currentMove).type_of() != PROMOTION)
-            sharedHistory.pawn_entry(pos)[pos.piece_on(prevSq)][prevSq] << evalDiff * 13;
+            pawnHistory.get()[pos.pawn_key() & (PAWN_HISTORY_SIZE - 1)][pos.piece_on(prevSq)][prevSq] << evalDiff * 13;
     }
 
 
@@ -994,7 +1002,7 @@ moves_loop:  // When in check, search starts here
 
 
     MovePicker mp(pos, ttData.move, depth, &mainHistory, &lowPlyHistory, &captureHistory, contHist,
-                  &sharedHistory, ss->ply);
+                  pawnHistory.get(), ss->ply);
 
     value = bestValue;
 
@@ -1083,7 +1091,7 @@ moves_loop:  // When in check, search starts here
             {
                 int history = (*contHist[0])[movedPiece][move.to_sq()]
                             + (*contHist[1])[movedPiece][move.to_sq()]
-                            + sharedHistory.pawn_entry(pos)[movedPiece][move.to_sq()];
+                            + pawnHistory.get()[pos.pawn_key() & (PAWN_HISTORY_SIZE - 1)][movedPiece][move.to_sq()];
 
                 // Continuation history based pruning
                 if (history < -4083 * depth)
@@ -1441,7 +1449,8 @@ moves_loop:  // When in check, search starts here
         mainHistory[~us][((ss - 1)->currentMove).raw()] << scaledBonus * 243 / 32768;
 
         if (type_of(pos.piece_on(prevSq)) != PAWN && ((ss - 1)->currentMove).type_of() != PROMOTION)
-            sharedHistory.pawn_entry(pos)[pos.piece_on(prevSq)][prevSq] << scaledBonus * 290 / 8192;
+            pawnHistory.get()[pos.pawn_key() & (PAWN_HISTORY_SIZE - 1)][pos.piece_on(prevSq)][prevSq]
+              << scaledBonus * 290 / 8192;
     }
 
     // Bonus for prior capture countermove that caused the fail low
@@ -1612,7 +1621,7 @@ Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta)
     // the moves. We presently use two stages of move generator in quiescence search:
     // captures, or evasions only when in check.
     MovePicker mp(pos, ttData.move, DEPTH_QS, &mainHistory, &lowPlyHistory, &captureHistory,
-                  contHist, &sharedHistory, ss->ply);
+                  contHist, pawnHistory.get(), ss->ply);
 
     // Step 5. Loop through all pseudo-legal moves until no moves remain or a beta
     // cutoff occurs.
@@ -1901,7 +1910,8 @@ void update_quiet_histories(
 
     update_continuation_histories(ss, pos.moved_piece(move), move.to_sq(), bonus * 896 / 1024);
 
-    workerThread.sharedHistory.pawn_entry(pos)[pos.moved_piece(move)][move.to_sq()]
+    workerThread.pawnHistory
+      .get()[pos.pawn_key() & (PAWN_HISTORY_SIZE - 1)][pos.moved_piece(move)][move.to_sq()]
       << bonus * (bonus > 0 ? 905 : 505) / 1024;
 }
 
