@@ -33,6 +33,7 @@
 #include <vector>
 
 #include "history.h"
+#include "memory.h"
 #include "misc.h"
 #include "nnue/network.h"
 #include "nnue/nnue_accumulator.h"
@@ -289,6 +290,10 @@ class Worker {
     // Public because they need to be updatable by the stats
     ButterflyHistory mainHistory;
     LowPlyHistory    lowPlyHistory;
+
+    // Thread-local pawn history: 2MB per thread, allocated on large page
+    // Indexed by [pawnKey & (PAWN_HISTORY_SIZE-1)][piece][square]
+    LargePagePtr<StatsEntry<std::int16_t, PAWN_HISTORY_LIMIT>[][PIECE_NB][SQUARE_NB]> pawnHistory;
 
     CapturePieceToHistory           captureHistory;
     ContinuationHistory             continuationHistory[2][2];
