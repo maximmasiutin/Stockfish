@@ -889,7 +889,7 @@ void Position::do_move(Move                      m,
 
     if (history)
     {
-        prefetch(&history->pawn_entry(*this)[pc][to]);
+        // pawn history is thread-local, no prefetch needed
         prefetch(&history->pawn_correction_entry(*this));
         prefetch(&history->minor_piece_correction_entry(*this));
         prefetch(&history->nonpawn_correction_entry<WHITE>(*this));

@@ -290,6 +290,10 @@ class Worker {
     ButterflyHistory mainHistory;
     LowPlyHistory    lowPlyHistory;
 
+    // Ultra-simple thread-local pawn history - plain array, cache-line aligned
+    // Access: pawnHistory[pawnKey & 8191][piece][square]
+    alignas(64) std::int16_t pawnHistory[8192][PIECE_NB][SQUARE_NB];
+
     CapturePieceToHistory           captureHistory;
     ContinuationHistory             continuationHistory[2][2];
     CorrectionHistory<Continuation> continuationCorrectionHistory;
