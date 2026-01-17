@@ -45,7 +45,7 @@ class MovePicker {
                const LowPlyHistory*,
                const CapturePieceToHistory*,
                const PieceToHistory**,
-               const SharedHistories*,
+               const std::int16_t (*pawnHist)[PIECE_NB][SQUARE_NB],
                int);
     MovePicker(const Position&, Move, int, const CapturePieceToHistory*);
     Move next_move();
@@ -64,7 +64,7 @@ class MovePicker {
     const LowPlyHistory*         lowPlyHistory;
     const CapturePieceToHistory* captureHistory;
     const PieceToHistory**       continuationHistory;
-    const SharedHistories*       sharedHistory;
+    const std::int16_t         (*pawnHistory)[PIECE_NB][SQUARE_NB];
     Move                         ttMove;
     ExtMove *                    cur, *endCur, *endBadCaptures, *endCaptures, *endGenerated;
     int                          stage;
