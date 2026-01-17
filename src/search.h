@@ -283,6 +283,7 @@ class Worker {
     void start_searching();
 
     bool is_mainthread() const { return threadIdx == 0; }
+    size_t get_thread_idx() const { return threadIdx; }
 
     void ensure_network_replicated();
 
