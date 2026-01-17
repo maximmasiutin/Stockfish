@@ -290,6 +290,7 @@ class Worker {
     ButterflyHistory mainHistory;
     LowPlyHistory    lowPlyHistory;
     PawnHistory      pawnHistory;
+    size_t           pawnHistoryMask;  // Effective size mask (varies by thread count)
 
     CapturePieceToHistory           captureHistory;
     ContinuationHistory             continuationHistory[2][2];

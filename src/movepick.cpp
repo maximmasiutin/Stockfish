@@ -88,6 +88,7 @@ MovePicker::MovePicker(const Position&              p,
                        const CapturePieceToHistory* cph,
                        const PieceToHistory**       ch,
                        const PawnHistory*           ph,
+                       size_t                       phMask,
                        int                          pl) :
     pos(p),
     mainHistory(mh),
@@ -95,6 +96,7 @@ MovePicker::MovePicker(const Position&              p,
     captureHistory(cph),
     continuationHistory(ch),
     pawnHistory(ph),
+    pawnHistoryMask(phMask),
     ttMove(ttm),
     depth(d),
     ply(pl) {
@@ -159,7 +161,7 @@ ExtMove* MovePicker::score(MoveList<Type>& ml) {
         {
             // histories
             m.value = 2 * (*mainHistory)[us][m.raw()];
-            m.value += 2 * (*pawnHistory)[pos.pawn_key() & (PAWN_HISTORY_BASE_SIZE - 1)][pc][to];
+            m.value += 2 * (*pawnHistory)[pos.pawn_key() & pawnHistoryMask][pc][to];
             m.value += (*continuationHistory[0])[pc][to];
             m.value += (*continuationHistory[1])[pc][to];
             m.value += (*continuationHistory[2])[pc][to];
