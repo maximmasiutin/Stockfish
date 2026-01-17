@@ -362,25 +362,31 @@ class CombinedPawnHistory {
 
         if (threadCount < THRESHOLD_AGGREGATED)
         {
+            // ATOMIC mode: Single shared table with atomic operations.
+            // Memory: threadCount * SizeMultiplier * sizeof(PawnHistoryLocal) ~= threadCount * 16 MB
+            // Pattern: Standard lock-free concurrent hash table (Herlihy & Shavit, 2008)
             mode_ = PawnHistMode::ATOMIC;
-            // Only allocate atomicTable_ in ATOMIC mode
             atomicTable_ = std::make_unique<PawnHistoryAtomic>(threadCount);
             sizeMinus1_ = tableSize_ - 1;
         }
         else if (threadCount < THRESHOLD_COUNTMIN)
         {
+            // AGGREGATED mode: Per-thread local tables, aggregated at read time.
+            // Memory: threadCount * SizeMultiplier * sizeof(PawnHistoryLocal) ~= threadCount * 16 MB
+            // Pattern: Thread-local storage with read-time merge (similar to TBB combinable)
             mode_ = PawnHistMode::AGGREGATED;
             localTables_.reserve(threadCount);
-            // FIX: Each local table should be SizeMultiplier entries, not threadCount * SizeMultiplier
-            // Total across all threads = threadCount * SizeMultiplier (same as ATOMIC)
             for (size_t i = 0; i < threadCount; i++)
                 localTables_.emplace_back(
                   make_unique_large_page<PawnHistoryLocal[]>(SizeMultiplier));
-            // FIX: Mask should be SizeMultiplier - 1 for AGGREGATED (each table is SizeMultiplier)
             sizeMinus1_ = SizeMultiplier - 1;
         }
         else
         {
+            // COUNTMIN mode: Probabilistic Count-Min Sketch for O(1) operations.
+            // Memory: CM_DEPTH * CM_WIDTH * sizeof(int16_t) ~= 64 KB (constant)
+            // Reference: Cormode & Muthukrishnan, "An Improved Data Stream Summary:
+            // The Count-Min Sketch and its Applications", J. Algorithms 55(1), 2005
             mode_ = PawnHistMode::COUNTMIN;
             sizeMinus1_ = tableSize_ - 1;
         }
