@@ -215,6 +215,48 @@ using CorrectionHistory = typename Detail::CorrHistTypedef<T>::type;
 
 using TTMoveHistory = StatsEntry<std::int16_t, 8192>;
 
+using PawnHistoryEntry = Stats<std::int16_t, 8192, PIECE_NB, SQUARE_NB>;
+
+struct L0PawnCacheEntry {
+    uint64_t         pawnKey = 0;
+    PawnHistoryEntry data;
+};
+
+class L0PawnCache {
+   public:
+    void init(size_t) {
+        cacheSize = 256;
+        cacheMask = cacheSize - 1;
+        cache     = std::make_unique<L0PawnCacheEntry[]>(cacheSize);
+        clear();
+    }
+
+    void clear() {
+        for (size_t i = 0; i < cacheSize; ++i)
+            cache[i].pawnKey = ~uint64_t(0);
+    }
+
+    template<typename T>
+    int16_t get_or_load(uint64_t pawnKey, const T& l1Entry, Piece pc, Square to) {
+        size_t idx = pawnKey & cacheMask;
+        if (cache[idx].pawnKey != pawnKey)
+        {
+            cache[idx].pawnKey = pawnKey;
+            for (int p = 0; p < PIECE_NB; ++p)
+                for (int sq = 0; sq < SQUARE_NB; ++sq)
+                    cache[idx].data[p][sq] = l1Entry[p][sq];
+        }
+        return cache[idx].data[pc][to];
+    }
+
+    void snapshot_from_l1(const PawnHistory&) { clear(); }
+
+   private:
+    std::unique_ptr<L0PawnCacheEntry[]> cache;
+    size_t                              cacheSize = 0;
+    size_t                              cacheMask = 0;
+};
+
 // Set of histories shared between groups of threads. To avoid excessive
 // cross-node data transfer, histories are shared only between threads
 // on a given NUMA node. The passed size must be a power of two to make
@@ -235,6 +277,11 @@ struct SharedHistories {
     }
     const auto& pawn_entry(const Position& pos) const {
         return pawnHistory[pos.pawn_key() & pawnHistSizeMinus1];
+    }
+
+    auto&       pawn_entry(uint64_t pawnKey) { return pawnHistory[pawnKey & pawnHistSizeMinus1]; }
+    const auto& pawn_entry(uint64_t pawnKey) const {
+        return pawnHistory[pawnKey & pawnHistSizeMinus1];
     }
 
     auto& pawn_correction_entry(const Position& pos) {
