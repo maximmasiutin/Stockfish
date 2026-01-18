@@ -153,6 +153,9 @@ using ContinuationHistory = MultiArray<PieceToHistory, PIECE_NB, SQUARE_NB>;
 using PawnHistory =
   DynStats<AtomicStats<std::int16_t, 8192, PIECE_NB, SQUARE_NB>, PAWN_HISTORY_BASE_SIZE>;
 
+// LocalPawnHistory for per-thread writes (merged to shared at iteration end)
+using LocalPawnHistory = Stats<std::int16_t, 8192, PIECE_NB, SQUARE_NB>;
+
 // Correction histories record differences between the static evaluation of
 // positions and their search score. It is used to improve the static evaluation
 // used by some search heuristics.
@@ -235,6 +238,11 @@ struct SharedHistories {
     }
     const auto& pawn_entry(const Position& pos) const {
         return pawnHistory[pos.pawn_key() & pawnHistSizeMinus1];
+    }
+
+    auto&       pawn_entry(uint64_t pawnKey) { return pawnHistory[pawnKey & pawnHistSizeMinus1]; }
+    const auto& pawn_entry(uint64_t pawnKey) const {
+        return pawnHistory[pawnKey & pawnHistSizeMinus1];
     }
 
     auto& pawn_correction_entry(const Position& pos) {

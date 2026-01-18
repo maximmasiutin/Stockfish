@@ -183,6 +183,8 @@ void Search::Worker::ensure_network_replicated() {
 void Search::Worker::start_searching() {
 
     accumulatorStack.reset();
+    localPawnHistory.fill(0);
+    localPawnKey = 0;
 
     // Non-main threads go directly to iterative_deepening()
     if (!is_mainthread())
@@ -531,6 +533,13 @@ void Search::Worker::iterative_deepening() {
         iterIdx                        = (iterIdx + 1) & 3;
     }
 
+    // Flush remaining local pawn history to shared
+    if (localPawnKey != 0)
+        for (int pc = 0; pc < PIECE_NB; ++pc)
+            for (int sq = 0; sq < SQUARE_NB; ++sq)
+                if (localPawnHistory[pc][sq] != 0)
+                    sharedHistory.pawn_entry(localPawnKey)[pc][sq] << int(localPawnHistory[pc][sq]);
+
     if (!mainThread)
         return;
 
@@ -586,6 +595,8 @@ void Search::Worker::undo_null_move(Position& pos) { pos.undo_null_move(); }
 void Search::Worker::clear() {
     mainHistory.fill(mainHistoryDefault);
     captureHistory.fill(-689);
+    localPawnHistory.fill(0);
+    localPawnKey = 0;
 
     // Each thread is responsible for clearing their part of shared history
     sharedHistory.correctionHistory.clear_range(0, numaThreadIdx, numaTotal);
@@ -863,7 +874,21 @@ Value Search::Worker::search(
         mainHistory[~us][((ss - 1)->currentMove).raw()] << evalDiff * 9;
         if (!ttHit && type_of(pos.piece_on(prevSq)) != PAWN
             && ((ss - 1)->currentMove).type_of() != PROMOTION)
-            sharedHistory.pawn_entry(pos)[pos.piece_on(prevSq)][prevSq] << evalDiff * 13;
+        {
+            uint64_t pawnKey = pos.pawn_key();
+            if (localPawnKey != pawnKey)
+            {
+                if (localPawnKey != 0)
+                    for (int pc = 0; pc < PIECE_NB; ++pc)
+                        for (int sq = 0; sq < SQUARE_NB; ++sq)
+                            if (localPawnHistory[pc][sq] != 0)
+                                sharedHistory.pawn_entry(localPawnKey)[pc][sq]
+                                  << int(localPawnHistory[pc][sq]);
+                localPawnHistory.fill(0);
+                localPawnKey = pawnKey;
+            }
+            localPawnHistory[pos.piece_on(prevSq)][prevSq] << evalDiff * 13;
+        }
     }
 
 
@@ -1441,7 +1466,21 @@ moves_loop:  // When in check, search starts here
         mainHistory[~us][((ss - 1)->currentMove).raw()] << scaledBonus * 243 / 32768;
 
         if (type_of(pos.piece_on(prevSq)) != PAWN && ((ss - 1)->currentMove).type_of() != PROMOTION)
-            sharedHistory.pawn_entry(pos)[pos.piece_on(prevSq)][prevSq] << scaledBonus * 290 / 8192;
+        {
+            uint64_t pawnKey = pos.pawn_key();
+            if (localPawnKey != pawnKey)
+            {
+                if (localPawnKey != 0)
+                    for (int pc = 0; pc < PIECE_NB; ++pc)
+                        for (int sq = 0; sq < SQUARE_NB; ++sq)
+                            if (localPawnHistory[pc][sq] != 0)
+                                sharedHistory.pawn_entry(localPawnKey)[pc][sq]
+                                  << int(localPawnHistory[pc][sq]);
+                localPawnHistory.fill(0);
+                localPawnKey = pawnKey;
+            }
+            localPawnHistory[pos.piece_on(prevSq)][prevSq] << scaledBonus * 290 / 8192;
+        }
     }
 
     // Bonus for prior capture countermove that caused the fail low

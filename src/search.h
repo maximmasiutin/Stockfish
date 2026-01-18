@@ -297,6 +297,9 @@ class Worker {
     TTMoveHistory    ttMoveHistory;
     SharedHistories& sharedHistory;
 
+    LocalPawnHistory localPawnHistory;
+    uint64_t         localPawnKey = 0;
+
    private:
     void iterative_deepening();
 
