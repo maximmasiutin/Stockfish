@@ -864,16 +864,7 @@ Value Search::Worker::search(
         mainHistory[~us][((ss - 1)->currentMove).raw()] << evalDiff * 9;
         if (!ttHit && type_of(pos.piece_on(prevSq)) != PAWN
             && ((ss - 1)->currentMove).type_of() != PROMOTION)
-        {
-            Piece pc = pos.piece_on(prevSq);
-            sharedHistory.pawn_entry(pos)[pc][prevSq] << evalDiff * 13;
-            // Also update L0 cache if entry is cached there
-            if (l0PawnCache.enabled() && l0PawnCache.contains(pos.pawn_key()))
-            {
-                l0PawnCache.get(pos.pawn_key())[pc][prevSq] << evalDiff * 13;
-                l0PawnCache.mark_dirty(pos.pawn_key(), pc);
-            }
-        }
+            sharedHistory.pawn_entry(pos)[pos.piece_on(prevSq)][prevSq] << evalDiff * 13;
     }
 
 
@@ -1451,16 +1442,7 @@ moves_loop:  // When in check, search starts here
         mainHistory[~us][((ss - 1)->currentMove).raw()] << scaledBonus * 243 / 32768;
 
         if (type_of(pos.piece_on(prevSq)) != PAWN && ((ss - 1)->currentMove).type_of() != PROMOTION)
-        {
-            Piece pc = pos.piece_on(prevSq);
-            sharedHistory.pawn_entry(pos)[pc][prevSq] << scaledBonus * 290 / 8192;
-            // Also update L0 cache if entry is cached there
-            if (l0PawnCache.enabled() && l0PawnCache.contains(pos.pawn_key()))
-            {
-                l0PawnCache.get(pos.pawn_key())[pc][prevSq] << scaledBonus * 290 / 8192;
-                l0PawnCache.mark_dirty(pos.pawn_key(), pc);
-            }
-        }
+            sharedHistory.pawn_entry(pos)[pos.piece_on(prevSq)][prevSq] << scaledBonus * 290 / 8192;
     }
 
     // Bonus for prior capture countermove that caused the fail low
