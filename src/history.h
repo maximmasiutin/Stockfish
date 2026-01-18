@@ -283,51 +283,33 @@ class L0PawnCache {
         }
     }
 
-    // Get value from L0, loading from L1 if necessary (single operation, fastest)
+    // Get value with L0 caching (epoch-based: cache cleared at search start)
     template<typename T>
     int16_t get_or_load(uint64_t pawnKey, const T& l1Entry, Piece pc, Square to) {
         size_t idx = pawnKey & cacheMask;
-
         if (cache[idx].pawnKey != pawnKey)
         {
-            // Different pawn key - evict and load
+            // Cache miss - load full entry from L1
             cache[idx].pawnKey = pawnKey;
-            cache[idx].dirty   = false;
-
-            if (partialMode)
-            {
-                cache[idx].loadedMask = 0;
-                load_piece(idx, l1Entry, pc);
-            }
-            else
-            {
-                // Full mode: copy entire entry
-                for (int p = 0; p < PIECE_NB; ++p)
-                    for (int sq = 0; sq < SQUARE_NB; ++sq)
-                        cache[idx].data[p][sq] = l1Entry[p][sq];
-                cache[idx].loadedMask = 0xFFFF;
-            }
+            for (int p = 0; p < PIECE_NB; ++p)
+                for (int sq = 0; sq < SQUARE_NB; ++sq)
+                    cache[idx].data[p][sq] = l1Entry[p][sq];
         }
-        else if (partialMode && !(cache[idx].loadedMask & (1 << pc)))
-        {
-            // Same pawn key but piece not loaded yet
-            load_piece(idx, l1Entry, pc);
-        }
-
         return cache[idx].data[pc][to];
     }
 
-    void mark_dirty(uint64_t pawnKey, Piece) {
-        size_t idx = pawnKey & cacheMask;
-        if (cache[idx].pawnKey == pawnKey)
-        {
-            // Invalidate entry - next read will reload from L1
-            cache[idx].pawnKey = ~uint64_t(0);
-        }
+    void mark_dirty(uint64_t, Piece) {
+        // No-op in epoch-based mode - stale reads acceptable during search
     }
 
     uint16_t get_loaded_mask(uint64_t pawnKey) const {
         return cache[pawnKey & cacheMask].loadedMask;
+    }
+
+    // Epoch-based snapshot: clear cache at search start so fresh L1 data is loaded
+    void snapshot_from_l1(const PawnHistory&) {
+        for (size_t i = 0; i < cacheSize; ++i)
+            cache[i].pawnKey = ~uint64_t(0);  // Invalidate all entries
     }
 
    private:

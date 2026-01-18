@@ -162,8 +162,9 @@ ExtMove* MovePicker::score(MoveList<Type>& ml) {
             // histories
             m.value = 2 * (*mainHistory)[us][m.raw()];
 
-            // Pawn history - read from L1 directly (L0 cache bypassed for debugging)
-            m.value += 2 * sharedHistory->pawn_entry(pos)[pc][to];
+            // Pawn history - read via L0 cache (epoch-based)
+            m.value +=
+              2 * l0PawnCache->get_or_load(pos.pawn_key(), sharedHistory->pawn_entry(pos), pc, to);
             m.value += (*continuationHistory[0])[pc][to];
             m.value += (*continuationHistory[1])[pc][to];
             m.value += (*continuationHistory[2])[pc][to];

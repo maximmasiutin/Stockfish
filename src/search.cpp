@@ -183,6 +183,7 @@ void Search::Worker::ensure_network_replicated() {
 void Search::Worker::start_searching() {
 
     accumulatorStack.reset();
+    l0PawnCache.snapshot_from_l1(sharedHistory.pawnHistory);
 
     // Non-main threads go directly to iterative_deepening()
     if (!is_mainthread())
