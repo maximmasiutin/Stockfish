@@ -37,6 +37,7 @@ namespace Stockfish {
 
 constexpr int PAWN_HISTORY_BASE_SIZE   = 8192;  // has to be a power of 2
 constexpr int UINT_16_HISTORY_SIZE     = std::numeric_limits<uint16_t>::max() + 1;
+constexpr int L0_PAWN_CACHE_SIZE       = 512;  // Per-thread L0 cache size
 constexpr int CORRHIST_BASE_SIZE       = UINT_16_HISTORY_SIZE;
 constexpr int CORRECTION_HISTORY_LIMIT = 1024;
 constexpr int LOW_PLY_HISTORY_SIZE     = 5;
@@ -153,6 +154,91 @@ using ContinuationHistory = MultiArray<PieceToHistory, PIECE_NB, SQUARE_NB>;
 using PawnHistory =
   DynStats<AtomicStats<std::int16_t, 8192, PIECE_NB, SQUARE_NB>, PAWN_HISTORY_BASE_SIZE>;
 
+using PawnHistoryEntry = Stats<std::int16_t, 8192, PIECE_NB, SQUARE_NB>;
+
+// 2-Level Pawn History Cache by Maxim Masiutin (2026)
+// L0: per-thread local cache, L1: shared atomic cache
+struct L0PawnCacheEntry {
+    uint64_t         pawnKey = 0;
+    PawnHistoryEntry data;
+    bool             dirty = false;
+};
+
+class L0PawnCache {
+   public:
+    // Initialize with adaptive size based on thread count
+    void init(size_t numThreads) {
+        // 1 thread: 2048 entries (3MB) - low collision rate, better move ordering
+        // N threads: 256 entries (384KB) - fits L2 cache, reduces atomic contention
+        cacheSize = (numThreads == 1) ? 2048 : 256;
+        cacheMask = cacheSize - 1;
+        cache     = std::make_unique<L0PawnCacheEntry[]>(cacheSize);
+        clear();
+    }
+
+    void clear() {
+        for (size_t i = 0; i < cacheSize; ++i)
+        {
+            cache[i].pawnKey = 0;
+            cache[i].data.fill(-1238);
+            cache[i].dirty = false;
+        }
+    }
+
+    size_t size() const { return cacheSize; }
+
+    bool contains(uint64_t pawnKey) const {
+        size_t idx = pawnKey & cacheMask;
+        return cache[idx].pawnKey == pawnKey;
+    }
+
+    const PawnHistoryEntry& get(uint64_t pawnKey) const {
+        size_t idx = pawnKey & cacheMask;
+        return cache[idx].data;
+    }
+
+    PawnHistoryEntry& get(uint64_t pawnKey) {
+        size_t idx = pawnKey & cacheMask;
+        return cache[idx].data;
+    }
+
+    L0PawnCacheEntry& entry_at(size_t idx) { return cache[idx]; }
+
+    // Insert entry, copying from L1 if new (avoids expensive 1.5KB fill)
+    // Template to accept both atomic and non-atomic pawn history types
+    template<typename T>
+    L0PawnCacheEntry* insert(uint64_t pawnKey, const T& l1Entry) {
+        size_t            idx     = pawnKey & cacheMask;
+        L0PawnCacheEntry* evicted = nullptr;
+
+        if (cache[idx].pawnKey != pawnKey && cache[idx].dirty)
+            evicted = &cache[idx];
+
+        if (cache[idx].pawnKey != pawnKey)
+        {
+            cache[idx].pawnKey = pawnKey;
+            // Copy from L1 (atomic or non-atomic) to L0 (non-atomic)
+            for (int pc = 0; pc < PIECE_NB; ++pc)
+                for (int sq = 0; sq < SQUARE_NB; ++sq)
+                    cache[idx].data[pc][sq] = l1Entry[pc][sq];
+            cache[idx].dirty = false;
+        }
+
+        return evicted;
+    }
+
+    void mark_dirty(uint64_t pawnKey) {
+        size_t idx = pawnKey & cacheMask;
+        if (cache[idx].pawnKey == pawnKey)
+            cache[idx].dirty = true;
+    }
+
+   private:
+    std::unique_ptr<L0PawnCacheEntry[]> cache;
+    size_t                              cacheSize = 0;
+    size_t                              cacheMask = 0;
+};
+
 // Correction histories record differences between the static evaluation of
 // positions and their search score. It is used to improve the static evaluation
 // used by some search heuristics.
@@ -236,6 +322,8 @@ struct SharedHistories {
     const auto& pawn_entry(const Position& pos) const {
         return pawnHistory[pos.pawn_key() & pawnHistSizeMinus1];
     }
+
+    auto& pawn_entry(uint64_t pawnKey) { return pawnHistory[pawnKey & pawnHistSizeMinus1]; }
 
     auto& pawn_correction_entry(const Position& pos) {
         return correctionHistory[pos.pawn_key() & sizeMinus1];
