@@ -586,6 +586,7 @@ void Search::Worker::undo_null_move(Position& pos) { pos.undo_null_move(); }
 void Search::Worker::clear() {
     mainHistory.fill(mainHistoryDefault);
     captureHistory.fill(-689);
+    l0PawnCache.init(threads.size());
 
     // Each thread is responsible for clearing their part of shared history
     sharedHistory.correctionHistory.clear_range(0, numaThreadIdx, numaTotal);
@@ -863,7 +864,16 @@ Value Search::Worker::search(
         mainHistory[~us][((ss - 1)->currentMove).raw()] << evalDiff * 9;
         if (!ttHit && type_of(pos.piece_on(prevSq)) != PAWN
             && ((ss - 1)->currentMove).type_of() != PROMOTION)
-            sharedHistory.pawn_entry(pos)[pos.piece_on(prevSq)][prevSq] << evalDiff * 13;
+        {
+            Piece pc = pos.piece_on(prevSq);
+            sharedHistory.pawn_entry(pos)[pc][prevSq] << evalDiff * 13;
+            // Also update L0 cache if entry is cached there
+            if (l0PawnCache.enabled() && l0PawnCache.contains(pos.pawn_key()))
+            {
+                l0PawnCache.get(pos.pawn_key())[pc][prevSq] << evalDiff * 13;
+                l0PawnCache.mark_dirty(pos.pawn_key(), pc);
+            }
+        }
     }
 
 
@@ -994,7 +1004,7 @@ moves_loop:  // When in check, search starts here
 
 
     MovePicker mp(pos, ttData.move, depth, &mainHistory, &lowPlyHistory, &captureHistory, contHist,
-                  &sharedHistory, ss->ply);
+                  &sharedHistory, &l0PawnCache, ss->ply);
 
     value = bestValue;
 
@@ -1441,7 +1451,16 @@ moves_loop:  // When in check, search starts here
         mainHistory[~us][((ss - 1)->currentMove).raw()] << scaledBonus * 243 / 32768;
 
         if (type_of(pos.piece_on(prevSq)) != PAWN && ((ss - 1)->currentMove).type_of() != PROMOTION)
-            sharedHistory.pawn_entry(pos)[pos.piece_on(prevSq)][prevSq] << scaledBonus * 290 / 8192;
+        {
+            Piece pc = pos.piece_on(prevSq);
+            sharedHistory.pawn_entry(pos)[pc][prevSq] << scaledBonus * 290 / 8192;
+            // Also update L0 cache if entry is cached there
+            if (l0PawnCache.enabled() && l0PawnCache.contains(pos.pawn_key()))
+            {
+                l0PawnCache.get(pos.pawn_key())[pc][prevSq] << scaledBonus * 290 / 8192;
+                l0PawnCache.mark_dirty(pos.pawn_key(), pc);
+            }
+        }
     }
 
     // Bonus for prior capture countermove that caused the fail low
@@ -1612,7 +1631,7 @@ Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta)
     // the moves. We presently use two stages of move generator in quiescence search:
     // captures, or evasions only when in check.
     MovePicker mp(pos, ttData.move, DEPTH_QS, &mainHistory, &lowPlyHistory, &captureHistory,
-                  contHist, &sharedHistory, ss->ply);
+                  contHist, &sharedHistory, &l0PawnCache, ss->ply);
 
     // Step 5. Loop through all pseudo-legal moves until no moves remain or a beta
     // cutoff occurs.

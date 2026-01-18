@@ -215,6 +215,136 @@ using CorrectionHistory = typename Detail::CorrHistTypedef<T>::type;
 
 using TTMoveHistory = StatsEntry<std::int16_t, 8192>;
 
+// Non-atomic pawn history entry for L0 cache
+using PawnHistoryEntry = Stats<std::int16_t, 8192, PIECE_NB, SQUARE_NB>;
+
+// L0 cache entry with optional per-piece lazy loading
+struct L0PawnCacheEntry {
+    uint64_t         pawnKey = 0;
+    PawnHistoryEntry data;
+    uint16_t         loadedMask = 0;  // Which pieces have been loaded (for partial mode)
+    bool             dirty      = false;
+};
+
+// Per-thread L0 cache for pawn history
+// - 1-2 threads: full size (8192), no collisions, matches master behavior
+// - 3+ threads: small size (256) with per-piece lazy loading, reduces contention
+class L0PawnCache {
+   public:
+    void init(size_t) {
+        // v1 design: 256-entry L0 for all thread counts
+        cacheSize   = 256;
+        partialMode = false;
+        cacheMask   = cacheSize - 1;
+        cache       = std::make_unique<L0PawnCacheEntry[]>(cacheSize);
+        clear();
+    }
+
+    void clear() {
+        for (size_t i = 0; i < cacheSize; ++i)
+        {
+            cache[i].pawnKey = ~uint64_t(0);  // Use max value as "empty" sentinel
+            cache[i].data.fill(-1238);
+            cache[i].loadedMask = 0xFFFF;  // All pieces "loaded" (initialized)
+            cache[i].dirty      = false;
+        }
+    }
+
+    size_t size() const { return cacheSize; }
+    bool   is_partial_mode() const { return partialMode; }
+
+    bool enabled() const { return cache != nullptr; }
+
+    bool contains(uint64_t pawnKey) const {
+        return cache && cache[pawnKey & cacheMask].pawnKey == pawnKey;
+    }
+
+    // Get entry for reading (used in movepick)
+    const PawnHistoryEntry& get(uint64_t pawnKey) const { return cache[pawnKey & cacheMask].data; }
+
+    // Get entry for writing
+    PawnHistoryEntry& get(uint64_t pawnKey) { return cache[pawnKey & cacheMask].data; }
+
+    L0PawnCacheEntry& entry_at(size_t idx) { return cache[idx]; }
+
+    // Insert entry into L0 cache (full 2KB copy from L1)
+    template<typename T>
+    void insert(uint64_t pawnKey, const T& l1Entry, Piece) {
+        size_t idx = pawnKey & cacheMask;
+        if (cache[idx].pawnKey != pawnKey)
+        {
+            cache[idx].pawnKey = pawnKey;
+            cache[idx].dirty   = false;
+            // Full copy
+            for (int p = 0; p < PIECE_NB; ++p)
+                for (int sq = 0; sq < SQUARE_NB; ++sq)
+                    cache[idx].data[p][sq] = l1Entry[p][sq];
+            cache[idx].loadedMask = 0xFFFF;
+        }
+    }
+
+    // Get value from L0, loading from L1 if necessary (single operation, fastest)
+    template<typename T>
+    int16_t get_or_load(uint64_t pawnKey, const T& l1Entry, Piece pc, Square to) {
+        size_t idx = pawnKey & cacheMask;
+
+        if (cache[idx].pawnKey != pawnKey)
+        {
+            // Different pawn key - evict and load
+            cache[idx].pawnKey = pawnKey;
+            cache[idx].dirty   = false;
+
+            if (partialMode)
+            {
+                cache[idx].loadedMask = 0;
+                load_piece(idx, l1Entry, pc);
+            }
+            else
+            {
+                // Full mode: copy entire entry
+                for (int p = 0; p < PIECE_NB; ++p)
+                    for (int sq = 0; sq < SQUARE_NB; ++sq)
+                        cache[idx].data[p][sq] = l1Entry[p][sq];
+                cache[idx].loadedMask = 0xFFFF;
+            }
+        }
+        else if (partialMode && !(cache[idx].loadedMask & (1 << pc)))
+        {
+            // Same pawn key but piece not loaded yet
+            load_piece(idx, l1Entry, pc);
+        }
+
+        return cache[idx].data[pc][to];
+    }
+
+    void mark_dirty(uint64_t pawnKey, Piece pc) {
+        size_t idx = pawnKey & cacheMask;
+        if (cache[idx].pawnKey == pawnKey)
+        {
+            cache[idx].dirty = true;
+            if (partialMode)
+                cache[idx].loadedMask |= (1 << pc);
+        }
+    }
+
+    uint16_t get_loaded_mask(uint64_t pawnKey) const {
+        return cache[pawnKey & cacheMask].loadedMask;
+    }
+
+   private:
+    template<typename T>
+    void load_piece(size_t idx, const T& l1Entry, Piece pc) {
+        for (int sq = 0; sq < SQUARE_NB; ++sq)
+            cache[idx].data[pc][sq] = l1Entry[pc][sq];
+        cache[idx].loadedMask |= (1 << pc);
+    }
+
+    std::unique_ptr<L0PawnCacheEntry[]> cache;
+    size_t                              cacheSize   = 0;
+    size_t                              cacheMask   = 0;
+    bool                                partialMode = false;
+};
+
 // Set of histories shared between groups of threads. To avoid excessive
 // cross-node data transfer, histories are shared only between threads
 // on a given NUMA node. The passed size must be a power of two to make
@@ -235,6 +365,11 @@ struct SharedHistories {
     }
     const auto& pawn_entry(const Position& pos) const {
         return pawnHistory[pos.pawn_key() & pawnHistSizeMinus1];
+    }
+
+    auto&       pawn_entry(uint64_t pawnKey) { return pawnHistory[pawnKey & pawnHistSizeMinus1]; }
+    const auto& pawn_entry(uint64_t pawnKey) const {
+        return pawnHistory[pawnKey & pawnHistSizeMinus1];
     }
 
     auto& pawn_correction_entry(const Position& pos) {
