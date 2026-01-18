@@ -317,13 +317,12 @@ class L0PawnCache {
         return cache[idx].data[pc][to];
     }
 
-    void mark_dirty(uint64_t pawnKey, Piece pc) {
+    void mark_dirty(uint64_t pawnKey, Piece) {
         size_t idx = pawnKey & cacheMask;
         if (cache[idx].pawnKey == pawnKey)
         {
-            cache[idx].dirty = true;
-            if (partialMode)
-                cache[idx].loadedMask |= (1 << pc);
+            // Invalidate entry - next read will reload from L1
+            cache[idx].pawnKey = ~uint64_t(0);
         }
     }
 
