@@ -215,6 +215,49 @@ using CorrectionHistory = typename Detail::CorrHistTypedef<T>::type;
 
 using TTMoveHistory = StatsEntry<std::int16_t, 8192>;
 
+// Lazy value cache for pawn history reads - caches individual (pawnKey, pc, to) -> value
+// mappings instead of entire 2KB entries. Fits in L1 cache for better performance.
+class LazyPawnValueCache {
+   public:
+    static constexpr size_t SIZE = 4096;
+    static constexpr size_t MASK = SIZE - 1;
+
+    struct Entry {
+        uint64_t pawnKey;
+        uint8_t  pc;
+        uint8_t  to;
+        int16_t  value;
+    };
+
+    void clear() {
+        for (size_t i = 0; i < SIZE; ++i)
+            entries[i].pawnKey = ~uint64_t(0);
+    }
+
+    template<typename Loader>
+    int16_t get_or_load(uint64_t pawnKey, Piece pc, Square to, Loader&& loader) {
+        size_t idx = index(pawnKey, int(pc), int(to));
+        if (entries[idx].pawnKey == pawnKey && entries[idx].pc == uint8_t(pc)
+            && entries[idx].to == uint8_t(to))
+            return entries[idx].value;
+
+        // Only call loader (atomic read) on cache miss
+        int16_t val          = loader();
+        entries[idx].pawnKey = pawnKey;
+        entries[idx].pc      = uint8_t(pc);
+        entries[idx].to      = uint8_t(to);
+        entries[idx].value   = val;
+        return val;
+    }
+
+   private:
+    size_t index(uint64_t pawnKey, int pc, int to) const {
+        return (pawnKey ^ uint64_t(pc * 64 + to)) & MASK;
+    }
+
+    Entry entries[SIZE];
+};
+
 // Set of histories shared between groups of threads. To avoid excessive
 // cross-node data transfer, histories are shared only between threads
 // on a given NUMA node. The passed size must be a power of two to make

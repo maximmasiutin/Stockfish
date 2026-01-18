@@ -294,8 +294,9 @@ class Worker {
     ContinuationHistory             continuationHistory[2][2];
     CorrectionHistory<Continuation> continuationCorrectionHistory;
 
-    TTMoveHistory    ttMoveHistory;
-    SharedHistories& sharedHistory;
+    TTMoveHistory         ttMoveHistory;
+    SharedHistories&      sharedHistory;
+    LazyPawnValueCache    lazyPawnCache;
 
    private:
     void iterative_deepening();
