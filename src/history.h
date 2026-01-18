@@ -166,33 +166,49 @@ struct L0PawnCacheEntry {
 
 class L0PawnCache {
    public:
+    // Initialize with adaptive size based on thread count
+    void init(size_t numThreads) {
+        // Scale L0 size: 512 * numThreads, capped at full pawn history size
+        size_t targetSize = std::min(L0_PAWN_CACHE_SIZE * numThreads,
+                                     static_cast<size_t>(PAWN_HISTORY_BASE_SIZE));
+        // Round up to power of 2 for fast masking
+        cacheSize = 1;
+        while (cacheSize < targetSize)
+            cacheSize <<= 1;
+        cacheMask = cacheSize - 1;
+        cache     = std::make_unique<L0PawnCacheEntry[]>(cacheSize);
+        clear();
+    }
+
     void clear() {
-        for (auto& entry : cache) {
-            entry.pawnKey = 0;
-            entry.data.fill(0);
-            entry.dirty = false;
+        for (size_t i = 0; i < cacheSize; ++i) {
+            cache[i].pawnKey = 0;
+            cache[i].data.fill(0);
+            cache[i].dirty = false;
         }
     }
 
+    size_t size() const { return cacheSize; }
+
     bool contains(uint64_t pawnKey) const {
-        size_t idx = pawnKey % L0_PAWN_CACHE_SIZE;
+        size_t idx = pawnKey & cacheMask;
         return cache[idx].pawnKey == pawnKey;
     }
 
     const PawnHistoryEntry& get(uint64_t pawnKey) const {
-        size_t idx = pawnKey % L0_PAWN_CACHE_SIZE;
+        size_t idx = pawnKey & cacheMask;
         return cache[idx].data;
     }
 
     PawnHistoryEntry& get(uint64_t pawnKey) {
-        size_t idx = pawnKey % L0_PAWN_CACHE_SIZE;
+        size_t idx = pawnKey & cacheMask;
         return cache[idx].data;
     }
 
     L0PawnCacheEntry& entry_at(size_t idx) { return cache[idx]; }
 
     L0PawnCacheEntry* insert(uint64_t pawnKey) {
-        size_t            idx     = pawnKey % L0_PAWN_CACHE_SIZE;
+        size_t            idx     = pawnKey & cacheMask;
         L0PawnCacheEntry* evicted = nullptr;
 
         if (cache[idx].pawnKey != pawnKey && cache[idx].dirty)
@@ -208,13 +224,15 @@ class L0PawnCache {
     }
 
     void mark_dirty(uint64_t pawnKey) {
-        size_t idx = pawnKey % L0_PAWN_CACHE_SIZE;
+        size_t idx = pawnKey & cacheMask;
         if (cache[idx].pawnKey == pawnKey)
             cache[idx].dirty = true;
     }
 
    private:
-    std::array<L0PawnCacheEntry, L0_PAWN_CACHE_SIZE> cache;
+    std::unique_ptr<L0PawnCacheEntry[]> cache;
+    size_t                              cacheSize = 0;
+    size_t                              cacheMask = 0;
 };
 
 // Correction histories record differences between the static evaluation of

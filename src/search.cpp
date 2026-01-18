@@ -597,7 +597,7 @@ void Search::Worker::clear() {
             threadLocalPawnHist[i].fill(-1238);
     }
     else
-        l0PawnCache.clear();
+        l0PawnCache.init(threads.size());  // Adaptive L0 size based on thread count
 
     // Each thread is responsible for clearing their part of shared history
     sharedHistory.correctionHistory.clear_range(0, numaThreadIdx, numaTotal);
