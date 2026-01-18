@@ -89,6 +89,8 @@ MovePicker::MovePicker(const Position&              p,
                        const PieceToHistory**       ch,
                        const SharedHistories*       sh,
                        L0PawnCache*                 l0pc,
+                       PawnHistoryEntry*            tlph,
+                       bool                         st,
                        int                          pl) :
     pos(p),
     mainHistory(mh),
@@ -97,6 +99,8 @@ MovePicker::MovePicker(const Position&              p,
     continuationHistory(ch),
     sharedHistory(sh),
     l0PawnCache(l0pc),
+    threadLocalPawnHist(tlph),
+    singleThread(st),
     ttMove(ttm),
     depth(d),
     ply(pl) {
@@ -162,9 +166,13 @@ ExtMove* MovePicker::score(MoveList<Type>& ml) {
             // histories
             m.value = 2 * (*mainHistory)[us][m.raw()];
             uint64_t pawnKey = pos.pawn_key();
-            m.value += 2 * (l0PawnCache && l0PawnCache->contains(pawnKey)
-                              ? l0PawnCache->get(pawnKey)[pc][to]
-                              : sharedHistory->pawn_entry(pos)[pc][to]);
+            m.value +=
+              2
+              * (singleThread
+                   ? threadLocalPawnHist[pawnKey & (PAWN_HISTORY_BASE_SIZE - 1)][pc][to]
+                   : (l0PawnCache && l0PawnCache->contains(pawnKey)
+                        ? l0PawnCache->get(pawnKey)[pc][to]
+                        : sharedHistory->pawn_entry(pos)[pc][to]));
             m.value += (*continuationHistory[0])[pc][to];
             m.value += (*continuationHistory[1])[pc][to];
             m.value += (*continuationHistory[2])[pc][to];

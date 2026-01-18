@@ -291,6 +291,10 @@ class Worker {
     LowPlyHistory    lowPlyHistory;
     L0PawnCache      l0PawnCache;
 
+    // For single-thread mode: big non-atomic pawn history (no L0/L1 overhead)
+    std::unique_ptr<PawnHistoryEntry[]> threadLocalPawnHist;
+    bool                                singleThread = false;
+
     CapturePieceToHistory           captureHistory;
     ContinuationHistory             continuationHistory[2][2];
     CorrectionHistory<Continuation> continuationCorrectionHistory;

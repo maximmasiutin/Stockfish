@@ -586,7 +586,18 @@ void Search::Worker::undo_null_move(Position& pos) { pos.undo_null_move(); }
 void Search::Worker::clear() {
     mainHistory.fill(mainHistoryDefault);
     captureHistory.fill(-689);
-    l0PawnCache.clear();
+
+    // Single-thread mode uses big non-atomic local pawn history
+    singleThread = (threads.size() == 1);
+    if (singleThread)
+    {
+        if (!threadLocalPawnHist)
+            threadLocalPawnHist = std::make_unique<PawnHistoryEntry[]>(PAWN_HISTORY_BASE_SIZE);
+        for (size_t i = 0; i < PAWN_HISTORY_BASE_SIZE; ++i)
+            threadLocalPawnHist[i].fill(-1238);
+    }
+    else
+        l0PawnCache.clear();
 
     // Each thread is responsible for clearing their part of shared history
     sharedHistory.correctionHistory.clear_range(0, numaThreadIdx, numaTotal);
@@ -865,18 +876,25 @@ Value Search::Worker::search(
         if (!ttHit && type_of(pos.piece_on(prevSq)) != PAWN
             && ((ss - 1)->currentMove).type_of() != PROMOTION)
         {
-            uint64_t          pawnKey = pos.pawn_key();
-            L0PawnCacheEntry* evicted = l0PawnCache.insert(pawnKey);
-            if (evicted && evicted->dirty)
+            uint64_t pawnKey = pos.pawn_key();
+            if (singleThread)
+                threadLocalPawnHist[pawnKey & (PAWN_HISTORY_BASE_SIZE - 1)][pos.piece_on(prevSq)]
+                                   [prevSq]
+                  << evalDiff * 13;
+            else
             {
-                auto& l1 = sharedHistory.pawn_entry(evicted->pawnKey);
-                for (int pc = 0; pc < PIECE_NB; ++pc)
-                    for (int sq = 0; sq < SQUARE_NB; ++sq)
-                        l1[pc][sq] << int(evicted->data[pc][sq]);
-                evicted->dirty = false;
+                L0PawnCacheEntry* evicted = l0PawnCache.insert(pawnKey);
+                if (evicted && evicted->dirty)
+                {
+                    auto& l1 = sharedHistory.pawn_entry(evicted->pawnKey);
+                    for (int pc = 0; pc < PIECE_NB; ++pc)
+                        for (int sq = 0; sq < SQUARE_NB; ++sq)
+                            l1[pc][sq] << int(evicted->data[pc][sq]);
+                    evicted->dirty = false;
+                }
+                l0PawnCache.get(pawnKey)[pos.piece_on(prevSq)][prevSq] << evalDiff * 13;
+                l0PawnCache.mark_dirty(pawnKey);
             }
-            l0PawnCache.get(pawnKey)[pos.piece_on(prevSq)][prevSq] << evalDiff * 13;
-            l0PawnCache.mark_dirty(pawnKey);
         }
     }
 
@@ -1008,7 +1026,7 @@ moves_loop:  // When in check, search starts here
 
 
     MovePicker mp(pos, ttData.move, depth, &mainHistory, &lowPlyHistory, &captureHistory, contHist,
-                  &sharedHistory, &l0PawnCache, ss->ply);
+                  &sharedHistory, &l0PawnCache, threadLocalPawnHist.get(), singleThread, ss->ply);
 
     value = bestValue;
 
@@ -1095,10 +1113,13 @@ moves_loop:  // When in check, search starts here
             }
             else
             {
-                uint64_t pawnKey   = pos.pawn_key();
-                int      pawnHist  = l0PawnCache.contains(pawnKey)
-                                       ? l0PawnCache.get(pawnKey)[movedPiece][move.to_sq()]
-                                       : sharedHistory.pawn_entry(pos)[movedPiece][move.to_sq()];
+                uint64_t pawnKey  = pos.pawn_key();
+                int      pawnHist = singleThread
+                                    ? threadLocalPawnHist[pawnKey & (PAWN_HISTORY_BASE_SIZE - 1)]
+                                                         [movedPiece][move.to_sq()]
+                                    : (l0PawnCache.contains(pawnKey)
+                                         ? l0PawnCache.get(pawnKey)[movedPiece][move.to_sq()]
+                                         : sharedHistory.pawn_entry(pos)[movedPiece][move.to_sq()]);
                 int      history   = (*contHist[0])[movedPiece][move.to_sq()]
                                    + (*contHist[1])[movedPiece][move.to_sq()] + pawnHist;
 
@@ -1459,18 +1480,25 @@ moves_loop:  // When in check, search starts here
 
         if (type_of(pos.piece_on(prevSq)) != PAWN && ((ss - 1)->currentMove).type_of() != PROMOTION)
         {
-            uint64_t          pawnKey = pos.pawn_key();
-            L0PawnCacheEntry* evicted = l0PawnCache.insert(pawnKey);
-            if (evicted && evicted->dirty)
+            uint64_t pawnKey = pos.pawn_key();
+            if (singleThread)
+                threadLocalPawnHist[pawnKey & (PAWN_HISTORY_BASE_SIZE - 1)][pos.piece_on(prevSq)]
+                                   [prevSq]
+                  << scaledBonus * 290 / 8192;
+            else
             {
-                auto& l1 = sharedHistory.pawn_entry(evicted->pawnKey);
-                for (int pc = 0; pc < PIECE_NB; ++pc)
-                    for (int sq = 0; sq < SQUARE_NB; ++sq)
-                        l1[pc][sq] << int(evicted->data[pc][sq]);
-                evicted->dirty = false;
+                L0PawnCacheEntry* evicted = l0PawnCache.insert(pawnKey);
+                if (evicted && evicted->dirty)
+                {
+                    auto& l1 = sharedHistory.pawn_entry(evicted->pawnKey);
+                    for (int pc = 0; pc < PIECE_NB; ++pc)
+                        for (int sq = 0; sq < SQUARE_NB; ++sq)
+                            l1[pc][sq] << int(evicted->data[pc][sq]);
+                    evicted->dirty = false;
+                }
+                l0PawnCache.get(pawnKey)[pos.piece_on(prevSq)][prevSq] << scaledBonus * 290 / 8192;
+                l0PawnCache.mark_dirty(pawnKey);
             }
-            l0PawnCache.get(pawnKey)[pos.piece_on(prevSq)][prevSq] << scaledBonus * 290 / 8192;
-            l0PawnCache.mark_dirty(pawnKey);
         }
     }
 
@@ -1642,7 +1670,8 @@ Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta)
     // the moves. We presently use two stages of move generator in quiescence search:
     // captures, or evasions only when in check.
     MovePicker mp(pos, ttData.move, DEPTH_QS, &mainHistory, &lowPlyHistory, &captureHistory,
-                  contHist, &sharedHistory, &l0PawnCache, ss->ply);
+                  contHist, &sharedHistory, &l0PawnCache, threadLocalPawnHist.get(), singleThread,
+                  ss->ply);
 
     // Step 5. Loop through all pseudo-legal moves until no moves remain or a beta
     // cutoff occurs.
@@ -1931,8 +1960,13 @@ void update_quiet_histories(
 
     update_continuation_histories(ss, pos.moved_piece(move), move.to_sq(), bonus * 896 / 1024);
 
+    uint64_t pawnKey = pos.pawn_key();
+    if (workerThread.singleThread)
+        workerThread.threadLocalPawnHist[pawnKey & (PAWN_HISTORY_BASE_SIZE - 1)]
+                                        [pos.moved_piece(move)][move.to_sq()]
+          << bonus * (bonus > 0 ? 905 : 505) / 1024;
+    else
     {
-        uint64_t          pawnKey = pos.pawn_key();
         L0PawnCacheEntry* evicted = workerThread.l0PawnCache.insert(pawnKey);
         if (evicted && evicted->dirty)
         {

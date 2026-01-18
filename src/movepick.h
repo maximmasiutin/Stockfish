@@ -47,6 +47,8 @@ class MovePicker {
                const PieceToHistory**,
                const SharedHistories*,
                L0PawnCache*,
+               PawnHistoryEntry*,
+               bool,
                int);
     MovePicker(const Position&, Move, int, const CapturePieceToHistory*);
     Move next_move();
@@ -67,6 +69,8 @@ class MovePicker {
     const PieceToHistory**       continuationHistory;
     const SharedHistories*       sharedHistory;
     L0PawnCache*                 l0PawnCache;
+    PawnHistoryEntry*            threadLocalPawnHist;
+    bool                         singleThread;
     Move                         ttMove;
     ExtMove *                    cur, *endCur, *endBadCaptures, *endCaptures, *endGenerated;
     int                          stage;
