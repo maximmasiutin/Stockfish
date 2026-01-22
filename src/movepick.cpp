@@ -129,6 +129,16 @@ ExtMove* MovePicker::score(MoveList<Type>& ml) {
     Color us = pos.side_to_move();
 
     [[maybe_unused]] Bitboard threatByLesser[KING + 1];
+    // Cache history table references outside the move loop
+    [[maybe_unused]] const auto& pawnEntry       = sharedHistory->pawn_entry(pos);
+    [[maybe_unused]] const auto& mainHistoryUs   = (*mainHistory)[us];
+    [[maybe_unused]] const auto& contHist0       = *continuationHistory[0];
+    [[maybe_unused]] const auto& contHist1       = *continuationHistory[1];
+    [[maybe_unused]] const auto& contHist2       = *continuationHistory[2];
+    [[maybe_unused]] const auto& contHist3       = *continuationHistory[3];
+    [[maybe_unused]] const auto& contHist5       = *continuationHistory[5];
+    [[maybe_unused]] const bool  useLowPly       = ply < LOW_PLY_HISTORY_SIZE;
+    [[maybe_unused]] const int   lowPlyDivisor   = 1 + ply;
     if constexpr (Type == QUIETS)
     {
         threatByLesser[PAWN]   = 0;
@@ -158,13 +168,13 @@ ExtMove* MovePicker::score(MoveList<Type>& ml) {
         else if constexpr (Type == QUIETS)
         {
             // histories
-            m.value = 2 * (*mainHistory)[us][m.raw()];
-            m.value += 2 * sharedHistory->pawn_entry(pos)[pc][to];
-            m.value += (*continuationHistory[0])[pc][to];
-            m.value += (*continuationHistory[1])[pc][to];
-            m.value += (*continuationHistory[2])[pc][to];
-            m.value += (*continuationHistory[3])[pc][to];
-            m.value += (*continuationHistory[5])[pc][to];
+            m.value = 2 * mainHistoryUs[m.raw()];
+            m.value += 2 * pawnEntry[pc][to];
+            m.value += contHist0[pc][to];
+            m.value += contHist1[pc][to];
+            m.value += contHist2[pc][to];
+            m.value += contHist3[pc][to];
+            m.value += contHist5[pc][to];
 
             // bonus for checks
             m.value += (bool(pos.check_squares(pt) & to) && pos.see_ge(m, -75)) * 16384;
@@ -175,8 +185,8 @@ ExtMove* MovePicker::score(MoveList<Type>& ml) {
             m.value += PieceValue[pt] * v;
 
 
-            if (ply < LOW_PLY_HISTORY_SIZE)
-                m.value += 8 * (*lowPlyHistory)[ply][m.raw()] / (1 + ply);
+            if (useLowPly)
+                m.value += 8 * (*lowPlyHistory)[ply][m.raw()] / lowPlyDivisor;
         }
 
         else  // Type == EVASIONS
