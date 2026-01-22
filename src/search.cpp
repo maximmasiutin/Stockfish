@@ -992,6 +992,17 @@ moves_loop:  // When in check, search starts here
       (ss - 1)->continuationHistory, (ss - 2)->continuationHistory, (ss - 3)->continuationHistory,
       (ss - 4)->continuationHistory, (ss - 5)->continuationHistory, (ss - 6)->continuationHistory};
 
+    // Prefetch continuation history entries for TT move
+    if (ttData.move.is_ok())
+    {
+        const Piece  ttPc = pos.moved_piece(ttData.move);
+        const Square ttTo = ttData.move.to_sq();
+        prefetch(&(*contHist[0])[ttPc][ttTo]);
+        prefetch(&(*contHist[1])[ttPc][ttTo]);
+        prefetch(&(*contHist[2])[ttPc][ttTo]);
+        prefetch(&(*contHist[3])[ttPc][ttTo]);
+        prefetch(&(*contHist[5])[ttPc][ttTo]);
+    }
 
     MovePicker mp(pos, ttData.move, depth, &mainHistory, &lowPlyHistory, &captureHistory, contHist,
                   &sharedHistory, ss->ply);
