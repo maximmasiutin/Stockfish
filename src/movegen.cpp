@@ -24,7 +24,7 @@
 #include "bitboard.h"
 #include "position.h"
 
-#if defined(USE_AVX512ICL)
+#if defined(USE_AVX512ICL) || defined(USE_AVX2)
     #include <array>
     #include <algorithm>
     #include <immintrin.h>
@@ -81,6 +81,106 @@ inline Move* splat_moves(Move* moveList, Square from, Bitboard to_bb) {
                            _mm512_or_si512(_mm512_load_si512(table + 0), fromVec));
     moveList = write_moves(moveList, static_cast<uint32_t>(to_bb >> 32),
                            _mm512_or_si512(_mm512_load_si512(table + 1), fromVec));
+
+    return moveList;
+}
+
+#elif defined(USE_AVX2)
+
+// Lookup table for compressing 8 x 16-bit elements based on 8-bit mask
+// Each entry contains shuffle indices for _mm_shuffle_epi8
+alignas(64) static constexpr auto COMPRESS_LUT = [] {
+    std::array<std::array<uint8_t, 16>, 256> table{};
+    for (int mask = 0; mask < 256; ++mask)
+    {
+        int k = 0;
+        for (int i = 0; i < 8; ++i)
+        {
+            if (mask & (1 << i))
+            {
+                table[mask][k * 2]     = i * 2;
+                table[mask][k * 2 + 1] = i * 2 + 1;
+                ++k;
+            }
+        }
+        // Fill remaining with zeros (doesn't matter, won't be used)
+        for (; k < 8; ++k)
+        {
+            table[mask][k * 2]     = 0x80;  // Zero out unused positions
+            table[mask][k * 2 + 1] = 0x80;
+        }
+    }
+    return table;
+}();
+
+// Compress 16 x 16-bit elements from 256-bit vector based on 16-bit mask
+inline Move* write_moves_avx2(Move* moveList, uint16_t mask, __m256i vector) {
+    // Split into low and high 128-bit halves
+    __m128i lo = _mm256_castsi256_si128(vector);
+    __m128i hi = _mm256_extracti128_si256(vector, 1);
+
+    uint8_t mask_lo = mask & 0xFF;
+    uint8_t mask_hi = (mask >> 8) & 0xFF;
+
+    int count_lo = popcount(mask_lo);
+    int count_hi = popcount(mask_hi);
+
+    // Compress low half
+    __m128i shuf_lo = _mm_loadu_si128(reinterpret_cast<const __m128i*>(COMPRESS_LUT[mask_lo].data()));
+    __m128i compressed_lo = _mm_shuffle_epi8(lo, shuf_lo);
+    _mm_storeu_si128(reinterpret_cast<__m128i*>(moveList), compressed_lo);
+
+    // Compress high half
+    __m128i shuf_hi = _mm_loadu_si128(reinterpret_cast<const __m128i*>(COMPRESS_LUT[mask_hi].data()));
+    __m128i compressed_hi = _mm_shuffle_epi8(hi, shuf_hi);
+    _mm_storeu_si128(reinterpret_cast<__m128i*>(moveList + count_lo), compressed_hi);
+
+    return moveList + count_lo + count_hi;
+}
+
+template<Direction offset>
+inline Move* splat_pawn_moves(Move* moveList, Bitboard to_bb) {
+    alignas(32) static constexpr auto SPLAT_TABLE = [] {
+        std::array<Move, 64> table{};
+        for (int i = 0; i < 64; i++)
+        {
+            Square from{uint8_t(std::clamp(i - offset, 0, 63))};
+            table[i] = {Move(from, Square{uint8_t(i)})};
+        }
+        return table;
+    }();
+
+    auto table = reinterpret_cast<const __m256i*>(SPLAT_TABLE.data());
+
+    // Process 16 squares at a time (256 bits / 16 bits per move)
+    moveList = write_moves_avx2(moveList, static_cast<uint16_t>(to_bb >> 0),  _mm256_load_si256(table + 0));
+    moveList = write_moves_avx2(moveList, static_cast<uint16_t>(to_bb >> 16), _mm256_load_si256(table + 1));
+    moveList = write_moves_avx2(moveList, static_cast<uint16_t>(to_bb >> 32), _mm256_load_si256(table + 2));
+    moveList = write_moves_avx2(moveList, static_cast<uint16_t>(to_bb >> 48), _mm256_load_si256(table + 3));
+
+    return moveList;
+}
+
+inline Move* splat_moves(Move* moveList, Square from, Bitboard to_bb) {
+    alignas(32) static constexpr auto SPLAT_TABLE = [] {
+        std::array<Move, 64> table{};
+        for (uint8_t i = 0; i < 64; i++)
+            table[i] = {Move(SQUARE_ZERO, Square{i})};
+        return table;
+    }();
+
+    __m256i fromVec = _mm256_set1_epi16(Move(from, SQUARE_ZERO).raw());
+
+    auto table = reinterpret_cast<const __m256i*>(SPLAT_TABLE.data());
+
+    moveList = write_moves_avx2(moveList, static_cast<uint16_t>(to_bb >> 0),
+                                _mm256_or_si256(_mm256_load_si256(table + 0), fromVec));
+    moveList = write_moves_avx2(moveList, static_cast<uint16_t>(to_bb >> 16),
+                                _mm256_or_si256(_mm256_load_si256(table + 1), fromVec));
+    moveList = write_moves_avx2(moveList, static_cast<uint16_t>(to_bb >> 32),
+                                _mm256_or_si256(_mm256_load_si256(table + 2), fromVec));
+    moveList = write_moves_avx2(moveList, static_cast<uint16_t>(to_bb >> 48),
+                                _mm256_or_si256(_mm256_load_si256(table + 3), fromVec));
 
     return moveList;
 }
