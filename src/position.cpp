@@ -1158,6 +1158,20 @@ void Position::update_piece_threats(Piece                     pc,
     write_multiple_dirties<DirtyThreat::PcSqOffset, DirtyThreat::PcOffset>(*this, all_attackers,
                                                                            dt_template, dts);
 #else
+    // Pre-filter threatened bitboard to exclude invalid NNUE threat combinations
+    // PAWN cannot threaten B,Q,K; BISHOP/ROOK cannot threaten Q; KING cannot threaten Q,K
+    {
+        constexpr Bitboard excl_bishop[16] = {0, ~0ULL, 0, 0, 0, 0, 0, 0,
+                                              0, ~0ULL, 0, 0, 0, 0, 0, 0};
+        constexpr Bitboard excl_queen[16]  = {0, ~0ULL, 0, ~0ULL, ~0ULL, 0, ~0ULL, 0,
+                                              0, ~0ULL, 0, ~0ULL, ~0ULL, 0, ~0ULL, 0};
+        constexpr Bitboard excl_king[16]   = {0, ~0ULL, 0, 0, 0, 0, ~0ULL, 0,
+                                              0, ~0ULL, 0, 0, 0, 0, ~0ULL, 0};
+        threatened &= ~((excl_bishop[pc] & bishopQueens)
+                      | (excl_queen[pc] & pieces(QUEEN))
+                      | (excl_king[pc] & kings));
+    }
+
     while (threatened)
     {
         Square threatenedSq = pop_lsb(threatened);
