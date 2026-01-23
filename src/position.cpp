@@ -33,6 +33,10 @@
 
 #include "bitboard.h"
 #include "history.h"
+
+#if defined(USE_AVX512ICL) || defined(USE_AVX2)
+    #include <immintrin.h>
+#endif
 #include "misc.h"
 #include "movegen.h"
 #include "syzygy/tbprobe.h"
@@ -1068,7 +1072,7 @@ inline void add_dirty_threat(
     dts->list.push_back({pc, threatened, s, threatenedSq, PutPiece});
 }
 
-#ifdef USE_AVX512ICL
+#if defined(USE_AVX512ICL)
 // Given a DirtyThreat template and bit offsets to insert the piece type and square, write the threats
 // present at the given bitboard.
 template<int SqShift, int PcShift>
@@ -1106,6 +1110,73 @@ void write_multiple_dirties(const Position& p,
       _mm512_ternarylogic_epi32(template_v, threat_squares, threat_pieces, 254 /* A | B | C */);
     _mm512_storeu_si512(reinterpret_cast<__m512i*>(write), dirties);
 }
+
+#elif defined(USE_AVX2)
+// AVX2 version: Process up to 8 threats at a time using gather and vectorized build
+template<int SqShift, int PcShift>
+void write_multiple_dirties(const Position& p,
+                            Bitboard        mask,
+                            DirtyThreat     dt_template,
+                            DirtyThreats*   dts) {
+    static_assert(sizeof(DirtyThreat) == 4);
+
+    const auto& board = p.piece_array();
+    const int dt_count = popcount(mask);
+    auto* write = dts->list.make_space(dt_count);
+
+    // Extract squares using TZCNT/BLSR, process 8 at a time
+    alignas(32) int32_t squares[8];
+    alignas(32) int32_t pieces[8];
+
+    int idx = 0;
+    while (mask && idx < 8)
+    {
+        int sq = _tzcnt_u64(mask);
+        squares[idx] = sq;
+        pieces[idx] = static_cast<int32_t>(board[sq]);
+        mask = _blsr_u64(mask);
+        idx++;
+    }
+
+    // Build first 8 DirtyThreats using AVX2
+    if (idx > 0)
+    {
+        __m256i sq_vec = _mm256_load_si256(reinterpret_cast<const __m256i*>(squares));
+        __m256i pc_vec = _mm256_load_si256(reinterpret_cast<const __m256i*>(pieces));
+        __m256i template_v = _mm256_set1_epi32(dt_template.raw());
+
+        sq_vec = _mm256_slli_epi32(sq_vec, SqShift);
+        pc_vec = _mm256_slli_epi32(pc_vec, PcShift);
+
+        __m256i dirties = _mm256_or_si256(_mm256_or_si256(template_v, sq_vec), pc_vec);
+        _mm256_storeu_si256(reinterpret_cast<__m256i*>(write), dirties);
+        write += std::min(idx, 8);
+    }
+
+    // Process remaining threats (9-16) if any
+    idx = 0;
+    while (mask && idx < 8)
+    {
+        int sq = _tzcnt_u64(mask);
+        squares[idx] = sq;
+        pieces[idx] = static_cast<int32_t>(board[sq]);
+        mask = _blsr_u64(mask);
+        idx++;
+    }
+
+    if (idx > 0)
+    {
+        __m256i sq_vec = _mm256_load_si256(reinterpret_cast<const __m256i*>(squares));
+        __m256i pc_vec = _mm256_load_si256(reinterpret_cast<const __m256i*>(pieces));
+        __m256i template_v = _mm256_set1_epi32(dt_template.raw());
+
+        sq_vec = _mm256_slli_epi32(sq_vec, SqShift);
+        pc_vec = _mm256_slli_epi32(pc_vec, PcShift);
+
+        __m256i dirties = _mm256_or_si256(_mm256_or_si256(template_v, sq_vec), pc_vec);
+        _mm256_storeu_si256(reinterpret_cast<__m256i*>(write), dirties);
+    }
+}
 #endif
 
 template<bool PutPiece, bool ComputeRay>
@@ -1130,7 +1201,7 @@ void Position::update_piece_threats(Piece                     pc,
       (PseudoAttacks[KNIGHT][s] & knights) | (attacks_bb<PAWN>(s, WHITE) & blackPawns)
       | (attacks_bb<PAWN>(s, BLACK) & whitePawns) | (PseudoAttacks[KING][s] & kings);
 
-#ifdef USE_AVX512ICL
+#if defined(USE_AVX512ICL) || defined(USE_AVX2)
     if (threatened)
     {
         if constexpr (PutPiece)
@@ -1188,7 +1259,7 @@ void Position::update_piece_threats(Piece                     pc,
                 add_dirty_threat<!PutPiece>(dts, slider, threatenedPc, sliderSq, threatenedSq);
             }
 
-#ifndef USE_AVX512ICL  // for ICL, direct threats were processed earlier (all_attackers)
+#if !defined(USE_AVX512ICL) && !defined(USE_AVX2)  // for ICL/AVX2, direct threats were processed earlier (all_attackers)
             add_dirty_threat<PutPiece>(dts, slider, pc, sliderSq, s);
 #endif
         }
@@ -1198,7 +1269,7 @@ void Position::update_piece_threats(Piece                     pc,
         incoming_threats |= sliders;
     }
 
-#ifndef USE_AVX512ICL
+#if !defined(USE_AVX512ICL) && !defined(USE_AVX2)
     while (incoming_threats)
     {
         Square srcSq = pop_lsb(incoming_threats);
