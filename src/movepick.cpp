@@ -129,6 +129,12 @@ ExtMove* MovePicker::score(MoveList<Type>& ml) {
     Color us = pos.side_to_move();
 
     [[maybe_unused]] Bitboard threatByLesser[KING + 1];
+    // Cache dereferenced continuation history pointers outside the loop to reduce pointer chasing
+    [[maybe_unused]] const PieceToHistory* ch0;
+    [[maybe_unused]] const PieceToHistory* ch1;
+    [[maybe_unused]] const PieceToHistory* ch2;
+    [[maybe_unused]] const PieceToHistory* ch3;
+    [[maybe_unused]] const PieceToHistory* ch5;
     if constexpr (Type == QUIETS)
     {
         threatByLesser[PAWN]   = 0;
@@ -137,6 +143,11 @@ ExtMove* MovePicker::score(MoveList<Type>& ml) {
           pos.attacks_by<KNIGHT>(~us) | pos.attacks_by<BISHOP>(~us) | threatByLesser[KNIGHT];
         threatByLesser[QUEEN] = pos.attacks_by<ROOK>(~us) | threatByLesser[ROOK];
         threatByLesser[KING]  = pos.attacks_by<QUEEN>(~us) | threatByLesser[QUEEN];
+        ch0 = continuationHistory[0];
+        ch1 = continuationHistory[1];
+        ch2 = continuationHistory[2];
+        ch3 = continuationHistory[3];
+        ch5 = continuationHistory[5];
     }
 
     ExtMove* it = cur;
@@ -157,14 +168,14 @@ ExtMove* MovePicker::score(MoveList<Type>& ml) {
 
         else if constexpr (Type == QUIETS)
         {
-            // histories
+            // histories - use cached continuation history pointers
             m.value = 2 * (*mainHistory)[us][m.raw()];
             m.value += 2 * sharedHistory->pawn_entry(pos)[pc][to];
-            m.value += (*continuationHistory[0])[pc][to];
-            m.value += (*continuationHistory[1])[pc][to];
-            m.value += (*continuationHistory[2])[pc][to];
-            m.value += (*continuationHistory[3])[pc][to];
-            m.value += (*continuationHistory[5])[pc][to];
+            m.value += (*ch0)[pc][to];
+            m.value += (*ch1)[pc][to];
+            m.value += (*ch2)[pc][to];
+            m.value += (*ch3)[pc][to];
+            m.value += (*ch5)[pc][to];
 
             // bonus for checks
             m.value += (bool(pos.check_squares(pt) & to) && pos.see_ge(m, -75)) * 16384;
