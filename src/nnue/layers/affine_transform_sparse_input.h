@@ -145,26 +145,43 @@ void find_nnz(const std::int32_t* RESTRICT input,
 
     static_assert(InputsPerChunk > 0 && "SIMD width too wide");
 
-    const auto     inputVector = reinterpret_cast<const vec_uint_t*>(input);
-    IndexType      count       = 0;
-    vec128_t       base        = vec128_zero;
-    const vec128_t increment   = vec128_set_16(8);
+    const auto inputVector = reinterpret_cast<const vec_uint_t*>(input);
+
+    // Two-pass approach to break loop-carried dependency on count
+    // Pass 1: Compute all masks and counts
+    unsigned      masks[NumChunks];
+    std::uint8_t  counts[NumChunks];
+
     for (IndexType i = 0; i < NumChunks; ++i)
     {
-        // bitmask of nonzero values in this chunk
         unsigned nnz = 0;
         for (IndexType j = 0; j < InputsPerChunk; ++j)
         {
             const vec_uint_t inputChunk = inputVector[i * InputsPerChunk + j];
             nnz |= unsigned(vec_nnz(inputChunk)) << (j * InputSimdWidth);
         }
-        const vec128_t offsets =
-          vec128_load(reinterpret_cast<const vec128_t*>(&Lookup.offset_indices[nnz]));
-        vec128_storeu(reinterpret_cast<vec128_t*>(out + count), vec128_add(base, offsets));
-        count += popcount(nnz);
+        masks[i]  = nnz;
+        counts[i] = static_cast<std::uint8_t>(popcount(nnz));
+    }
+
+    // Compute prefix sum (offsets)
+    std::uint16_t offsets[NumChunks + 1];
+    offsets[0] = 0;
+    for (IndexType i = 0; i < NumChunks; ++i)
+        offsets[i + 1] = offsets[i] + counts[i];
+
+    // Pass 2: Store using precomputed offsets
+    vec128_t       base      = vec128_zero;
+    const vec128_t increment = vec128_set_16(8);
+
+    for (IndexType i = 0; i < NumChunks; ++i)
+    {
+        const vec128_t lutOffsets =
+          vec128_load(reinterpret_cast<const vec128_t*>(&Lookup.offset_indices[masks[i]]));
+        vec128_storeu(reinterpret_cast<vec128_t*>(out + offsets[i]), vec128_add(base, lutOffsets));
         base = vec128_add(base, increment);
     }
-    count_out = count;
+    count_out = offsets[NumChunks];
     #endif
 }
 
