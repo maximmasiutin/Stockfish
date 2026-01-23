@@ -85,10 +85,16 @@ int correction_value(const Worker& w, const Position& pos, const Stack* const ss
     const int   micv   = shared.minor_piece_correction_entry(pos).at(us).minor;
     const int   wnpcv  = shared.nonpawn_correction_entry<WHITE>(pos).at(us).nonPawnWhite;
     const int   bnpcv  = shared.nonpawn_correction_entry<BLACK>(pos).at(us).nonPawnBlack;
-    const int   cntcv =
-      m.is_ok() ? (*(ss - 2)->continuationCorrectionHistory)[pos.piece_on(m.to_sq())][m.to_sq()]
-                    + (*(ss - 4)->continuationCorrectionHistory)[pos.piece_on(m.to_sq())][m.to_sq()]
-                  : 8;
+
+    // Cache to_sq and piece_on to avoid redundant computation
+    int cntcv = 8;
+    if (m.is_ok())
+    {
+        const Square to = m.to_sq();
+        const Piece  pc = pos.piece_on(to);
+        cntcv = (*(ss - 2)->continuationCorrectionHistory)[pc][to]
+              + (*(ss - 4)->continuationCorrectionHistory)[pc][to];
+    }
 
     return 10347 * pcv + 8821 * micv + 11665 * (wnpcv + bnpcv) + 7841 * cntcv;
 }
@@ -117,7 +123,7 @@ void update_correction_history(const Position& pos,
     if (m.is_ok())
     {
         const Square to = m.to_sq();
-        const Piece  pc = pos.piece_on(m.to_sq());
+        const Piece  pc = pos.piece_on(to);
         (*(ss - 2)->continuationCorrectionHistory)[pc][to] << bonus * 127 / 128;
         (*(ss - 4)->continuationCorrectionHistory)[pc][to] << bonus * 59 / 128;
     }
@@ -1838,14 +1844,30 @@ void update_all_stats(const Position& pos,
     {
         update_quiet_histories(pos, ss, workerThread, bestMove, bonus * 910 / 1024);
 
+        // Precomputed malus scaling factors to avoid branch and division in loop
+        // For i <= 5: scale = 1085; for i > 5: scale = 1085 * 5 / i
+        static constexpr int malusScale[] = {
+          0,     1085, 1085, 1085, 1085, 1085,  // i = 0-5
+          903,   775,  678,  602,  542,  493,   // i = 6-11
+          452,   417,  387,  361,  339,  319,   // i = 12-17
+          301,   285,  271,  258,  246,  235,   // i = 18-23
+          226,   217,  208,  201,  193,  187,   // i = 24-29
+          180,   175,  169,  164,  159,  155,   // i = 30-35
+          150,   146,  142,  139,  135,  132,   // i = 36-41
+          129,   126,  123,  120,  117,  115,   // i = 42-47
+          113,   110,  108,  106,  104,  102,   // i = 48-53
+          100,   98,   97,   95,   93,   92,    // i = 54-59
+          90,    89,   87,   86,   84,   83,    // i = 60-65
+        };
+        constexpr int maxScale = sizeof(malusScale) / sizeof(malusScale[0]) - 1;
+
         int i = 0;
         // Decrease stats for all non-best quiet moves
         for (Move move : quietsSearched)
         {
             i++;
-            int actualMalus = malus * 1085 / 1024;
-            if (i > 5)
-                actualMalus -= actualMalus * (i - 5) / i;
+            int scale       = i <= maxScale ? malusScale[i] : 1085 * 5 / i;
+            int actualMalus = malus * scale / 1024;
             update_quiet_histories(pos, ss, workerThread, move, -actualMalus);
         }
     }
