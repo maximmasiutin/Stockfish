@@ -24,7 +24,7 @@
 #include "bitboard.h"
 #include "position.h"
 
-#if defined(USE_AVX512ICL)
+#if defined(USE_AVX512ICL) || defined(USE_AVX2)
     #include <array>
     #include <algorithm>
     #include <immintrin.h>
@@ -82,6 +82,69 @@ inline Move* splat_moves(Move* moveList, Square from, Bitboard to_bb) {
     moveList = write_moves(moveList, static_cast<uint32_t>(to_bb >> 32),
                            _mm512_or_si512(_mm512_load_si512(table + 1), fromVec));
 
+    return moveList;
+}
+
+#elif defined(USE_AVX2)
+
+// AVX2 version: Process 8 moves at a time using vectorized construction
+template<Direction offset>
+inline Move* splat_pawn_moves(Move* moveList, Bitboard to_bb) {
+    alignas(32) int16_t moves[8];
+
+    while (to_bb)
+    {
+        int count = 0;
+        while (to_bb && count < 8)
+        {
+            Square to = Square(_tzcnt_u64(to_bb));
+            moves[count++] = Move(to - offset, to).raw();
+            to_bb = _blsr_u64(to_bb);
+        }
+
+        // Store moves (AVX2 store is still faster than 8 scalar stores)
+        if (count == 8)
+        {
+            _mm256_storeu_si256(reinterpret_cast<__m256i*>(moveList),
+                               _mm256_load_si256(reinterpret_cast<const __m256i*>(moves)));
+            moveList += 8;
+        }
+        else
+        {
+            for (int i = 0; i < count; i++)
+                moveList[i] = Move(moves[i]);
+            moveList += count;
+        }
+    }
+    return moveList;
+}
+
+inline Move* splat_moves(Move* moveList, Square from, Bitboard to_bb) {
+    const __m256i fromVec = _mm256_set1_epi16(Move(from, SQUARE_ZERO).raw());
+    alignas(32) int16_t toSquares[8];
+
+    while (to_bb)
+    {
+        int count = 0;
+        while (to_bb && count < 8)
+        {
+            toSquares[count++] = static_cast<int16_t>(_tzcnt_u64(to_bb));
+            to_bb = _blsr_u64(to_bb);
+        }
+
+        if (count == 8)
+        {
+            __m256i toVec = _mm256_load_si256(reinterpret_cast<const __m256i*>(toSquares));
+            __m256i movesVec = _mm256_or_si256(fromVec, toVec);
+            _mm256_storeu_si256(reinterpret_cast<__m256i*>(moveList), movesVec);
+            moveList += 8;
+        }
+        else
+        {
+            for (int i = 0; i < count; i++)
+                *moveList++ = Move(from, Square(toSquares[i]));
+        }
+    }
     return moveList;
 }
 
