@@ -133,6 +133,38 @@ void find_nnz(const std::int32_t* RESTRICT input,
     }
     count_out = count;
 
+    #elif defined(USE_AVX2)
+
+    // AVX2 path: Process 8 int32_t at a time using movemask
+    constexpr IndexType SimdWidth = 8;  // 256 bits / 32 bits
+    constexpr IndexType NumChunks = InputDimensions / SimdWidth;
+
+    IndexType count = 0;
+    IndexType base = 0;
+
+    for (IndexType i = 0; i < NumChunks; ++i)
+    {
+        const __m256i inputV = _mm256_load_si256(reinterpret_cast<const __m256i*>(input + i * SimdWidth));
+
+        // Compare with zero: result is all 1s for non-zero elements
+        const __m256i zero = _mm256_setzero_si256();
+        const __m256i cmp = _mm256_cmpeq_epi32(inputV, zero);
+
+        // Get mask of zero elements, then invert for non-zero
+        unsigned nnzMask = ~_mm256_movemask_ps(_mm256_castsi256_ps(cmp)) & 0xFF;
+
+        // Extract indices for non-zero elements
+        while (nnzMask)
+        {
+            unsigned idx = _tzcnt_u32(nnzMask);
+            out[count++] = static_cast<std::uint16_t>(base + idx);
+            nnzMask = _blsr_u32(nnzMask);
+        }
+
+        base += SimdWidth;
+    }
+    count_out = count;
+
     #else
 
     using namespace SIMD;
