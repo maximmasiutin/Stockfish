@@ -85,10 +85,16 @@ int correction_value(const Worker& w, const Position& pos, const Stack* const ss
     const int   micv   = shared.minor_piece_correction_entry(pos).at(us).minor;
     const int   wnpcv  = shared.nonpawn_correction_entry<WHITE>(pos).at(us).nonPawnWhite;
     const int   bnpcv  = shared.nonpawn_correction_entry<BLACK>(pos).at(us).nonPawnBlack;
-    const int   cntcv =
-      m.is_ok() ? (*(ss - 2)->continuationCorrectionHistory)[pos.piece_on(m.to_sq())][m.to_sq()]
-                    + (*(ss - 4)->continuationCorrectionHistory)[pos.piece_on(m.to_sq())][m.to_sq()]
-                  : 8;
+
+    // Cache to_sq and piece_on to avoid redundant computation
+    int cntcv = 8;
+    if (m.is_ok())
+    {
+        const Square to = m.to_sq();
+        const Piece  pc = pos.piece_on(to);
+        cntcv = (*(ss - 2)->continuationCorrectionHistory)[pc][to]
+              + (*(ss - 4)->continuationCorrectionHistory)[pc][to];
+    }
 
     return 10347 * pcv + 8821 * micv + 11665 * (wnpcv + bnpcv) + 7841 * cntcv;
 }
@@ -117,7 +123,7 @@ void update_correction_history(const Position& pos,
     if (m.is_ok())
     {
         const Square to = m.to_sq();
-        const Piece  pc = pos.piece_on(m.to_sq());
+        const Piece  pc = pos.piece_on(to);
         (*(ss - 2)->continuationCorrectionHistory)[pc][to] << bonus * 127 / 128;
         (*(ss - 4)->continuationCorrectionHistory)[pc][to] << bonus * 59 / 128;
     }
