@@ -24,7 +24,7 @@
 #include "bitboard.h"
 #include "position.h"
 
-#if defined(USE_AVX512ICL)
+#if defined(USE_AVX512ICL) || defined(USE_AVX2)
     #include <array>
     #include <algorithm>
     #include <immintrin.h>
@@ -82,6 +82,66 @@ inline Move* splat_moves(Move* moveList, Square from, Bitboard to_bb) {
     moveList = write_moves(moveList, static_cast<uint32_t>(to_bb >> 32),
                            _mm512_or_si512(_mm512_load_si512(table + 1), fromVec));
 
+    return moveList;
+}
+
+#elif defined(USE_AVX2)
+
+// AVX2 lookup table for extracting bit positions
+alignas(32) static constexpr std::array<std::uint8_t, 256 * 8> AVX2_BIT_TABLE = [] {
+    std::array<std::uint8_t, 256 * 8> table{};
+    for (int mask = 0; mask < 256; ++mask)
+    {
+        int idx = 0;
+        for (int bit = 0; bit < 8; ++bit)
+            if (mask & (1 << bit))
+                table[mask * 8 + idx++] = static_cast<std::uint8_t>(bit);
+        // Fill remaining with zeros (unused)
+        while (idx < 8)
+            table[mask * 8 + idx++] = 0;
+    }
+    return table;
+}();
+
+template<Direction offset>
+inline Move* splat_pawn_moves(Move* moveList, Bitboard to_bb) {
+    // Process 8 bits at a time using lookup table
+    int baseSquare = 0;
+    while (to_bb)
+    {
+        const std::uint8_t byte = static_cast<std::uint8_t>(to_bb);
+        if (byte)
+        {
+            const int           cnt     = popcount(byte);
+            const std::uint8_t* indices = &AVX2_BIT_TABLE[byte * 8];
+            for (int i = 0; i < cnt; ++i)
+            {
+                Square to   = Square(baseSquare + indices[i]);
+                *moveList++ = Move(to - offset, to);
+            }
+        }
+        to_bb >>= 8;
+        baseSquare += 8;
+    }
+    return moveList;
+}
+
+inline Move* splat_moves(Move* moveList, Square from, Bitboard to_bb) {
+    // Process 8 bits at a time using lookup table
+    int baseSquare = 0;
+    while (to_bb)
+    {
+        const std::uint8_t byte = static_cast<std::uint8_t>(to_bb);
+        if (byte)
+        {
+            const int           cnt     = popcount(byte);
+            const std::uint8_t* indices = &AVX2_BIT_TABLE[byte * 8];
+            for (int i = 0; i < cnt; ++i)
+                *moveList++ = Move(from, Square(baseSquare + indices[i]));
+        }
+        to_bb >>= 8;
+        baseSquare += 8;
+    }
     return moveList;
 }
 
