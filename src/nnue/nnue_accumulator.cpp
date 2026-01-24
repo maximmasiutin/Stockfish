@@ -633,18 +633,17 @@ void update_accumulator_incremental(
 Bitboard get_changed_pieces(const std::array<Piece, SQUARE_NB>& oldPieces,
                             const std::array<Piece, SQUARE_NB>& newPieces) {
 #if defined(USE_AVX512) || defined(USE_AVX2)
+    // Interleaved load-compare pattern for better memory latency hiding
     static_assert(sizeof(Piece) == 1);
-    Bitboard sameBB = 0;
-
-    for (int i = 0; i < 64; i += 32)
-    {
-        const __m256i old_v = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(&oldPieces[i]));
-        const __m256i new_v = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(&newPieces[i]));
-        const __m256i cmpEqual        = _mm256_cmpeq_epi8(old_v, new_v);
-        const std::uint32_t equalMask = _mm256_movemask_epi8(cmpEqual);
-        sameBB |= static_cast<Bitboard>(equalMask) << i;
-    }
-    return ~sameBB;
+    const __m256i old_v0 = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(&oldPieces[0]));
+    const __m256i new_v0 = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(&newPieces[0]));
+    const __m256i cmp0   = _mm256_cmpeq_epi8(old_v0, new_v0);
+    const __m256i old_v1 = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(&oldPieces[32]));
+    const __m256i new_v1 = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(&newPieces[32]));
+    const __m256i cmp1   = _mm256_cmpeq_epi8(old_v1, new_v1);
+    const std::uint32_t mask0 = _mm256_movemask_epi8(cmp0);
+    const std::uint32_t mask1 = _mm256_movemask_epi8(cmp1);
+    return ~(static_cast<Bitboard>(mask0) | (static_cast<Bitboard>(mask1) << 32));
 #elif defined(USE_NEON)
     uint8x16x4_t old_v = vld4q_u8(reinterpret_cast<const uint8_t*>(oldPieces.data()));
     uint8x16x4_t new_v = vld4q_u8(reinterpret_cast<const uint8_t*>(newPieces.data()));
