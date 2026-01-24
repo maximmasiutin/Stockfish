@@ -1874,6 +1874,34 @@ void update_all_stats(const Position& pos,
 // Updates histories of the move pairs formed by moves
 // at ply -1, -2, -3, -4, and -6 with current move.
 void update_continuation_histories(Stack* ss, Piece pc, Square to, int bonus) {
+#if defined(USE_AVX512)
+    // Branchless implementation using arithmetic masks
+    // Phase 1: Precompute all bonuses
+    const int b1 = (bonus * 1133 / 1024) + 88;
+    const int b2 = bonus * 683 / 1024;
+    const int b3 = bonus * 312 / 1024;
+    const int b4 = bonus * 582 / 1024;
+    const int b5 = bonus * 149 / 1024;
+    const int b6 = bonus * 474 / 1024;
+
+    // Phase 2: Compute validity masks (0 or 1) using arithmetic
+    const int notInCheck = 1 - int(ss->inCheck);
+    const int m1 = int(((ss - 1)->currentMove).is_ok());
+    const int m2 = int(((ss - 2)->currentMove).is_ok());
+    const int m3 = notInCheck * int(((ss - 3)->currentMove).is_ok());
+    const int m4 = notInCheck * int(((ss - 4)->currentMove).is_ok());
+    const int m5 = notInCheck * int(((ss - 5)->currentMove).is_ok());
+    const int m6 = notInCheck * int(((ss - 6)->currentMove).is_ok());
+
+    // Phase 3: Apply with masked bonuses (0 bonus = no-op)
+    (*(ss - 1)->continuationHistory)[pc][to] << (b1 * m1);
+    (*(ss - 2)->continuationHistory)[pc][to] << (b2 * m2);
+    (*(ss - 3)->continuationHistory)[pc][to] << (b3 * m3);
+    (*(ss - 4)->continuationHistory)[pc][to] << (b4 * m4);
+    (*(ss - 5)->continuationHistory)[pc][to] << (b5 * m5);
+    (*(ss - 6)->continuationHistory)[pc][to] << (b6 * m6);
+#else
+    // Original loop-based implementation for non-AVX-512 platforms
     static std::array<ConthistBonus, 6> conthist_bonuses = {
       {{1, 1133}, {2, 683}, {3, 312}, {4, 582}, {5, 149}, {6, 474}}};
 
@@ -1886,6 +1914,7 @@ void update_continuation_histories(Stack* ss, Piece pc, Square to, int bonus) {
         if (((ss - i)->currentMove).is_ok())
             (*(ss - i)->continuationHistory)[pc][to] << (bonus * weight / 1024) + 88 * (i < 2);
     }
+#endif
 }
 
 // Updates move sorting heuristics
