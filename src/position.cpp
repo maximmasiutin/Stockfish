@@ -1319,6 +1319,73 @@ bool Position::see_ge(Move m, int threshold) const {
     Bitboard stmAttackers, bb;
     int      res = 1;
 
+#if defined(USE_AVX512)
+    // AVX-512: Cache piece type masks for repeated use in the loop
+    const Bitboard pawns        = pieces(PAWN);
+    const Bitboard knights      = pieces(KNIGHT);
+    const Bitboard bishops      = pieces(BISHOP);
+    const Bitboard rooks        = pieces(ROOK);
+    const Bitboard queens       = pieces(QUEEN);
+    const Bitboard bishopQueens = bishops | queens;
+    const Bitboard rookQueens   = rooks | queens;
+
+    while (true)
+    {
+        stm = ~stm;
+        attackers &= occupied;
+
+        if (!(stmAttackers = attackers & pieces(stm)))
+            break;
+
+        if (pinners(~stm) & occupied)
+        {
+            stmAttackers &= ~blockers_for_king(stm);
+            if (!stmAttackers)
+                break;
+        }
+
+        res ^= 1;
+
+        if ((bb = stmAttackers & pawns))
+        {
+            if ((swap = PawnValue - swap) < res)
+                break;
+            occupied ^= least_significant_square_bb(bb);
+            attackers |= attacks_bb<BISHOP>(to, occupied) & bishopQueens;
+        }
+        else if ((bb = stmAttackers & knights))
+        {
+            if ((swap = KnightValue - swap) < res)
+                break;
+            occupied ^= least_significant_square_bb(bb);
+        }
+        else if ((bb = stmAttackers & bishops))
+        {
+            if ((swap = BishopValue - swap) < res)
+                break;
+            occupied ^= least_significant_square_bb(bb);
+            attackers |= attacks_bb<BISHOP>(to, occupied) & bishopQueens;
+        }
+        else if ((bb = stmAttackers & rooks))
+        {
+            if ((swap = RookValue - swap) < res)
+                break;
+            occupied ^= least_significant_square_bb(bb);
+            attackers |= attacks_bb<ROOK>(to, occupied) & rookQueens;
+        }
+        else if ((bb = stmAttackers & queens))
+        {
+            swap = QueenValue - swap;
+            assert(swap >= res);
+            occupied ^= least_significant_square_bb(bb);
+            attackers |= (attacks_bb<BISHOP>(to, occupied) & bishopQueens)
+                       | (attacks_bb<ROOK>(to, occupied) & rookQueens);
+        }
+        else
+            return (attackers & ~pieces(stm)) ? res ^ 1 : res;
+    }
+#else
+    // Non-AVX-512: Original implementation
     while (true)
     {
         stm = ~stm;
@@ -1392,6 +1459,7 @@ bool Position::see_ge(Move m, int threshold) const {
               // reverse the result.
             return (attackers & ~pieces(stm)) ? res ^ 1 : res;
     }
+#endif
 
     return bool(res);
 }
