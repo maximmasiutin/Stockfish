@@ -1874,6 +1874,41 @@ void update_all_stats(const Position& pos,
 // Updates histories of the move pairs formed by moves
 // at ply -1, -2, -3, -4, and -6 with current move.
 void update_continuation_histories(Stack* ss, Piece pc, Square to, int bonus) {
+#if defined(USE_AVX512)
+    // Precomputed weights from {{1, 1133}, {2, 683}, {3, 312}, {4, 582}, {5, 149}, {6, 474}}
+    // Only index 0 (offset 1) gets +88 bonus since i < 2 where i is the offset
+    constexpr int weights[6] = {1133, 683, 312, 582, 149, 474};
+    constexpr int offsets[6] = {1, 2, 3, 4, 5, 6};
+
+    // Precompute all bonuses
+    // Only offset 1 (index 0) gets +88 bonus since 1 < 2 is true, 2 < 2 is false
+    int precomputed[6];
+    precomputed[0] = (bonus * weights[0] / 1024) + 88;
+    precomputed[1] = bonus * weights[1] / 1024;
+    precomputed[2] = bonus * weights[2] / 1024;
+    precomputed[3] = bonus * weights[3] / 1024;
+    precomputed[4] = bonus * weights[4] / 1024;
+    precomputed[5] = bonus * weights[5] / 1024;
+
+    // Always update first 2 continuation histories
+    if (((ss - offsets[0])->currentMove).is_ok())
+        (*(ss - offsets[0])->continuationHistory)[pc][to] << precomputed[0];
+    if (((ss - offsets[1])->currentMove).is_ok())
+        (*(ss - offsets[1])->continuationHistory)[pc][to] << precomputed[1];
+
+    // Only update remaining histories if not in check
+    if (!ss->inCheck)
+    {
+        if (((ss - offsets[2])->currentMove).is_ok())
+            (*(ss - offsets[2])->continuationHistory)[pc][to] << precomputed[2];
+        if (((ss - offsets[3])->currentMove).is_ok())
+            (*(ss - offsets[3])->continuationHistory)[pc][to] << precomputed[3];
+        if (((ss - offsets[4])->currentMove).is_ok())
+            (*(ss - offsets[4])->continuationHistory)[pc][to] << precomputed[4];
+        if (((ss - offsets[5])->currentMove).is_ok())
+            (*(ss - offsets[5])->continuationHistory)[pc][to] << precomputed[5];
+    }
+#else
     static std::array<ConthistBonus, 6> conthist_bonuses = {
       {{1, 1133}, {2, 683}, {3, 312}, {4, 582}, {5, 149}, {6, 474}}};
 
@@ -1886,6 +1921,7 @@ void update_continuation_histories(Stack* ss, Piece pc, Square to, int bonus) {
         if (((ss - i)->currentMove).is_ok())
             (*(ss - i)->continuationHistory)[pc][to] << (bonus * weight / 1024) + 88 * (i < 2);
     }
+#endif
 }
 
 // Updates move sorting heuristics
