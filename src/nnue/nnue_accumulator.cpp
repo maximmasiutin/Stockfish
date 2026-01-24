@@ -370,22 +370,68 @@ struct AccumulatorUpdateContext {
             for (IndexType k = 0; k < Tiling::NumRegs; ++k)
                 acc[k] = fromTile[k];
 
+    #if defined(USE_AVX512)
+            // AVX-512: Fused add/sub for paired removed/added features
+            {
+                int minSize = std::min(removed.ssize(), added.ssize());
+                int i = 0;
+
+                // Fused loop: acc = acc + (added - removed)
+                for (; i < minSize; ++i)
+                {
+                    const size_t offsetR = Dimensions * removed[i];
+                    const size_t offsetA = Dimensions * added[i];
+                    auto* columnR = reinterpret_cast<const vec_i8_t*>(&threatWeights[offsetR]);
+                    auto* columnA = reinterpret_cast<const vec_i8_t*>(&threatWeights[offsetA]);
+
+                    for (IndexType k = 0; k < Tiling::NumRegs; ++k)
+                    {
+                        vec_t diffA = vec_convert_8_16(columnA[k]);
+                        vec_t diffR = vec_convert_8_16(columnR[k]);
+                        acc[k] = vec_add_16(acc[k], vec_sub_16(diffA, diffR));
+                    }
+                }
+
+                // Handle remaining removed features
+                for (; i < removed.ssize(); ++i)
+                {
+                    size_t       index  = removed[i];
+                    const size_t offset = Dimensions * index;
+                    auto*        column = reinterpret_cast<const vec_i8_t*>(&threatWeights[offset]);
+
+                    for (IndexType k = 0; k < Tiling::NumRegs; ++k)
+                        acc[k] = vec_sub_16(acc[k], vec_convert_8_16(column[k]));
+                }
+
+                // Handle remaining added features
+                for (i = minSize; i < added.ssize(); ++i)
+                {
+                    size_t       index  = added[i];
+                    const size_t offset = Dimensions * index;
+                    auto*        column = reinterpret_cast<const vec_i8_t*>(&threatWeights[offset]);
+
+                    for (IndexType k = 0; k < Tiling::NumRegs; ++k)
+                        acc[k] = vec_add_16(acc[k], vec_convert_8_16(column[k]));
+                }
+            }
+    #else
+            // Non-AVX-512: Original separate loops
             for (int i = 0; i < removed.ssize(); ++i)
             {
                 size_t       index  = removed[i];
                 const size_t offset = Dimensions * index;
                 auto*        column = reinterpret_cast<const vec_i8_t*>(&threatWeights[offset]);
 
-    #ifdef USE_NEON
+        #ifdef USE_NEON
                 for (IndexType k = 0; k < Tiling::NumRegs; k += 2)
                 {
                     acc[k]     = vec_sub_16(acc[k], vmovl_s8(vget_low_s8(column[k / 2])));
                     acc[k + 1] = vec_sub_16(acc[k + 1], vmovl_high_s8(column[k / 2]));
                 }
-    #else
+        #else
                 for (IndexType k = 0; k < Tiling::NumRegs; ++k)
                     acc[k] = vec_sub_16(acc[k], vec_convert_8_16(column[k]));
-    #endif
+        #endif
             }
 
             for (int i = 0; i < added.ssize(); ++i)
@@ -394,17 +440,18 @@ struct AccumulatorUpdateContext {
                 const size_t offset = Dimensions * index;
                 auto*        column = reinterpret_cast<const vec_i8_t*>(&threatWeights[offset]);
 
-    #ifdef USE_NEON
+        #ifdef USE_NEON
                 for (IndexType k = 0; k < Tiling::NumRegs; k += 2)
                 {
                     acc[k]     = vec_add_16(acc[k], vmovl_s8(vget_low_s8(column[k / 2])));
                     acc[k + 1] = vec_add_16(acc[k + 1], vmovl_high_s8(column[k / 2]));
                 }
-    #else
+        #else
                 for (IndexType k = 0; k < Tiling::NumRegs; ++k)
                     acc[k] = vec_add_16(acc[k], vec_convert_8_16(column[k]));
-    #endif
+        #endif
             }
+    #endif
 
             for (IndexType k = 0; k < Tiling::NumRegs; k++)
                 vec_store(&toTile[k], acc[k]);
@@ -633,18 +680,17 @@ void update_accumulator_incremental(
 Bitboard get_changed_pieces(const std::array<Piece, SQUARE_NB>& oldPieces,
                             const std::array<Piece, SQUARE_NB>& newPieces) {
 #if defined(USE_AVX512) || defined(USE_AVX2)
+    // Fully unrolled with all 4 loads issued first, then comparisons, then masks
+    // This maximizes ILP by separating memory, compute, and mask extraction phases
     static_assert(sizeof(Piece) == 1);
-    Bitboard sameBB = 0;
-
-    for (int i = 0; i < 64; i += 32)
-    {
-        const __m256i old_v = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(&oldPieces[i]));
-        const __m256i new_v = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(&newPieces[i]));
-        const __m256i cmpEqual        = _mm256_cmpeq_epi8(old_v, new_v);
-        const std::uint32_t equalMask = _mm256_movemask_epi8(cmpEqual);
-        sameBB |= static_cast<Bitboard>(equalMask) << i;
-    }
-    return ~sameBB;
+    const __m256i old_lo = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(&oldPieces[0]));
+    const __m256i old_hi = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(&oldPieces[32]));
+    const __m256i new_lo = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(&newPieces[0]));
+    const __m256i new_hi = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(&newPieces[32]));
+    const __m256i neq_lo = ~_mm256_cmpeq_epi8(old_lo, new_lo);
+    const __m256i neq_hi = ~_mm256_cmpeq_epi8(old_hi, new_hi);
+    return static_cast<Bitboard>(_mm256_movemask_epi8(neq_lo))
+         | (static_cast<Bitboard>(_mm256_movemask_epi8(neq_hi)) << 32);
 #elif defined(USE_NEON)
     uint8x16x4_t old_v = vld4q_u8(reinterpret_cast<const uint8_t*>(oldPieces.data()));
     uint8x16x4_t new_v = vld4q_u8(reinterpret_cast<const uint8_t*>(newPieces.data()));
