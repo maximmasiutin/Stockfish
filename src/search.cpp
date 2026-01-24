@@ -85,10 +85,18 @@ int correction_value(const Worker& w, const Position& pos, const Stack* const ss
     const int   micv   = shared.minor_piece_correction_entry(pos).at(us).minor;
     const int   wnpcv  = shared.nonpawn_correction_entry<WHITE>(pos).at(us).nonPawnWhite;
     const int   bnpcv  = shared.nonpawn_correction_entry<BLACK>(pos).at(us).nonPawnBlack;
-    const int   cntcv =
-      m.is_ok() ? (*(ss - 2)->continuationCorrectionHistory)[pos.piece_on(m.to_sq())][m.to_sq()]
-                    + (*(ss - 4)->continuationCorrectionHistory)[pos.piece_on(m.to_sq())][m.to_sq()]
-                  : 8;
+
+    // Cache square and piece to avoid redundant lookups
+    int cntcv;
+    if (m.is_ok())
+    {
+        const Square to = m.to_sq();
+        const Piece  pc = pos.piece_on(to);
+        cntcv           = (*(ss - 2)->continuationCorrectionHistory)[pc][to]
+              + (*(ss - 4)->continuationCorrectionHistory)[pc][to];
+    }
+    else
+        cntcv = 8;
 
     return 10347 * pcv + 8821 * micv + 11665 * (wnpcv + bnpcv) + 7841 * cntcv;
 }
@@ -1838,22 +1846,25 @@ void update_all_stats(const Position& pos,
     {
         update_quiet_histories(pos, ss, workerThread, bestMove, bonus * 910 / 1024);
 
-        int i = 0;
+        // Precompute base malus outside the loop
+        const int baseMalus = malus * 1085 / 1024;
+        int       i         = 0;
         // Decrease stats for all non-best quiet moves
         for (Move move : quietsSearched)
         {
             i++;
-            int actualMalus = malus * 1085 / 1024;
+            int actualMalus = baseMalus;
             if (i > 5)
-                actualMalus -= actualMalus * (i - 5) / i;
+                actualMalus -= baseMalus * (i - 5) / i;
             update_quiet_histories(pos, ss, workerThread, move, -actualMalus);
         }
     }
     else
     {
         // Increase stats for the best move in case it was a capture move
-        capturedPiece = type_of(pos.piece_on(bestMove.to_sq()));
-        captureHistory[movedPiece][bestMove.to_sq()][capturedPiece] << bonus * 1395 / 1024;
+        const Square bestTo = bestMove.to_sq();
+        capturedPiece       = type_of(pos.piece_on(bestTo));
+        captureHistory[movedPiece][bestTo][capturedPiece] << bonus * 1395 / 1024;
     }
 
     // Extra penalty for a quiet early move that was not a TT move in
@@ -1861,12 +1872,15 @@ void update_all_stats(const Position& pos,
     if (prevSq != SQ_NONE && ((ss - 1)->moveCount == 1 + (ss - 1)->ttHit) && !pos.captured_piece())
         update_continuation_histories(ss - 1, pos.piece_on(prevSq), prevSq, -malus * 602 / 1024);
 
+    // Precompute capture malus outside the loop
+    const int captureMalus = -malus * 1448 / 1024;
     // Decrease stats for all non-best capture moves
     for (Move move : capturesSearched)
     {
-        movedPiece    = pos.moved_piece(move);
-        capturedPiece = type_of(pos.piece_on(move.to_sq()));
-        captureHistory[movedPiece][move.to_sq()][capturedPiece] << -malus * 1448 / 1024;
+        const Square to = move.to_sq();
+        movedPiece      = pos.moved_piece(move);
+        capturedPiece   = type_of(pos.piece_on(to));
+        captureHistory[movedPiece][to][capturedPiece] << captureMalus;
     }
 }
 
@@ -1899,10 +1913,13 @@ void update_quiet_histories(
     if (ss->ply < LOW_PLY_HISTORY_SIZE)
         workerThread.lowPlyHistory[ss->ply][move.raw()] << bonus * 805 / 1024;
 
-    update_continuation_histories(ss, pos.moved_piece(move), move.to_sq(), bonus * 896 / 1024);
+    // Cache piece and square for reuse
+    const Piece  pc = pos.moved_piece(move);
+    const Square to = move.to_sq();
 
-    workerThread.sharedHistory.pawn_entry(pos)[pos.moved_piece(move)][move.to_sq()]
-      << bonus * (bonus > 0 ? 905 : 505) / 1024;
+    update_continuation_histories(ss, pc, to, bonus * 896 / 1024);
+
+    workerThread.sharedHistory.pawn_entry(pos)[pc][to] << bonus * (bonus > 0 ? 905 : 505) / 1024;
 }
 
 }

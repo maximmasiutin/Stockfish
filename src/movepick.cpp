@@ -157,14 +157,17 @@ ExtMove* MovePicker::score(MoveList<Type>& ml) {
 
         else if constexpr (Type == QUIETS)
         {
-            // histories
-            m.value = 2 * (*mainHistory)[us][m.raw()];
-            m.value += 2 * sharedHistory->pawn_entry(pos)[pc][to];
-            m.value += (*continuationHistory[0])[pc][to];
-            m.value += (*continuationHistory[1])[pc][to];
-            m.value += (*continuationHistory[2])[pc][to];
-            m.value += (*continuationHistory[3])[pc][to];
-            m.value += (*continuationHistory[5])[pc][to];
+            // Load all history values to enable parallel memory fetches (ILP)
+            const int mainH = 2 * (*mainHistory)[us][m.raw()];
+            const int pawnH = 2 * sharedHistory->pawn_entry(pos)[pc][to];
+            const int c0    = (*continuationHistory[0])[pc][to];
+            const int c1    = (*continuationHistory[1])[pc][to];
+            const int c2    = (*continuationHistory[2])[pc][to];
+            const int c3    = (*continuationHistory[3])[pc][to];
+            const int c5    = (*continuationHistory[5])[pc][to];
+
+            // Sum all values in single assignment
+            m.value = mainH + pawnH + c0 + c1 + c2 + c3 + c5;
 
             // bonus for checks
             m.value += (bool(pos.check_squares(pt) & to) && pos.see_ge(m, -75)) * 16384;
