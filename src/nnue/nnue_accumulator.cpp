@@ -717,7 +717,8 @@ void update_accumulator_refresh_cache(Color                                 pers
             acc[k] = entryTile[k];
 
         int i = 0;
-        for (; i < std::min(removed.ssize(), added.ssize()); ++i)
+        const auto pairCount = std::min(removed.ssize(), added.ssize());
+        for (; i < pairCount; ++i)
         {
             size_t       indexR  = removed[i];
             const size_t offsetR = Dimensions * indexR;
@@ -725,6 +726,13 @@ void update_accumulator_refresh_cache(Color                                 pers
             size_t       indexA  = added[i];
             const size_t offsetA = Dimensions * indexA;
             auto*        columnA = reinterpret_cast<const vec_t*>(&weights[offsetA]);
+
+            // Prefetch next iteration's weight columns
+            if (i + 1 < pairCount)
+            {
+                __builtin_prefetch(&weights[Dimensions * removed[i + 1]], 0, 1);
+                __builtin_prefetch(&weights[Dimensions * added[i + 1]], 0, 1);
+            }
 
             for (IndexType k = 0; k < Tiling::NumRegs; ++k)
                 acc[k] = fused<Vec16Wrapper, Add, Sub>(acc[k], columnA[k], columnR[k]);
