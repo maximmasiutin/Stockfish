@@ -139,6 +139,24 @@ ExtMove* MovePicker::score(MoveList<Type>& ml) {
         threatByLesser[KING]  = pos.attacks_by<QUEEN>(~us) | threatByLesser[QUEEN];
     }
 
+    // Cache continuation history pointers to avoid repeated dereferences in loop
+    [[maybe_unused]] const PieceToHistory* ch0 = nullptr;
+    [[maybe_unused]] const PieceToHistory* ch1 = nullptr;
+    [[maybe_unused]] const PieceToHistory* ch2 = nullptr;
+    [[maybe_unused]] const PieceToHistory* ch3 = nullptr;
+    [[maybe_unused]] const PieceToHistory* ch5 = nullptr;
+    if constexpr (Type == QUIETS || Type == EVASIONS)
+    {
+        ch0 = continuationHistory[0];
+        if constexpr (Type == QUIETS)
+        {
+            ch1 = continuationHistory[1];
+            ch2 = continuationHistory[2];
+            ch3 = continuationHistory[3];
+            ch5 = continuationHistory[5];
+        }
+    }
+
     ExtMove* it = cur;
     for (auto move : ml)
     {
@@ -160,11 +178,11 @@ ExtMove* MovePicker::score(MoveList<Type>& ml) {
             // histories
             m.value = 2 * (*mainHistory)[us][m.raw()];
             m.value += 2 * sharedHistory->pawn_entry(pos)[pc][to];
-            m.value += (*continuationHistory[0])[pc][to];
-            m.value += (*continuationHistory[1])[pc][to];
-            m.value += (*continuationHistory[2])[pc][to];
-            m.value += (*continuationHistory[3])[pc][to];
-            m.value += (*continuationHistory[5])[pc][to];
+            m.value += (*ch0)[pc][to];
+            m.value += (*ch1)[pc][to];
+            m.value += (*ch2)[pc][to];
+            m.value += (*ch3)[pc][to];
+            m.value += (*ch5)[pc][to];
 
             // bonus for checks
             m.value += (bool(pos.check_squares(pt) & to) && pos.see_ge(m, -75)) * 16384;
@@ -181,10 +199,11 @@ ExtMove* MovePicker::score(MoveList<Type>& ml) {
 
         else  // Type == EVASIONS
         {
-            if (pos.capture_stage(m))
-                m.value = PieceValue[capturedPiece] + (1 << 28);
-            else
-                m.value = (*mainHistory)[us][m.raw()] + (*continuationHistory[0])[pc][to];
+            // Branchless scoring: compute both values and blend based on capture flag
+            const int isCapture    = pos.capture_stage(m);
+            const int captureValue = PieceValue[capturedPiece] + (1 << 28);
+            const int quietValue   = (*mainHistory)[us][m.raw()] + (*ch0)[pc][to];
+            m.value                = quietValue + isCapture * (captureValue - quietValue);
         }
     }
     return it;
