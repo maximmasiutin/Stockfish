@@ -1196,21 +1196,17 @@ moves_loop:  // When in check, search starts here
         r -= moveCount * 73;
         r -= std::abs(correctionValue) / 30370;
 
-        // Increase reduction for cut nodes
-        if (cutNode)
-            r += 3372 + 997 * !ttData.move;
+        // Increase reduction for cut nodes (branchless)
+        r += cutNode * (3372 + 997 * !ttData.move);
 
-        // Increase reduction if ttMove is a capture
-        if (ttCapture)
-            r += 1119;
+        // Increase reduction if ttMove is a capture (branchless)
+        r += ttCapture * 1119;
 
-        // Increase reduction if next ply has a lot of fail high
-        if ((ss + 1)->cutoffCnt > 1)
-            r += 256 + 1024 * ((ss + 1)->cutoffCnt > 2) + 1024 * allNode;
+        // Increase reduction if next ply has a lot of fail high (branchless)
+        r += ((ss + 1)->cutoffCnt > 1) * (256 + 1024 * ((ss + 1)->cutoffCnt > 2) + 1024 * allNode);
 
-        // For first picked move (ttMove) reduce reduction
-        if (move == ttData.move)
-            r -= 2151;
+        // For first picked move (ttMove) reduce reduction (branchless)
+        r -= (move == ttData.move) * 2151;
 
         if (capture)
             ss->statScore = 868 * int(PieceValue[pos.captured_piece()]) / 128
@@ -1223,9 +1219,8 @@ moves_loop:  // When in check, search starts here
         // Decrease/increase reduction for moves with a good/bad history
         r -= ss->statScore * 850 / 8192;
 
-        // Scale up reductions for expected ALL nodes
-        if (allNode)
-            r += r / (depth + 1);
+        // Scale up reductions for expected ALL nodes (branchless)
+        r += allNode * (r / (depth + 1));
 
         // Step 17. Late moves reduction / extension (LMR)
         if (depth >= 2 && moveCount > 1)
