@@ -684,12 +684,27 @@ void update_accumulator_refresh_cache(Color                                 pers
     Bitboard       removedBB = changedBB & entry.pieceBB;
     Bitboard       addedBB   = changedBB & pos.pieces();
 
-    while (removedBB)
+    // Extract squares two at a time when possible for better ILP
+    while (more_than_one(removedBB))
+    {
+        Square sq1 = pop_lsb(removedBB);
+        Square sq2 = pop_lsb(removedBB);
+        removed.push_back(PSQFeatureSet::make_index(perspective, sq1, entry.pieces[sq1], ksq));
+        removed.push_back(PSQFeatureSet::make_index(perspective, sq2, entry.pieces[sq2], ksq));
+    }
+    if (removedBB)
     {
         Square sq = pop_lsb(removedBB);
         removed.push_back(PSQFeatureSet::make_index(perspective, sq, entry.pieces[sq], ksq));
     }
-    while (addedBB)
+    while (more_than_one(addedBB))
+    {
+        Square sq1 = pop_lsb(addedBB);
+        Square sq2 = pop_lsb(addedBB);
+        added.push_back(PSQFeatureSet::make_index(perspective, sq1, pos.piece_on(sq1), ksq));
+        added.push_back(PSQFeatureSet::make_index(perspective, sq2, pos.piece_on(sq2), ksq));
+    }
+    if (addedBB)
     {
         Square sq = pop_lsb(addedBB);
         added.push_back(PSQFeatureSet::make_index(perspective, sq, pos.piece_on(sq), ksq));
