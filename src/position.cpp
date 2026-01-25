@@ -1069,8 +1069,105 @@ inline void add_dirty_threat(
 }
 
 #ifdef USE_AVX512ICL
-// Given a DirtyThreat template and bit offsets to insert the piece type and square, write the threats
-// present at the given bitboard.
+// Static constant for square indices - avoids runtime initialization
+alignas(64) static constexpr std::array<int8_t, 64> AllSquaresArray = {
+  0,  1,  2,  3,  4,  5,  6,  7,  8,  9,  10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21,
+  22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43,
+  44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63};
+
+// Implementation 1: Gather-based (uses i32gather pattern)
+// May be faster on some microarchitectures where gather is well-optimized
+template<int SqShift, int PcShift>
+void write_multiple_dirties_gather(const Position& p,
+                                   Bitboard        mask,
+                                   DirtyThreat     dt_template,
+                                   DirtyThreats*   dts) {
+    static_assert(sizeof(DirtyThreat) == 4);
+
+    const int dt_count = popcount(mask);
+    assert(dt_count <= 16);
+    if (dt_count == 0)
+        return;
+
+    const __m512i template_v = _mm512_set1_epi32(dt_template.raw());
+    auto*         write      = dts->list.make_space(dt_count);
+
+    // Extract square indices using tzcnt loop (scalar, but predictable)
+    alignas(64) int32_t squares[16];
+    Bitboard            temp = mask;
+    for (int i = 0; i < dt_count; ++i)
+    {
+        squares[i] = pop_lsb(temp);
+    }
+
+    // Load squares and gather pieces
+    const __m512i sq_vec = _mm512_loadu_si512(squares);
+    const __m512i pieces =
+      _mm512_i32gather_epi32(sq_vec, reinterpret_cast<const int*>(p.piece_array().data()), 1);
+
+    // Mask to keep only low byte of each gathered dword
+    const __m512i pieces_masked = _mm512_and_si512(pieces, _mm512_set1_epi32(0xFF));
+
+    // Shift and combine
+    const __m512i sq_shifted = _mm512_slli_epi32(sq_vec, SqShift);
+    const __m512i pc_shifted = _mm512_slli_epi32(pieces_masked, PcShift);
+    const __m512i dirties =
+      _mm512_ternarylogic_epi32(template_v, sq_shifted, pc_shifted, 254 /* A | B | C */);
+
+    _mm512_storeu_si512(reinterpret_cast<__m512i*>(write), dirties);
+}
+
+// Implementation 2: Unrolled for small counts (1-2 threats)
+// Explicit handling of common small cases reduces SIMD overhead
+template<int SqShift, int PcShift>
+void write_multiple_dirties_unrolled(const Position& p,
+                                     Bitboard        mask,
+                                     DirtyThreat     dt_template,
+                                     DirtyThreats*   dts) {
+    static_assert(sizeof(DirtyThreat) == 4);
+
+    const int dt_count = popcount(mask);
+    assert(dt_count <= 16);
+
+    if (dt_count == 0)
+        return;
+
+    auto* write = dts->list.make_space(dt_count);
+
+    // For very small counts, use scalar code
+    if (dt_count <= 2)
+    {
+        const uint32_t base = dt_template.raw();
+        Bitboard       temp = mask;
+        for (int i = 0; i < dt_count; ++i)
+        {
+            Square sq = Square(pop_lsb(temp));
+            Piece  pc = p.piece_on(sq);
+            write[i]  = DirtyThreat(base | (uint32_t(sq) << SqShift) | (uint32_t(pc) << PcShift));
+        }
+        return;
+    }
+
+    // Fall back to SIMD for larger counts
+    const __m512i board      = _mm512_loadu_si512(p.piece_array().data());
+    const __m512i AllSquares = _mm512_load_si512(AllSquaresArray.data());
+    const __m512i template_v = _mm512_set1_epi32(dt_template.raw());
+
+    __m512i threat_squares = _mm512_maskz_compress_epi8(mask, AllSquares);
+    threat_squares         = _mm512_cvtepi8_epi32(_mm512_castsi512_si128(threat_squares));
+
+    __m512i threat_pieces =
+      _mm512_maskz_permutexvar_epi8(0x1111111111111111ULL, threat_squares, board);
+
+    threat_squares = _mm512_slli_epi32(threat_squares, SqShift);
+    threat_pieces  = _mm512_slli_epi32(threat_pieces, PcShift);
+
+    const __m512i dirties =
+      _mm512_ternarylogic_epi32(template_v, threat_squares, threat_pieces, 254 /* A | B | C */);
+    _mm512_storeu_si512(reinterpret_cast<__m512i*>(write), dirties);
+}
+
+// Main implementation: optimized with static constants and early exit
 template<int SqShift, int PcShift>
 void write_multiple_dirties(const Position& p,
                             Bitboard        mask,
@@ -1078,20 +1175,17 @@ void write_multiple_dirties(const Position& p,
                             DirtyThreats*   dts) {
     static_assert(sizeof(DirtyThreat) == 4);
 
-    const __m512i board      = _mm512_loadu_si512(p.piece_array().data());
-    const __m512i AllSquares = _mm512_set_epi8(
-      63, 62, 61, 60, 59, 58, 57, 56, 55, 54, 53, 52, 51, 50, 49, 48, 47, 46, 45, 44, 43, 42, 41,
-      40, 39, 38, 37, 36, 35, 34, 33, 32, 31, 30, 29, 28, 27, 26, 25, 24, 23, 22, 21, 20, 19, 18,
-      17, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0);
-
     const int dt_count = popcount(mask);
     assert(dt_count <= 16);
+    if (dt_count == 0)
+        return;
 
+    const __m512i board      = _mm512_loadu_si512(p.piece_array().data());
+    const __m512i AllSquares = _mm512_load_si512(AllSquaresArray.data());
     const __m512i template_v = _mm512_set1_epi32(dt_template.raw());
     auto*         write      = dts->list.make_space(dt_count);
 
-    // Extract the list of squares and upconvert to 32 bits. There are never more than 16
-    // incoming threats so this is sufficient.
+    // Extract the list of squares and upconvert to 32 bits
     __m512i threat_squares = _mm512_maskz_compress_epi8(mask, AllSquares);
     threat_squares         = _mm512_cvtepi8_epi32(_mm512_castsi512_si128(threat_squares));
 
