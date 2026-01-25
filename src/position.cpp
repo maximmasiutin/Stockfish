@@ -1078,6 +1078,24 @@ void write_multiple_dirties(const Position& p,
                             DirtyThreats*   dts) {
     static_assert(sizeof(DirtyThreat) == 4);
 
+    if constexpr (SqShift == DirtyThreat::ThreatenedSqOffset)
+    {
+        // Exclusion tables indexed by Piece (0-15) for outgoing threats
+        // PAWN attackers exclude B,Q,K victims; BISHOP/ROOK exclude Q; KING excludes Q,K
+        constexpr Bitboard excl_bishop[16] = {0, ~0ULL, 0, 0, 0, 0, 0, 0,
+                                              0, ~0ULL, 0, 0, 0, 0, 0, 0};
+        constexpr Bitboard excl_queen[16]  = {0, ~0ULL, 0, ~0ULL, ~0ULL, 0, ~0ULL, 0,
+                                              0, ~0ULL, 0, ~0ULL, ~0ULL, 0, ~0ULL, 0};
+        constexpr Bitboard excl_king[16]   = {0, ~0ULL, 0, 0, 0, 0, ~0ULL, 0,
+                                              0, ~0ULL, 0, 0, 0, 0, ~0ULL, 0};
+        Piece pc = dt_template.pc();
+        mask &= ~((excl_bishop[pc] & p.pieces(BISHOP))
+                | (excl_queen[pc] & p.pieces(QUEEN))
+                | (excl_king[pc] & p.pieces(KING)));
+        if (!mask)
+            return;
+    }
+
     const __m512i board      = _mm512_loadu_si512(p.piece_array().data());
     const __m512i AllSquares = _mm512_set_epi8(
       63, 62, 61, 60, 59, 58, 57, 56, 55, 54, 53, 52, 51, 50, 49, 48, 47, 46, 45, 44, 43, 42, 41,
