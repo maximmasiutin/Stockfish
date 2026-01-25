@@ -1139,9 +1139,34 @@ void Position::update_piece_threats(Piece                     pc,
             dts->threateningSqs |= square_bb(s);
         }
 
-        DirtyThreat dt_template{pc, NO_PIECE, s, Square(0), PutPiece};
-        write_multiple_dirties<DirtyThreat::ThreatenedSqOffset, DirtyThreat::ThreatenedPcOffset>(
-          *this, threatened, dt_template, dts);
+        // Pre-filter outgoing threats based on FullThreats::map invalid combinations.
+        // Keep original 'threatened' for bookkeeping above, filter for write_multiple_dirties.
+        Bitboard threatened_filtered = threatened;
+        switch (type_of(pc))
+        {
+        case PAWN:
+            // PAWN cannot threaten BISHOP, QUEEN, KING
+            threatened_filtered &= ~pieces(BISHOP, QUEEN, KING);
+            break;
+        case BISHOP:
+        case ROOK:
+            // BISHOP/ROOK cannot threaten QUEEN
+            threatened_filtered &= ~pieces(QUEEN);
+            break;
+        case KING:
+            // KING cannot threaten QUEEN, KING
+            threatened_filtered &= ~pieces(QUEEN, KING);
+            break;
+        default:
+            break;
+        }
+
+        if (threatened_filtered)
+        {
+            DirtyThreat dt_template{pc, NO_PIECE, s, Square(0), PutPiece};
+            write_multiple_dirties<DirtyThreat::ThreatenedSqOffset, DirtyThreat::ThreatenedPcOffset>(
+              *this, threatened_filtered, dt_template, dts);
+        }
     }
 
     Bitboard all_attackers = sliders | incoming_threats;
@@ -1154,9 +1179,33 @@ void Position::update_piece_threats(Piece                     pc,
         dts->threateningSqs |= all_attackers;
     }
 
-    DirtyThreat dt_template{NO_PIECE, pc, Square(0), s, PutPiece};
-    write_multiple_dirties<DirtyThreat::PcSqOffset, DirtyThreat::PcOffset>(*this, all_attackers,
-                                                                           dt_template, dts);
+    // Pre-filter incoming threats based on FullThreats::map invalid combinations.
+    // Keep original 'all_attackers' for bookkeeping above, filter for write_multiple_dirties.
+    Bitboard attackers_filtered = all_attackers;
+    switch (type_of(pc))
+    {
+    case BISHOP:
+        // PAWN cannot threaten BISHOP
+        attackers_filtered &= ~pieces(PAWN);
+        break;
+    case QUEEN:
+        // Only KNIGHT and QUEEN can threaten QUEEN
+        attackers_filtered &= pieces(KNIGHT, QUEEN);
+        break;
+    case KING:
+        // PAWN, KING cannot threaten KING
+        attackers_filtered &= ~pieces(PAWN, KING);
+        break;
+    default:
+        break;
+    }
+
+    if (attackers_filtered)
+    {
+        DirtyThreat dt_template{NO_PIECE, pc, Square(0), s, PutPiece};
+        write_multiple_dirties<DirtyThreat::PcSqOffset, DirtyThreat::PcOffset>(*this, attackers_filtered,
+                                                                               dt_template, dts);
+    }
 #else
     while (threatened)
     {
