@@ -1131,6 +1131,12 @@ void Position::update_piece_threats(Piece                     pc,
       | (attacks_bb<PAWN>(s, BLACK) & whitePawns) | (PseudoAttacks[KING][s] & kings);
 
 #ifdef USE_AVX512ICL
+    // Precompute exclusion bitboards for outgoing threats based on FullThreats::map
+    // PAWN attackers exclude B,Q,K; BISHOP/ROOK exclude Q; KING excludes Q,K
+    const Bitboard excl_for_pawn = pieces(BISHOP) | pieces(QUEEN) | kings;
+    const Bitboard excl_for_minor = pieces(QUEEN);
+    const Bitboard excl_for_king = pieces(QUEEN) | kings;
+
     if (threatened)
     {
         if constexpr (PutPiece)
@@ -1139,9 +1145,30 @@ void Position::update_piece_threats(Piece                     pc,
             dts->threateningSqs |= square_bb(s);
         }
 
-        DirtyThreat dt_template{pc, NO_PIECE, s, Square(0), PutPiece};
-        write_multiple_dirties<DirtyThreat::ThreatenedSqOffset, DirtyThreat::ThreatenedPcOffset>(
-          *this, threatened, dt_template, dts);
+        // Filter out invalid attacker-victim pairs before SIMD processing
+        Bitboard nnue_threatened = threatened;
+        switch (type_of(pc))
+        {
+        case PAWN:
+            nnue_threatened &= ~excl_for_pawn;
+            break;
+        case BISHOP:
+        case ROOK:
+            nnue_threatened &= ~excl_for_minor;
+            break;
+        case KING:
+            nnue_threatened &= ~excl_for_king;
+            break;
+        default:
+            break;
+        }
+
+        if (nnue_threatened)
+        {
+            DirtyThreat dt_template{pc, NO_PIECE, s, Square(0), PutPiece};
+            write_multiple_dirties<DirtyThreat::ThreatenedSqOffset, DirtyThreat::ThreatenedPcOffset>(
+              *this, nnue_threatened, dt_template, dts);
+        }
     }
 
     Bitboard all_attackers = sliders | incoming_threats;
