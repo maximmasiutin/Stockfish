@@ -1154,9 +1154,33 @@ void Position::update_piece_threats(Piece                     pc,
         dts->threateningSqs |= all_attackers;
     }
 
-    DirtyThreat dt_template{NO_PIECE, pc, Square(0), s, PutPiece};
-    write_multiple_dirties<DirtyThreat::PcSqOffset, DirtyThreat::PcOffset>(*this, all_attackers,
-                                                                           dt_template, dts);
+    // Pre-filter attackers based on target piece type to avoid generating
+    // invalid threat indices (map[][] returns -1 for these combinations)
+    Bitboard attackers_filtered = all_attackers;
+    switch (type_of(pc))
+    {
+    case BISHOP :
+        // PAWN cannot threaten BISHOP
+        attackers_filtered &= ~pieces(PAWN);
+        break;
+    case QUEEN :
+        // Only KNIGHT and QUEEN can threaten QUEEN
+        attackers_filtered &= pieces(KNIGHT, QUEEN);
+        break;
+    case KING :
+        // PAWN, KING cannot threaten KING
+        attackers_filtered &= ~pieces(PAWN, KING);
+        break;
+    default :
+        break;
+    }
+
+    if (attackers_filtered)
+    {
+        DirtyThreat dt_template{NO_PIECE, pc, Square(0), s, PutPiece};
+        write_multiple_dirties<DirtyThreat::PcSqOffset, DirtyThreat::PcOffset>(
+          *this, attackers_filtered, dt_template, dts);
+    }
 #else
     while (threatened)
     {
