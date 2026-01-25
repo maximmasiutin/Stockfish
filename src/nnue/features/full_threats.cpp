@@ -179,6 +179,18 @@ constexpr auto init_index_luts() {
     return indices;
 }
 
+// Fast exclusion check LUT indexed by [attackerType-1][attackedType-1]
+// Returns true if the combination is always excluded (map < 0)
+constexpr auto init_exclusion_lut() {
+    std::array<std::array<bool, 6>, 6> excluded{};
+    for (int i = 0; i < 6; ++i)
+        for (int j = 0; j < 6; ++j)
+            excluded[i][j] = FullThreats::map[i][j] < 0;
+    return excluded;
+}
+
+constexpr auto exclusion_lut = init_exclusion_lut();
+
 // The final index is calculated from summing data found in these two LUTs, as well
 // as offsets[attacker][from]
 
@@ -319,6 +331,10 @@ void FullThreats::append_changed_indices(Color            perspective,
                     continue;
             }
         }
+
+        // Early exclusion check - skip if this piece type combination is always invalid
+        if (exclusion_lut[type_of(attacker) - 1][type_of(attacked) - 1])
+            continue;
 
         auto&           insert = add ? added : removed;
         const IndexType index  = make_index(perspective, attacker, from, to, attacked, ksq);
