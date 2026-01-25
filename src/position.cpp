@@ -1319,13 +1319,23 @@ bool Position::see_ge(Move m, int threshold) const {
     Bitboard stmAttackers, bb;
     int      res = 1;
 
+    // Cache piece bitboards to avoid repeated function calls in the loop
+    const Bitboard dominated[COLOR_NB] = {pieces(WHITE), pieces(BLACK)};
+    const Bitboard pawns               = pieces(PAWN);
+    const Bitboard knights             = pieces(KNIGHT);
+    const Bitboard bishops             = pieces(BISHOP);
+    const Bitboard rooks               = pieces(ROOK);
+    const Bitboard queens              = pieces(QUEEN);
+    const Bitboard bishopsQueens       = bishops | queens;
+    const Bitboard rooksQueens         = rooks | queens;
+
     while (true)
     {
         stm = ~stm;
         attackers &= occupied;
 
         // If stm has no more attackers then give up: stm loses
-        if (!(stmAttackers = attackers & pieces(stm)))
+        if (!(stmAttackers = attackers & dominated[stm]))
             break;
 
         // Don't allow pinned pieces to attack as long as there are
@@ -1342,55 +1352,55 @@ bool Position::see_ge(Move m, int threshold) const {
 
         // Locate and remove the next least valuable attacker, and add to
         // the bitboard 'attackers' any X-ray attackers behind it.
-        if ((bb = stmAttackers & pieces(PAWN)))
+        if ((bb = stmAttackers & pawns))
         {
             if ((swap = PawnValue - swap) < res)
                 break;
             occupied ^= least_significant_square_bb(bb);
 
-            attackers |= attacks_bb<BISHOP>(to, occupied) & pieces(BISHOP, QUEEN);
+            attackers |= attacks_bb<BISHOP>(to, occupied) & bishopsQueens;
         }
 
-        else if ((bb = stmAttackers & pieces(KNIGHT)))
+        else if ((bb = stmAttackers & knights))
         {
             if ((swap = KnightValue - swap) < res)
                 break;
             occupied ^= least_significant_square_bb(bb);
         }
 
-        else if ((bb = stmAttackers & pieces(BISHOP)))
+        else if ((bb = stmAttackers & bishops))
         {
             if ((swap = BishopValue - swap) < res)
                 break;
             occupied ^= least_significant_square_bb(bb);
 
-            attackers |= attacks_bb<BISHOP>(to, occupied) & pieces(BISHOP, QUEEN);
+            attackers |= attacks_bb<BISHOP>(to, occupied) & bishopsQueens;
         }
 
-        else if ((bb = stmAttackers & pieces(ROOK)))
+        else if ((bb = stmAttackers & rooks))
         {
             if ((swap = RookValue - swap) < res)
                 break;
             occupied ^= least_significant_square_bb(bb);
 
-            attackers |= attacks_bb<ROOK>(to, occupied) & pieces(ROOK, QUEEN);
+            attackers |= attacks_bb<ROOK>(to, occupied) & rooksQueens;
         }
 
-        else if ((bb = stmAttackers & pieces(QUEEN)))
+        else if ((bb = stmAttackers & queens))
         {
             swap = QueenValue - swap;
             //  implies that the previous recapture was done by a higher rated piece than a Queen (King is excluded)
             assert(swap >= res);
             occupied ^= least_significant_square_bb(bb);
 
-            attackers |= (attacks_bb<BISHOP>(to, occupied) & pieces(BISHOP, QUEEN))
-                       | (attacks_bb<ROOK>(to, occupied) & pieces(ROOK, QUEEN));
+            attackers |= (attacks_bb<BISHOP>(to, occupied) & bishopsQueens)
+                       | (attacks_bb<ROOK>(to, occupied) & rooksQueens);
         }
 
         else  // KING
               // If we "capture" with the king but the opponent still has attackers,
               // reverse the result.
-            return (attackers & ~pieces(stm)) ? res ^ 1 : res;
+            return (attackers & ~dominated[stm]) ? res ^ 1 : res;
     }
 
     return bool(res);
