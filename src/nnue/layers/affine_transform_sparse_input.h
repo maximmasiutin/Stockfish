@@ -89,28 +89,40 @@ void find_nnz(const std::int32_t* RESTRICT input,
     constexpr IndexType SimdWidthOut = 32;  // 512 bits / 16 bits
     constexpr IndexType NumChunks    = InputDimensions / SimdWidthOut;
     const __m512i       increment    = _mm512_set1_epi16(SimdWidthOut);
-    __m512i             base = _mm512_set_epi16(  // Same permute order as _mm512_packus_epi32()
+
+    // Two-pass approach to break loop-carried dependency on count
+    // Pass 1: Compute all masks and counts
+    __mmask32    masks[NumChunks];
+    std::uint8_t counts[NumChunks];
+
+    for (IndexType i = 0; i < NumChunks; ++i)
+    {
+        const __m512i inputV0  = _mm512_load_si512(input + i * 2 * SimdWidthIn);
+        const __m512i inputV1  = _mm512_load_si512(input + i * 2 * SimdWidthIn + SimdWidthIn);
+        const __m512i inputV01 = _mm512_packus_epi32(inputV0, inputV1);
+        masks[i]               = _mm512_test_epi16_mask(inputV01, inputV01);
+        counts[i]              = static_cast<std::uint8_t>(popcount(masks[i]));
+    }
+
+    // Compute prefix sum (offsets)
+    std::uint16_t offsets[NumChunks + 1];
+    offsets[0] = 0;
+    for (IndexType i = 0; i < NumChunks; ++i)
+        offsets[i + 1] = offsets[i] + counts[i];
+
+    // Pass 2: Compress and store using precomputed offsets
+    __m512i base = _mm512_set_epi16(  // Same permute order as _mm512_packus_epi32()
       31, 30, 29, 28, 15, 14, 13, 12, 27, 26, 25, 24, 11, 10, 9, 8, 23, 22, 21, 20, 7, 6, 5, 4, 19,
       18, 17, 16, 3, 2, 1, 0);
 
-    IndexType count = 0;
     for (IndexType i = 0; i < NumChunks; ++i)
     {
-        const __m512i inputV0 = _mm512_load_si512(input + i * 2 * SimdWidthIn);
-        const __m512i inputV1 = _mm512_load_si512(input + i * 2 * SimdWidthIn + SimdWidthIn);
-
-        // Get a bitmask and gather non zero indices
-        const __m512i   inputV01 = _mm512_packus_epi32(inputV0, inputV1);
-        const __mmask32 nnzMask  = _mm512_test_epi16_mask(inputV01, inputV01);
-
         // Avoid _mm512_mask_compressstoreu_epi16() as it's 256 uOps on Zen4
-        __m512i nnz = _mm512_maskz_compress_epi16(nnzMask, base);
-        _mm512_storeu_si512(out + count, nnz);
-
-        count += popcount(nnzMask);
+        __m512i nnz = _mm512_maskz_compress_epi16(masks[i], base);
+        _mm512_storeu_si512(out + offsets[i], nnz);
         base = _mm512_add_epi16(base, increment);
     }
-    count_out = count;
+    count_out = offsets[NumChunks];
 
     #elif defined(USE_AVX512)
 
