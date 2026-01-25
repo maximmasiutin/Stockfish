@@ -67,10 +67,129 @@ class SqrClippedReLU {
     // Forward propagation
     void propagate(const InputType* input, OutputType* output) const {
 
-#if defined(USE_SSE2)
+        // SqrClippedReLU computation:
+        // We shift by WeightScaleBits * 2 = 12 and divide by 128
+        // which is an additional shift-right of 7, meaning 19 in total.
+        // MulHi strips the lower 16 bits so we need to shift out 3 more to match.
+        static_assert(WeightScaleBits == 6);
+
+#if defined(USE_AVX512)
+        // AVX-512 path: process 64 elements per iteration
+        if constexpr (InputDimensions % 64 == 0)
+        {
+            constexpr IndexType NumChunks = InputDimensions / 64;
+            // Fix for 512-bit pack lane interleaving: {0,2,4,6,1,3,5,7} in 64-bit elements
+            const __m512i Offsets = _mm512_setr_epi64(0, 2, 4, 6, 1, 3, 5, 7);
+            const auto    in      = reinterpret_cast<const __m512i*>(input);
+            const auto    out     = reinterpret_cast<__m512i*>(output);
+            for (IndexType i = 0; i < NumChunks; ++i)
+            {
+                // Pack int32 -> int16 with signed saturation
+                __m512i words0 = _mm512_packs_epi32(_mm512_load_si512(&in[i * 4 + 0]),
+                                                    _mm512_load_si512(&in[i * 4 + 1]));
+                __m512i words1 = _mm512_packs_epi32(_mm512_load_si512(&in[i * 4 + 2]),
+                                                    _mm512_load_si512(&in[i * 4 + 3]));
+
+                // Square using mulhi (gives (a*a) >> 16), then shift right by 3
+                words0 = _mm512_srli_epi16(_mm512_mulhi_epi16(words0, words0), 3);
+                words1 = _mm512_srli_epi16(_mm512_mulhi_epi16(words1, words1), 3);
+
+                // Pack int16 -> int8 with signed saturation, then fix lane ordering
+                _mm512_store_si512(
+                  &out[i], _mm512_permutexvar_epi64(Offsets, _mm512_packs_epi16(words0, words1)));
+            }
+        }
+        else if constexpr (InputDimensions % 32 == 0)
+        {
+            // Fall back to 256-bit processing for 32-element aligned dimensions
+            constexpr IndexType NumChunks = InputDimensions / 32;
+            const __m256i       Offsets   = _mm256_set_epi32(7, 3, 6, 2, 5, 1, 4, 0);
+            const auto          in        = reinterpret_cast<const __m256i*>(input);
+            const auto          out       = reinterpret_cast<__m256i*>(output);
+            for (IndexType i = 0; i < NumChunks; ++i)
+            {
+                __m256i words0 = _mm256_packs_epi32(_mm256_load_si256(&in[i * 4 + 0]),
+                                                    _mm256_load_si256(&in[i * 4 + 1]));
+                __m256i words1 = _mm256_packs_epi32(_mm256_load_si256(&in[i * 4 + 2]),
+                                                    _mm256_load_si256(&in[i * 4 + 3]));
+
+                words0 = _mm256_srli_epi16(_mm256_mulhi_epi16(words0, words0), 3);
+                words1 = _mm256_srli_epi16(_mm256_mulhi_epi16(words1, words1), 3);
+
+                _mm256_store_si256(&out[i], _mm256_permutevar8x32_epi32(
+                                              _mm256_packs_epi16(words0, words1), Offsets));
+            }
+        }
+        else
+        {
+            // Fall back to 128-bit processing for smaller dimensions
+            constexpr IndexType NumChunks = InputDimensions / 16;
+            const auto          in        = reinterpret_cast<const __m128i*>(input);
+            const auto          out       = reinterpret_cast<__m128i*>(output);
+            for (IndexType i = 0; i < NumChunks; ++i)
+            {
+                __m128i words0 =
+                  _mm_packs_epi32(_mm_load_si128(&in[i * 4 + 0]), _mm_load_si128(&in[i * 4 + 1]));
+                __m128i words1 =
+                  _mm_packs_epi32(_mm_load_si128(&in[i * 4 + 2]), _mm_load_si128(&in[i * 4 + 3]));
+
+                words0 = _mm_srli_epi16(_mm_mulhi_epi16(words0, words0), 3);
+                words1 = _mm_srli_epi16(_mm_mulhi_epi16(words1, words1), 3);
+
+                _mm_store_si128(&out[i], _mm_packs_epi16(words0, words1));
+            }
+        }
+        constexpr IndexType Start = InputDimensions % 64 == 0 ? InputDimensions
+                                  : InputDimensions % 32 == 0 ? InputDimensions
+                                                              : (InputDimensions / 16) * 16;
+
+#elif defined(USE_AVX2)
+        // AVX2 path: process 32 elements per iteration
+        if constexpr (InputDimensions % 32 == 0)
+        {
+            constexpr IndexType NumChunks = InputDimensions / 32;
+            const __m256i       Offsets   = _mm256_set_epi32(7, 3, 6, 2, 5, 1, 4, 0);
+            const auto          in        = reinterpret_cast<const __m256i*>(input);
+            const auto          out       = reinterpret_cast<__m256i*>(output);
+            for (IndexType i = 0; i < NumChunks; ++i)
+            {
+                __m256i words0 = _mm256_packs_epi32(_mm256_load_si256(&in[i * 4 + 0]),
+                                                    _mm256_load_si256(&in[i * 4 + 1]));
+                __m256i words1 = _mm256_packs_epi32(_mm256_load_si256(&in[i * 4 + 2]),
+                                                    _mm256_load_si256(&in[i * 4 + 3]));
+
+                words0 = _mm256_srli_epi16(_mm256_mulhi_epi16(words0, words0), 3);
+                words1 = _mm256_srli_epi16(_mm256_mulhi_epi16(words1, words1), 3);
+
+                _mm256_store_si256(&out[i], _mm256_permutevar8x32_epi32(
+                                              _mm256_packs_epi16(words0, words1), Offsets));
+            }
+        }
+        else
+        {
+            // Fall back to 128-bit processing for smaller dimensions
+            constexpr IndexType NumChunks = InputDimensions / 16;
+            const auto          in        = reinterpret_cast<const __m128i*>(input);
+            const auto          out       = reinterpret_cast<__m128i*>(output);
+            for (IndexType i = 0; i < NumChunks; ++i)
+            {
+                __m128i words0 =
+                  _mm_packs_epi32(_mm_load_si128(&in[i * 4 + 0]), _mm_load_si128(&in[i * 4 + 1]));
+                __m128i words1 =
+                  _mm_packs_epi32(_mm_load_si128(&in[i * 4 + 2]), _mm_load_si128(&in[i * 4 + 3]));
+
+                words0 = _mm_srli_epi16(_mm_mulhi_epi16(words0, words0), 3);
+                words1 = _mm_srli_epi16(_mm_mulhi_epi16(words1, words1), 3);
+
+                _mm_store_si128(&out[i], _mm_packs_epi16(words0, words1));
+            }
+        }
+        constexpr IndexType Start =
+          InputDimensions % 32 == 0 ? InputDimensions : (InputDimensions / 16) * 16;
+
+#elif defined(USE_SSE2)
         constexpr IndexType NumChunks = InputDimensions / 16;
 
-        static_assert(WeightScaleBits == 6);
         const auto in  = reinterpret_cast<const __m128i*>(input);
         const auto out = reinterpret_cast<__m128i*>(output);
         for (IndexType i = 0; i < NumChunks; ++i)
@@ -80,9 +199,6 @@ class SqrClippedReLU {
             __m128i words1 =
               _mm_packs_epi32(_mm_load_si128(&in[i * 4 + 2]), _mm_load_si128(&in[i * 4 + 3]));
 
-            // We shift by WeightScaleBits * 2 = 12 and divide by 128
-            // which is an additional shift-right of 7, meaning 19 in total.
-            // MulHi strips the lower 16 bits so we need to shift out 3 more to match.
             words0 = _mm_srli_epi16(_mm_mulhi_epi16(words0, words0), 3);
             words1 = _mm_srli_epi16(_mm_mulhi_epi16(words1, words1), 3);
 
