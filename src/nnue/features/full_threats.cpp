@@ -187,20 +187,28 @@ constexpr auto index_lut1 = init_index_luts();
 // [attacker][from][to]
 constexpr auto index_lut2 = index_lut2_array();
 
-// Index of a feature for a given king position and another piece on some square
-inline sf_always_inline IndexType FullThreats::make_index(
-  Color perspective, Piece attacker, Square from, Square to, Piece attacked, Square ksq) {
-    const std::int8_t orientation   = OrientTBL[ksq] ^ (56 * perspective);
-    unsigned          from_oriented = uint8_t(from) ^ orientation;
-    unsigned          to_oriented   = uint8_t(to) ^ orientation;
+// Index computation with precomputed orientation and swap
+inline sf_always_inline IndexType make_index_cached(
+  std::int8_t orientation, std::int8_t swap,
+  Piece attacker, Square from, Square to, Piece attacked) {
+    unsigned from_oriented = uint8_t(from) ^ orientation;
+    unsigned to_oriented   = uint8_t(to) ^ orientation;
 
-    std::int8_t swap              = 8 * perspective;
-    unsigned    attacker_oriented = attacker ^ swap;
-    unsigned    attacked_oriented = attacked ^ swap;
+    unsigned attacker_oriented = attacker ^ swap;
+    unsigned attacked_oriented = attacked ^ swap;
 
     return index_lut1[attacker_oriented][attacked_oriented][from_oriented < to_oriented]
          + offsets[attacker_oriented][from_oriented]
          + index_lut2[attacker_oriented][from_oriented][to_oriented];
+}
+
+// Index of a feature for a given king position and another piece on some square
+inline sf_always_inline IndexType FullThreats::make_index(
+  Color perspective, Piece attacker, Square from, Square to, Piece attacked, Square ksq) {
+    const std::int8_t orientation = OrientTBL[ksq] ^ (56 * perspective);
+    std::int8_t       swap        = 8 * perspective;
+
+    return make_index_cached(orientation, swap, attacker, from, to, attacked);
 }
 
 // Get a list of indices for active features in ascending order
@@ -281,6 +289,10 @@ void FullThreats::append_changed_indices(Color            perspective,
                                          FusedUpdateData* fusedData,
                                          bool             first) {
 
+    // Precompute orientation and swap values once for the entire loop
+    const std::int8_t orientation = OrientTBL[ksq] ^ (56 * perspective);
+    const std::int8_t swap        = 8 * perspective;
+
     for (const auto& dirty : diff.list)
     {
         auto attacker = dirty.pc();
@@ -321,7 +333,7 @@ void FullThreats::append_changed_indices(Color            perspective,
         }
 
         auto&           insert = add ? added : removed;
-        const IndexType index  = make_index(perspective, attacker, from, to, attacked, ksq);
+        const IndexType index  = make_index_cached(orientation, swap, attacker, from, to, attacked);
 
         if (index < Dimensions)
             insert.push_back(index);
