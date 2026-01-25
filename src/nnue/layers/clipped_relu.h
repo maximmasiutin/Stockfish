@@ -74,7 +74,32 @@ class ClippedReLU {
             const __m256i       Offsets   = _mm256_set_epi32(7, 3, 6, 2, 5, 1, 4, 0);
             const auto          in        = reinterpret_cast<const __m256i*>(input);
             const auto          out       = reinterpret_cast<__m256i*>(output);
-            for (IndexType i = 0; i < NumChunks; ++i)
+            // 2x unrolled loop for better ILP
+            IndexType i = 0;
+            for (; i + 1 < NumChunks; i += 2)
+            {
+                const __m256i words0_a =
+                  _mm256_srli_epi16(_mm256_packus_epi32(_mm256_load_si256(&in[i * 4 + 0]),
+                                                        _mm256_load_si256(&in[i * 4 + 1])),
+                                    WeightScaleBits);
+                const __m256i words1_a =
+                  _mm256_srli_epi16(_mm256_packus_epi32(_mm256_load_si256(&in[i * 4 + 2]),
+                                                        _mm256_load_si256(&in[i * 4 + 3])),
+                                    WeightScaleBits);
+                const __m256i words0_b =
+                  _mm256_srli_epi16(_mm256_packus_epi32(_mm256_load_si256(&in[i * 4 + 4]),
+                                                        _mm256_load_si256(&in[i * 4 + 5])),
+                                    WeightScaleBits);
+                const __m256i words1_b =
+                  _mm256_srli_epi16(_mm256_packus_epi32(_mm256_load_si256(&in[i * 4 + 6]),
+                                                        _mm256_load_si256(&in[i * 4 + 7])),
+                                    WeightScaleBits);
+                _mm256_store_si256(&out[i], _mm256_permutevar8x32_epi32(
+                                              _mm256_packs_epi16(words0_a, words1_a), Offsets));
+                _mm256_store_si256(&out[i + 1], _mm256_permutevar8x32_epi32(
+                                                  _mm256_packs_epi16(words0_b, words1_b), Offsets));
+            }
+            for (; i < NumChunks; ++i)
             {
                 const __m256i words0 =
                   _mm256_srli_epi16(_mm256_packus_epi32(_mm256_load_si256(&in[i * 4 + 0]),
@@ -93,7 +118,26 @@ class ClippedReLU {
             constexpr IndexType NumChunks = InputDimensions / (SimdWidth / 2);
             const auto          in        = reinterpret_cast<const __m128i*>(input);
             const auto          out       = reinterpret_cast<__m128i*>(output);
-            for (IndexType i = 0; i < NumChunks; ++i)
+            // 2x unrolled loop for better ILP
+            IndexType i = 0;
+            for (; i + 1 < NumChunks; i += 2)
+            {
+                const __m128i words0_a = _mm_srli_epi16(
+                  _mm_packus_epi32(_mm_load_si128(&in[i * 4 + 0]), _mm_load_si128(&in[i * 4 + 1])),
+                  WeightScaleBits);
+                const __m128i words1_a = _mm_srli_epi16(
+                  _mm_packus_epi32(_mm_load_si128(&in[i * 4 + 2]), _mm_load_si128(&in[i * 4 + 3])),
+                  WeightScaleBits);
+                const __m128i words0_b = _mm_srli_epi16(
+                  _mm_packus_epi32(_mm_load_si128(&in[i * 4 + 4]), _mm_load_si128(&in[i * 4 + 5])),
+                  WeightScaleBits);
+                const __m128i words1_b = _mm_srli_epi16(
+                  _mm_packus_epi32(_mm_load_si128(&in[i * 4 + 6]), _mm_load_si128(&in[i * 4 + 7])),
+                  WeightScaleBits);
+                _mm_store_si128(&out[i], _mm_packs_epi16(words0_a, words1_a));
+                _mm_store_si128(&out[i + 1], _mm_packs_epi16(words0_b, words1_b));
+            }
+            for (; i < NumChunks; ++i)
             {
                 const __m128i words0 = _mm_srli_epi16(
                   _mm_packus_epi32(_mm_load_si128(&in[i * 4 + 0]), _mm_load_si128(&in[i * 4 + 1])),
@@ -117,7 +161,46 @@ class ClippedReLU {
 
         const auto in  = reinterpret_cast<const __m128i*>(input);
         const auto out = reinterpret_cast<__m128i*>(output);
-        for (IndexType i = 0; i < NumChunks; ++i)
+        // 2x unrolled loop for better ILP
+        IndexType i = 0;
+        for (; i + 1 < NumChunks; i += 2)
+        {
+    #if defined(USE_SSE41)
+            const __m128i words0_a = _mm_srli_epi16(
+              _mm_packus_epi32(_mm_load_si128(&in[i * 4 + 0]), _mm_load_si128(&in[i * 4 + 1])),
+              WeightScaleBits);
+            const __m128i words1_a = _mm_srli_epi16(
+              _mm_packus_epi32(_mm_load_si128(&in[i * 4 + 2]), _mm_load_si128(&in[i * 4 + 3])),
+              WeightScaleBits);
+            const __m128i words0_b = _mm_srli_epi16(
+              _mm_packus_epi32(_mm_load_si128(&in[i * 4 + 4]), _mm_load_si128(&in[i * 4 + 5])),
+              WeightScaleBits);
+            const __m128i words1_b = _mm_srli_epi16(
+              _mm_packus_epi32(_mm_load_si128(&in[i * 4 + 6]), _mm_load_si128(&in[i * 4 + 7])),
+              WeightScaleBits);
+            _mm_store_si128(&out[i], _mm_packs_epi16(words0_a, words1_a));
+            _mm_store_si128(&out[i + 1], _mm_packs_epi16(words0_b, words1_b));
+    #else
+            const __m128i words0_a = _mm_srai_epi16(
+              _mm_packs_epi32(_mm_load_si128(&in[i * 4 + 0]), _mm_load_si128(&in[i * 4 + 1])),
+              WeightScaleBits);
+            const __m128i words1_a = _mm_srai_epi16(
+              _mm_packs_epi32(_mm_load_si128(&in[i * 4 + 2]), _mm_load_si128(&in[i * 4 + 3])),
+              WeightScaleBits);
+            const __m128i words0_b = _mm_srai_epi16(
+              _mm_packs_epi32(_mm_load_si128(&in[i * 4 + 4]), _mm_load_si128(&in[i * 4 + 5])),
+              WeightScaleBits);
+            const __m128i words1_b = _mm_srai_epi16(
+              _mm_packs_epi32(_mm_load_si128(&in[i * 4 + 6]), _mm_load_si128(&in[i * 4 + 7])),
+              WeightScaleBits);
+            const __m128i packedbytes_a = _mm_packs_epi16(words0_a, words1_a);
+            const __m128i packedbytes_b = _mm_packs_epi16(words0_b, words1_b);
+            _mm_store_si128(&out[i], _mm_subs_epi8(_mm_adds_epi8(packedbytes_a, k0x80s), k0x80s));
+            _mm_store_si128(&out[i + 1],
+                            _mm_subs_epi8(_mm_adds_epi8(packedbytes_b, k0x80s), k0x80s));
+    #endif
+        }
+        for (; i < NumChunks; ++i)
         {
     #if defined(USE_SSE41)
             const __m128i words0 = _mm_srli_epi16(
