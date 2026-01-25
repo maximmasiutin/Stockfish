@@ -67,7 +67,71 @@ class ClippedReLU {
     // Forward propagation
     void propagate(const InputType* input, OutputType* output) const {
 
-#if defined(USE_AVX2)
+#if defined(USE_AVX512)
+        // AVX-512 path: process 64 elements per iteration
+        if constexpr (InputDimensions % 64 == 0)
+        {
+            constexpr IndexType NumChunks = InputDimensions / 64;
+            const __m512i       Offsets   = _mm512_setr_epi64(0, 2, 4, 6, 1, 3, 5, 7);
+            const auto          in        = reinterpret_cast<const __m512i*>(input);
+            const auto          out       = reinterpret_cast<__m512i*>(output);
+            for (IndexType i = 0; i < NumChunks; ++i)
+            {
+                const __m512i words0 =
+                  _mm512_srli_epi16(_mm512_packus_epi32(_mm512_load_si512(&in[i * 4 + 0]),
+                                                        _mm512_load_si512(&in[i * 4 + 1])),
+                                    WeightScaleBits);
+                const __m512i words1 =
+                  _mm512_srli_epi16(_mm512_packus_epi32(_mm512_load_si512(&in[i * 4 + 2]),
+                                                        _mm512_load_si512(&in[i * 4 + 3])),
+                                    WeightScaleBits);
+                _mm512_store_si512(
+                  &out[i], _mm512_permutexvar_epi64(Offsets, _mm512_packs_epi16(words0, words1)));
+            }
+        }
+        else if constexpr (InputDimensions % SimdWidth == 0)
+        {
+            // Fall back to AVX2 256-bit for 32-element aligned
+            constexpr IndexType NumChunks = InputDimensions / SimdWidth;
+            const __m256i       Offsets   = _mm256_set_epi32(7, 3, 6, 2, 5, 1, 4, 0);
+            const auto          in        = reinterpret_cast<const __m256i*>(input);
+            const auto          out       = reinterpret_cast<__m256i*>(output);
+            for (IndexType i = 0; i < NumChunks; ++i)
+            {
+                const __m256i words0 =
+                  _mm256_srli_epi16(_mm256_packus_epi32(_mm256_load_si256(&in[i * 4 + 0]),
+                                                        _mm256_load_si256(&in[i * 4 + 1])),
+                                    WeightScaleBits);
+                const __m256i words1 =
+                  _mm256_srli_epi16(_mm256_packus_epi32(_mm256_load_si256(&in[i * 4 + 2]),
+                                                        _mm256_load_si256(&in[i * 4 + 3])),
+                                    WeightScaleBits);
+                _mm256_store_si256(&out[i], _mm256_permutevar8x32_epi32(
+                                              _mm256_packs_epi16(words0, words1), Offsets));
+            }
+        }
+        else
+        {
+            constexpr IndexType NumChunks = InputDimensions / (SimdWidth / 2);
+            const auto          in        = reinterpret_cast<const __m128i*>(input);
+            const auto          out       = reinterpret_cast<__m128i*>(output);
+            for (IndexType i = 0; i < NumChunks; ++i)
+            {
+                const __m128i words0 = _mm_srli_epi16(
+                  _mm_packus_epi32(_mm_load_si128(&in[i * 4 + 0]), _mm_load_si128(&in[i * 4 + 1])),
+                  WeightScaleBits);
+                const __m128i words1 = _mm_srli_epi16(
+                  _mm_packus_epi32(_mm_load_si128(&in[i * 4 + 2]), _mm_load_si128(&in[i * 4 + 3])),
+                  WeightScaleBits);
+                _mm_store_si128(&out[i], _mm_packs_epi16(words0, words1));
+            }
+        }
+        constexpr IndexType Start = InputDimensions % 64 == 0 ? InputDimensions
+                                  : InputDimensions % SimdWidth == 0
+                                    ? InputDimensions
+                                    : InputDimensions / (SimdWidth / 2) * (SimdWidth / 2);
+
+#elif defined(USE_AVX2)
         if constexpr (InputDimensions % SimdWidth == 0)
         {
             constexpr IndexType NumChunks = InputDimensions / SimdWidth;
