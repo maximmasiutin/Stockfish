@@ -1121,10 +1121,22 @@ void Position::update_piece_threats(Piece                     pc,
     const Bitboard whitePawns   = pieces(WHITE, PAWN);
     const Bitboard blackPawns   = pieces(BLACK, PAWN);
 
+    // Precompute exclusion masks early for CPU instruction reordering
+    // PAWN excludes B,Q,K; BISHOP/ROOK exclude Q; KING excludes Q,K
+    const Bitboard queens     = pieces(QUEEN);
+    const Bitboard excl_pawn  = pieces(BISHOP) | queens | kings;
+    const Bitboard excl_minor = queens;
+    const Bitboard excl_king  = queens | kings;
+    const Bitboard excl_table[PIECE_TYPE_NB] = {
+        0, excl_pawn, 0, excl_minor, excl_minor, 0, excl_king
+    };
+
     const Bitboard rAttacks = attacks_bb<ROOK>(s, occupied);
     const Bitboard bAttacks = attacks_bb<BISHOP>(s, occupied);
 
     Bitboard threatened = attacks_bb(pc, s, occupied) & occupied;
+    // Filter invalid attacker-victim pairs based on FullThreats::map
+    threatened &= ~excl_table[type_of(pc)];
     Bitboard sliders    = (rookQueens & rAttacks) | (bishopQueens & bAttacks);
     Bitboard incoming_threats =
       (PseudoAttacks[KNIGHT][s] & knights) | (attacks_bb<PAWN>(s, WHITE) & blackPawns)
