@@ -1069,16 +1069,51 @@ inline void add_dirty_threat(
 }
 
 #ifdef USE_AVX512ICL
+// Filter modes for write_multiple_dirties
+enum FilterMode {
+    NoFilter,
+    ExcludeQueens,     // Filter out queens (for outgoing: PAWN/BISHOP/ROOK/KING can't attack QUEEN)
+    OnlyKnightOrQueen  // Keep only KNIGHT and QUEEN (for incoming: only they can attack QUEEN)
+};
+
 // Given a DirtyThreat template and bit offsets to insert the piece type and square, write the threats
 // present at the given bitboard.
-template<int SqShift, int PcShift>
+template<int SqShift, int PcShift, FilterMode Filter = NoFilter>
 void write_multiple_dirties(const Position& p,
                             Bitboard        mask,
                             DirtyThreat     dt_template,
                             DirtyThreats*   dts) {
     static_assert(sizeof(DirtyThreat) == 4);
 
-    const __m512i board      = _mm512_loadu_si512(p.piece_array().data());
+    const __m512i board = _mm512_loadu_si512(p.piece_array().data());
+
+    // Filter the mask using AVX-512 compare based on piece types
+    if constexpr (Filter != NoFilter)
+    {
+        // type_of(piece) = piece & 7
+        const __m512i type_mask   = _mm512_set1_epi8(7);
+        __m512i       piece_types = _mm512_and_si512(board, type_mask);
+
+        if constexpr (Filter == ExcludeQueens)
+        {
+            // Filter out queens: keep squares where type != QUEEN
+            const __m512i queen_type = _mm512_set1_epi8(QUEEN);
+            __mmask64     queen_mask = _mm512_cmpeq_epi8_mask(piece_types, queen_type);
+            mask &= ~queen_mask;
+        }
+        else if constexpr (Filter == OnlyKnightOrQueen)
+        {
+            // Keep only KNIGHT (2) and QUEEN (5)
+            const __m512i knight_type = _mm512_set1_epi8(KNIGHT);
+            const __m512i queen_type  = _mm512_set1_epi8(QUEEN);
+            __mmask64     knight_mask = _mm512_cmpeq_epi8_mask(piece_types, knight_type);
+            __mmask64     queen_mask  = _mm512_cmpeq_epi8_mask(piece_types, queen_type);
+            mask &= (knight_mask | queen_mask);
+        }
+
+        if (!mask)
+            return;
+    }
     const __m512i AllSquares = _mm512_set_epi8(
       63, 62, 61, 60, 59, 58, 57, 56, 55, 54, 53, 52, 51, 50, 49, 48, 47, 46, 45, 44, 43, 42, 41,
       40, 39, 38, 37, 36, 35, 34, 33, 32, 31, 30, 29, 28, 27, 26, 25, 24, 23, 22, 21, 20, 19, 18,
@@ -1139,14 +1174,21 @@ void Position::update_piece_threats(Piece                     pc,
             dts->threateningSqs |= square_bb(s);
         }
 
-        DirtyThreat dt_template{pc, NO_PIECE, s, Square(0), PutPiece};
-        write_multiple_dirties<DirtyThreat::ThreatenedSqOffset, DirtyThreat::ThreatenedPcOffset>(
-          *this, threatened, dt_template, dts);
+        DirtyThreat     dt_template{pc, NO_PIECE, s, Square(0), PutPiece};
+        const PieceType pt = type_of(pc);
+        // PAWN, BISHOP, ROOK, KING can't attack QUEEN - filter inside with AVX-512
+        if (pt == PAWN || pt == BISHOP || pt == ROOK || pt == KING)
+            write_multiple_dirties<DirtyThreat::ThreatenedSqOffset, DirtyThreat::ThreatenedPcOffset,
+                                   ExcludeQueens>(*this, threatened, dt_template, dts);
+        else
+            write_multiple_dirties<DirtyThreat::ThreatenedSqOffset,
+                                   DirtyThreat::ThreatenedPcOffset>(*this, threatened, dt_template,
+                                                                    dts);
     }
 
     Bitboard all_attackers = sliders | incoming_threats;
     if (!all_attackers)
-        return;  // Square s is threatened iff there's at least one attacker
+        return;
 
     if constexpr (PutPiece)
     {
@@ -1155,8 +1197,13 @@ void Position::update_piece_threats(Piece                     pc,
     }
 
     DirtyThreat dt_template{NO_PIECE, pc, Square(0), s, PutPiece};
-    write_multiple_dirties<DirtyThreat::PcSqOffset, DirtyThreat::PcOffset>(*this, all_attackers,
-                                                                           dt_template, dts);
+    // QUEEN can only be attacked by KNIGHT and QUEEN - filter attackers inside with AVX-512
+    if (type_of(pc) == QUEEN)
+        write_multiple_dirties<DirtyThreat::PcSqOffset, DirtyThreat::PcOffset, OnlyKnightOrQueen>(
+          *this, all_attackers, dt_template, dts);
+    else
+        write_multiple_dirties<DirtyThreat::PcSqOffset, DirtyThreat::PcOffset>(*this, all_attackers,
+                                                                               dt_template, dts);
 #else
     while (threatened)
     {
