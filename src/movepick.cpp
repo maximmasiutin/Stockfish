@@ -129,6 +129,12 @@ ExtMove* MovePicker::score(MoveList<Type>& ml) {
     Color us = pos.side_to_move();
 
     [[maybe_unused]] Bitboard threatByLesser[KING + 1];
+    // Cache continuation history base pointers outside loop for QUIETS
+    [[maybe_unused]] const std::int16_t* ch0;
+    [[maybe_unused]] const std::int16_t* ch1;
+    [[maybe_unused]] const std::int16_t* ch2;
+    [[maybe_unused]] const std::int16_t* ch3;
+    [[maybe_unused]] const std::int16_t* ch5;
     if constexpr (Type == QUIETS)
     {
         threatByLesser[PAWN]   = 0;
@@ -137,6 +143,13 @@ ExtMove* MovePicker::score(MoveList<Type>& ml) {
           pos.attacks_by<KNIGHT>(~us) | pos.attacks_by<BISHOP>(~us) | threatByLesser[KNIGHT];
         threatByLesser[QUEEN] = pos.attacks_by<ROOK>(~us) | threatByLesser[ROOK];
         threatByLesser[KING]  = pos.attacks_by<QUEEN>(~us) | threatByLesser[QUEEN];
+
+        // Cache continuation history base pointers for flat indexing
+        ch0 = reinterpret_cast<const std::int16_t*>(&(*continuationHistory[0])[0][0]);
+        ch1 = reinterpret_cast<const std::int16_t*>(&(*continuationHistory[1])[0][0]);
+        ch2 = reinterpret_cast<const std::int16_t*>(&(*continuationHistory[2])[0][0]);
+        ch3 = reinterpret_cast<const std::int16_t*>(&(*continuationHistory[3])[0][0]);
+        ch5 = reinterpret_cast<const std::int16_t*>(&(*continuationHistory[5])[0][0]);
     }
 
     ExtMove* it = cur;
@@ -157,14 +170,13 @@ ExtMove* MovePicker::score(MoveList<Type>& ml) {
 
         else if constexpr (Type == QUIETS)
         {
-            // histories
+            // Precompute flat index for continuation history lookups
+            const int idx = int(pc) * int(SQUARE_NB) + int(to);
+
             m.value = 2 * (*mainHistory)[us][m.raw()];
             m.value += 2 * sharedHistory->pawn_entry(pos)[pc][to];
-            m.value += (*continuationHistory[0])[pc][to];
-            m.value += (*continuationHistory[1])[pc][to];
-            m.value += (*continuationHistory[2])[pc][to];
-            m.value += (*continuationHistory[3])[pc][to];
-            m.value += (*continuationHistory[5])[pc][to];
+            // Sum all continuation history values using flat index and cached pointers
+            m.value += ch0[idx] + ch1[idx] + ch2[idx] + ch3[idx] + ch5[idx];
 
             // bonus for checks
             m.value += (bool(pos.check_squares(pt) & to) && pos.see_ge(m, -75)) * 16384;
