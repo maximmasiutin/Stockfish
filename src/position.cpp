@@ -321,8 +321,8 @@ void Position::set_castling_right(Color c, Square rfrom) {
 // Sets king attacks to detect if a move gives check
 void Position::set_check_info() const {
 
-    update_slider_blockers(WHITE);
-    update_slider_blockers(BLACK);
+    // Use fused version to share piece mask computations
+    update_slider_blockers_both();
 
     Square ksq = square<KING>(~sideToMove);
 
@@ -487,6 +487,47 @@ void Position::update_slider_blockers(Color c) const {
             st->blockersForKing[c] |= b;
             if (b & pieces(c))
                 st->pinners[~c] |= sniperSq;
+        }
+    }
+}
+
+// Fused version that computes slider blockers for both colors in one pass
+void Position::update_slider_blockers_both() const {
+
+    // Cache piece masks once
+    const Bitboard rookQueens   = pieces(QUEEN, ROOK);
+    const Bitboard bishopQueens = pieces(QUEEN, BISHOP);
+    const Bitboard allPieces    = pieces();
+    const Bitboard whitePieces  = pieces(WHITE);
+    const Bitboard blackPieces  = pieces(BLACK);
+
+    for (Color c : {WHITE, BLACK})
+    {
+        Square ksq = square<KING>(c);
+
+        st->blockersForKing[c] = 0;
+        st->pinners[~c]        = 0;
+
+        Bitboard enemyPieces = (c == WHITE) ? blackPieces : whitePieces;
+        Bitboard ourPieces   = (c == WHITE) ? whitePieces : blackPieces;
+
+        // Snipers are sliders that attack 's' when a piece and other snipers are removed
+        Bitboard snipers =
+          ((attacks_bb<ROOK>(ksq) & rookQueens) | (attacks_bb<BISHOP>(ksq) & bishopQueens))
+          & enemyPieces;
+        Bitboard occupancy = allPieces ^ snipers;
+
+        while (snipers)
+        {
+            Square   sniperSq = pop_lsb(snipers);
+            Bitboard b        = between_bb(ksq, sniperSq) & occupancy;
+
+            if (b && !more_than_one(b))
+            {
+                st->blockersForKing[c] |= b;
+                if (b & ourPieces)
+                    st->pinners[~c] |= sniperSq;
+            }
         }
     }
 }

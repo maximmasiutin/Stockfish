@@ -121,6 +121,7 @@ class Position {
     Bitboard attackers_to(Square s, Bitboard occupied) const;
     bool     attackers_to_exist(Square s, Bitboard occupied, Color c) const;
     void     update_slider_blockers(Color c) const;
+    void     update_slider_blockers_both() const;
     template<PieceType Pt>
     Bitboard attacks_by(Color c) const;
 
