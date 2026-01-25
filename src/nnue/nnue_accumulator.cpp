@@ -422,9 +422,25 @@ struct AccumulatorUpdateContext {
             for (IndexType k = 0; k < Tiling::NumPsqtRegs; ++k)
                 psqt[k] = fromTilePsqt[k];
 
-            for (int i = 0; i < removed.ssize(); ++i)
+            int ip = 0;
+            for (; ip < std::min(removed.ssize(), added.ssize()); ++ip)
             {
-                size_t       index      = removed[i];
+                size_t       indexR  = removed[ip];
+                const size_t offsetR = PSQTBuckets * indexR + j * Tiling::PsqtTileHeight;
+                auto*        columnR = reinterpret_cast<const psqt_vec_t*>(
+                  &featureTransformer.threatPsqtWeights[offsetR]);
+                size_t       indexA  = added[ip];
+                const size_t offsetA = PSQTBuckets * indexA + j * Tiling::PsqtTileHeight;
+                auto*        columnA = reinterpret_cast<const psqt_vec_t*>(
+                  &featureTransformer.threatPsqtWeights[offsetA]);
+
+                for (std::size_t k = 0; k < Tiling::NumPsqtRegs; ++k)
+                    psqt[k] = vec_add_psqt_32(vec_sub_psqt_32(psqt[k], columnR[k]), columnA[k]);
+            }
+
+            for (; ip < removed.ssize(); ++ip)
+            {
+                size_t       index      = removed[ip];
                 const size_t offset     = PSQTBuckets * index + j * Tiling::PsqtTileHeight;
                 auto*        columnPsqt = reinterpret_cast<const psqt_vec_t*>(
                   &featureTransformer.threatPsqtWeights[offset]);
@@ -433,9 +449,9 @@ struct AccumulatorUpdateContext {
                     psqt[k] = vec_sub_psqt_32(psqt[k], columnPsqt[k]);
             }
 
-            for (int i = 0; i < added.ssize(); ++i)
+            for (; ip < added.ssize(); ++ip)
             {
-                size_t       index      = added[i];
+                size_t       index      = added[ip];
                 const size_t offset     = PSQTBuckets * index + j * Tiling::PsqtTileHeight;
                 auto*        columnPsqt = reinterpret_cast<const psqt_vec_t*>(
                   &featureTransformer.threatPsqtWeights[offset]);
@@ -766,9 +782,24 @@ void update_accumulator_refresh_cache(Color                                 pers
         for (IndexType k = 0; k < Tiling::NumPsqtRegs; ++k)
             psqt[k] = entryTilePsqt[k];
 
-        for (int i = 0; i < removed.ssize(); ++i)
+        int ip = 0;
+        for (; ip < std::min(removed.ssize(), added.ssize()); ++ip)
         {
-            size_t       index  = removed[i];
+            size_t       indexR  = removed[ip];
+            const size_t offsetR = PSQTBuckets * indexR + j * Tiling::PsqtTileHeight;
+            auto*        columnR =
+              reinterpret_cast<const psqt_vec_t*>(&featureTransformer.psqtWeights[offsetR]);
+            size_t       indexA  = added[ip];
+            const size_t offsetA = PSQTBuckets * indexA + j * Tiling::PsqtTileHeight;
+            auto*        columnA =
+              reinterpret_cast<const psqt_vec_t*>(&featureTransformer.psqtWeights[offsetA]);
+
+            for (std::size_t k = 0; k < Tiling::NumPsqtRegs; ++k)
+                psqt[k] = vec_add_psqt_32(vec_sub_psqt_32(psqt[k], columnR[k]), columnA[k]);
+        }
+        for (; ip < removed.ssize(); ++ip)
+        {
+            size_t       index  = removed[ip];
             const size_t offset = PSQTBuckets * index + j * Tiling::PsqtTileHeight;
             auto*        columnPsqt =
               reinterpret_cast<const psqt_vec_t*>(&featureTransformer.psqtWeights[offset]);
@@ -776,9 +807,9 @@ void update_accumulator_refresh_cache(Color                                 pers
             for (std::size_t k = 0; k < Tiling::NumPsqtRegs; ++k)
                 psqt[k] = vec_sub_psqt_32(psqt[k], columnPsqt[k]);
         }
-        for (int i = 0; i < added.ssize(); ++i)
+        for (; ip < added.ssize(); ++ip)
         {
-            size_t       index  = added[i];
+            size_t       index  = added[ip];
             const size_t offset = PSQTBuckets * index + j * Tiling::PsqtTileHeight;
             auto*        columnPsqt =
               reinterpret_cast<const psqt_vec_t*>(&featureTransformer.psqtWeights[offset]);
