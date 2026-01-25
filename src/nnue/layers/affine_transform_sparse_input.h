@@ -77,6 +77,27 @@ alignas(CacheLineSize) static constexpr struct OffsetIndices {
         #define RESTRICT
     #endif
 
+// Precomputed base indices for find_nnz - eliminates loop-carried dependency
+// Order matches _mm512_packus_epi32 lane-crossing behavior
+alignas(64) static constexpr std::int16_t FindNnzBases[8][32] = {
+  {0, 1, 2,  3,  16, 17, 18, 19, 4,  5,  6,  7,  20, 21, 22, 23,
+   8, 9, 10, 11, 24, 25, 26, 27, 12, 13, 14, 15, 28, 29, 30, 31},
+  {32, 33, 34, 35, 48, 49, 50, 51, 36, 37, 38, 39, 52, 53, 54, 55,
+   40, 41, 42, 43, 56, 57, 58, 59, 44, 45, 46, 47, 60, 61, 62, 63},
+  {64, 65, 66, 67, 80, 81, 82, 83, 68, 69, 70, 71, 84, 85, 86, 87,
+   72, 73, 74, 75, 88, 89, 90, 91, 76, 77, 78, 79, 92, 93, 94, 95},
+  {96,  97,  98,  99,  112, 113, 114, 115, 100, 101, 102, 103, 116, 117, 118, 119,
+   104, 105, 106, 107, 120, 121, 122, 123, 108, 109, 110, 111, 124, 125, 126, 127},
+  {128, 129, 130, 131, 144, 145, 146, 147, 132, 133, 134, 135, 148, 149, 150, 151,
+   136, 137, 138, 139, 152, 153, 154, 155, 140, 141, 142, 143, 156, 157, 158, 159},
+  {160, 161, 162, 163, 176, 177, 178, 179, 164, 165, 166, 167, 180, 181, 182, 183,
+   168, 169, 170, 171, 184, 185, 186, 187, 172, 173, 174, 175, 188, 189, 190, 191},
+  {192, 193, 194, 195, 208, 209, 210, 211, 196, 197, 198, 199, 212, 213, 214, 215,
+   200, 201, 202, 203, 216, 217, 218, 219, 204, 205, 206, 207, 220, 221, 222, 223},
+  {224, 225, 226, 227, 240, 241, 242, 243, 228, 229, 230, 231, 244, 245, 246, 247,
+   232, 233, 234, 235, 248, 249, 250, 251, 236, 237, 238, 239, 252, 253, 254, 255},
+};
+
 // Find indices of nonzero numbers in an int32_t array
 template<const IndexType InputDimensions>
 void find_nnz(const std::int32_t* RESTRICT input,
@@ -88,28 +109,59 @@ void find_nnz(const std::int32_t* RESTRICT input,
     constexpr IndexType SimdWidthIn  = 16;  // 512 bits / 32 bits
     constexpr IndexType SimdWidthOut = 32;  // 512 bits / 16 bits
     constexpr IndexType NumChunks    = InputDimensions / SimdWidthOut;
-    const __m512i       increment    = _mm512_set1_epi16(SimdWidthOut);
-    __m512i             base = _mm512_set_epi16(  // Same permute order as _mm512_packus_epi32()
-      31, 30, 29, 28, 15, 14, 13, 12, 27, 26, 25, 24, 11, 10, 9, 8, 23, 22, 21, 20, 7, 6, 5, 4, 19,
-      18, 17, 16, 3, 2, 1, 0);
 
     IndexType count = 0;
-    for (IndexType i = 0; i < NumChunks; ++i)
+
+    // Process 2 chunks per iteration for better ILP
+    IndexType i = 0;
+    for (; i + 1 < NumChunks; i += 2)
     {
-        const __m512i inputV0 = _mm512_load_si512(input + i * 2 * SimdWidthIn);
-        const __m512i inputV1 = _mm512_load_si512(input + i * 2 * SimdWidthIn + SimdWidthIn);
+        // Prefetch next iteration's data
+        _mm_prefetch(reinterpret_cast<const char*>(input + (i + 2) * 2 * SimdWidthIn), _MM_HINT_T0);
 
-        // Get a bitmask and gather non zero indices
-        const __m512i   inputV01 = _mm512_packus_epi32(inputV0, inputV1);
-        const __mmask32 nnzMask  = _mm512_test_epi16_mask(inputV01, inputV01);
+        // Load 4 vectors (2 chunks worth)
+        const __m512i in0 = _mm512_load_si512(input + i * 2 * SimdWidthIn);
+        const __m512i in1 = _mm512_load_si512(input + i * 2 * SimdWidthIn + SimdWidthIn);
+        const __m512i in2 = _mm512_load_si512(input + (i + 1) * 2 * SimdWidthIn);
+        const __m512i in3 = _mm512_load_si512(input + (i + 1) * 2 * SimdWidthIn + SimdWidthIn);
 
-        // Avoid _mm512_mask_compressstoreu_epi16() as it's 256 uOps on Zen4
-        __m512i nnz = _mm512_maskz_compress_epi16(nnzMask, base);
-        _mm512_storeu_si512(out + count, nnz);
+        // Load precomputed bases (no loop-carried dependency)
+        const __m512i base0 = _mm512_load_si512(reinterpret_cast<const __m512i*>(FindNnzBases[i]));
+        const __m512i base1 =
+          _mm512_load_si512(reinterpret_cast<const __m512i*>(FindNnzBases[i + 1]));
 
-        count += popcount(nnzMask);
-        base = _mm512_add_epi16(base, increment);
+        // Pack and test - both chunks in parallel
+        const __m512i   packed0 = _mm512_packus_epi32(in0, in1);
+        const __m512i   packed1 = _mm512_packus_epi32(in2, in3);
+        const __mmask32 mask0   = _mm512_test_epi16_mask(packed0, packed0);
+        const __mmask32 mask1   = _mm512_test_epi16_mask(packed1, packed1);
+
+        // Compress and store first chunk
+        const __m512i nnz0 = _mm512_maskz_compress_epi16(mask0, base0);
+        _mm512_storeu_si512(out + count, nnz0);
+        count += popcount(mask0);
+
+        // Compress and store second chunk
+        const __m512i nnz1 = _mm512_maskz_compress_epi16(mask1, base1);
+        _mm512_storeu_si512(out + count, nnz1);
+        count += popcount(mask1);
     }
+
+    // Handle remaining chunk if NumChunks is odd
+    for (; i < NumChunks; ++i)
+    {
+        const __m512i in0  = _mm512_load_si512(input + i * 2 * SimdWidthIn);
+        const __m512i in1  = _mm512_load_si512(input + i * 2 * SimdWidthIn + SimdWidthIn);
+        const __m512i base = _mm512_load_si512(reinterpret_cast<const __m512i*>(FindNnzBases[i]));
+
+        const __m512i   packed  = _mm512_packus_epi32(in0, in1);
+        const __mmask32 nnzMask = _mm512_test_epi16_mask(packed, packed);
+
+        const __m512i nnz = _mm512_maskz_compress_epi16(nnzMask, base);
+        _mm512_storeu_si512(out + count, nnz);
+        count += popcount(nnzMask);
+    }
+
     count_out = count;
 
     #elif defined(USE_AVX512)
