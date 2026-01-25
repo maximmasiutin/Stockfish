@@ -1838,12 +1838,15 @@ void update_all_stats(const Position& pos,
     {
         update_quiet_histories(pos, ss, workerThread, bestMove, bonus * 910 / 1024);
 
-        int i = 0;
+        // Precompute base malus for the loop
+        const int baseMalus = malus * 1085 / 1024;
+        int       i         = 0;
+
         // Decrease stats for all non-best quiet moves
         for (Move move : quietsSearched)
         {
             i++;
-            int actualMalus = malus * 1085 / 1024;
+            int actualMalus = baseMalus;
             if (i > 5)
                 actualMalus -= actualMalus * (i - 5) / i;
             update_quiet_histories(pos, ss, workerThread, move, -actualMalus);
@@ -1899,10 +1902,15 @@ void update_quiet_histories(
     if (ss->ply < LOW_PLY_HISTORY_SIZE)
         workerThread.lowPlyHistory[ss->ply][move.raw()] << bonus * 805 / 1024;
 
-    update_continuation_histories(ss, pos.moved_piece(move), move.to_sq(), bonus * 896 / 1024);
+    // Cache moved piece and destination to avoid repeated lookups
+    const Piece  pc = pos.moved_piece(move);
+    const Square to = move.to_sq();
 
-    workerThread.sharedHistory.pawn_entry(pos)[pos.moved_piece(move)][move.to_sq()]
-      << bonus * (bonus > 0 ? 905 : 505) / 1024;
+    update_continuation_histories(ss, pc, to, bonus * 896 / 1024);
+
+    // Precompute pawn history bonus based on sign of bonus
+    const int pawnBonus = bonus > 0 ? bonus * 905 / 1024 : bonus * 505 / 1024;
+    workerThread.sharedHistory.pawn_entry(pos)[pc][to] << pawnBonus;
 }
 
 }
