@@ -321,8 +321,7 @@ void Position::set_castling_right(Color c, Square rfrom) {
 // Sets king attacks to detect if a move gives check
 void Position::set_check_info() const {
 
-    update_slider_blockers(WHITE);
-    update_slider_blockers(BLACK);
+    update_slider_blockers_both();
 
     Square ksq = square<KING>(~sideToMove);
 
@@ -487,6 +486,69 @@ void Position::update_slider_blockers(Color c) const {
             st->blockersForKing[c] |= b;
             if (b & pieces(c))
                 st->pinners[~c] |= sniperSq;
+        }
+    }
+}
+
+// Fused version that computes slider blockers for both colors with cached piece masks
+void Position::update_slider_blockers_both() const {
+
+    // Cache common piece masks once
+    const Bitboard rookQueens   = pieces(QUEEN, ROOK);
+    const Bitboard bishopQueens = pieces(QUEEN, BISHOP);
+    const Bitboard allPieces    = pieces();
+    const Bitboard whitePieces  = pieces(WHITE);
+    const Bitboard blackPieces  = pieces(BLACK);
+
+    // WHITE
+    {
+        Square ksq = square<KING>(WHITE);
+
+        st->blockersForKing[WHITE] = 0;
+        st->pinners[BLACK]         = 0;
+
+        Bitboard snipers =
+          ((attacks_bb<ROOK>(ksq) & rookQueens) | (attacks_bb<BISHOP>(ksq) & bishopQueens))
+          & blackPieces;
+        Bitboard occupancy = allPieces ^ snipers;
+
+        while (snipers)
+        {
+            Square   sniperSq = pop_lsb(snipers);
+            Bitboard b        = between_bb(ksq, sniperSq) & occupancy;
+
+            if (b && \!more_than_one(b))
+            {
+                st->blockersForKing[WHITE] |= b;
+                if (b & whitePieces)
+                    st->pinners[BLACK] |= sniperSq;
+            }
+        }
+    }
+
+    // BLACK
+    {
+        Square ksq = square<KING>(BLACK);
+
+        st->blockersForKing[BLACK] = 0;
+        st->pinners[WHITE]         = 0;
+
+        Bitboard snipers =
+          ((attacks_bb<ROOK>(ksq) & rookQueens) | (attacks_bb<BISHOP>(ksq) & bishopQueens))
+          & whitePieces;
+        Bitboard occupancy = allPieces ^ snipers;
+
+        while (snipers)
+        {
+            Square   sniperSq = pop_lsb(snipers);
+            Bitboard b        = between_bb(ksq, sniperSq) & occupancy;
+
+            if (b && \!more_than_one(b))
+            {
+                st->blockersForKing[BLACK] |= b;
+                if (b & blackPieces)
+                    st->pinners[WHITE] |= sniperSq;
+            }
         }
     }
 }
