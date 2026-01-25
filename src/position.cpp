@@ -1078,6 +1078,49 @@ void write_multiple_dirties(const Position& p,
                             DirtyThreats*   dts) {
     static_assert(sizeof(DirtyThreat) == 4);
 
+    // Filter invalid attacker-victim pairs based on FullThreats::map before AVX512 compress.
+    if constexpr (SqShift == DirtyThreat::ThreatenedSqOffset)
+    {
+        // Outgoing threats: filter by attacker piece type (dt_template.pc())
+        // PAWN attackers exclude BISHOP, QUEEN, KING victims
+        // BISHOP/ROOK attackers exclude QUEEN victims
+        // KING attackers exclude QUEEN, KING victims
+        constexpr Bitboard excl_bishop[16] = {0, ~0ULL, 0, 0, 0, 0, 0, 0,
+                                              0, ~0ULL, 0, 0, 0, 0, 0, 0};
+        constexpr Bitboard excl_queen[16]  = {0, ~0ULL, 0, ~0ULL, ~0ULL, 0, ~0ULL, 0,
+                                              0, ~0ULL, 0, ~0ULL, ~0ULL, 0, ~0ULL, 0};
+        constexpr Bitboard excl_king[16]   = {0, ~0ULL, 0, 0, 0, 0, ~0ULL, 0,
+                                              0, ~0ULL, 0, 0, 0, 0, ~0ULL, 0};
+        Piece attacker = dt_template.pc();
+        mask &= ~((excl_bishop[attacker] & p.pieces(BISHOP))
+                | (excl_queen[attacker] & p.pieces(QUEEN))
+                | (excl_king[attacker] & p.pieces(KING)));
+        if (!mask)
+            return;
+    }
+    else if constexpr (SqShift == DirtyThreat::PcSqOffset)
+    {
+        // Incoming threats: filter by victim piece type (dt_template.threatened_pc())
+        // BISHOP victims: exclude PAWN attackers
+        // QUEEN victims: exclude PAWN, BISHOP, ROOK, KING attackers
+        // KING victims: exclude PAWN, KING attackers
+        constexpr Bitboard excl_pawn[16]   = {0, 0, 0, ~0ULL, 0, ~0ULL, ~0ULL, 0,
+                                              0, 0, 0, ~0ULL, 0, ~0ULL, ~0ULL, 0};
+        constexpr Bitboard excl_bishop[16] = {0, 0, 0, 0, 0, ~0ULL, 0, 0,
+                                              0, 0, 0, 0, 0, ~0ULL, 0, 0};
+        constexpr Bitboard excl_rook[16]   = {0, 0, 0, 0, 0, ~0ULL, 0, 0,
+                                              0, 0, 0, 0, 0, ~0ULL, 0, 0};
+        constexpr Bitboard excl_king[16]   = {0, 0, 0, 0, 0, ~0ULL, ~0ULL, 0,
+                                              0, 0, 0, 0, 0, ~0ULL, ~0ULL, 0};
+        Piece victim = dt_template.threatened_pc();
+        mask &= ~((excl_pawn[victim] & p.pieces(PAWN))
+                | (excl_bishop[victim] & p.pieces(BISHOP))
+                | (excl_rook[victim] & p.pieces(ROOK))
+                | (excl_king[victim] & p.pieces(KING)));
+        if (!mask)
+            return;
+    }
+
     const __m512i board      = _mm512_loadu_si512(p.piece_array().data());
     const __m512i AllSquares = _mm512_set_epi8(
       63, 62, 61, 60, 59, 58, 57, 56, 55, 54, 53, 52, 51, 50, 49, 48, 47, 46, 45, 44, 43, 42, 41,
