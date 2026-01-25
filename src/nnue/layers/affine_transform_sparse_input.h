@@ -133,6 +133,36 @@ void find_nnz(const std::int32_t* RESTRICT input,
     }
     count_out = count;
 
+    #elif defined(USE_AVX2) && defined(USE_PEXT)
+
+    // BMI2 branchless approach using tzcnt - avoids lookup table cache misses
+    constexpr IndexType ChunkSize = 8;
+    constexpr IndexType NumChunks = InputDimensions / ChunkSize;
+
+    const auto* input32 = input;
+    IndexType   count   = 0;
+    IndexType   base    = 0;
+
+    for (IndexType i = 0; i < NumChunks; ++i)
+    {
+        // Build 8-bit mask using AVX2
+        const __m256i inputV = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(input32));
+        const __m256i zero   = _mm256_setzero_si256();
+        const __m256i cmp    = _mm256_cmpeq_epi32(inputV, zero);
+        unsigned      nnz    = ~_mm256_movemask_ps(_mm256_castsi256_ps(cmp)) & 0xFF;
+
+        // Extract indices using tzcnt - no lookup table needed
+        while (nnz)
+        {
+            out[count++] = static_cast<std::uint16_t>(base + _tzcnt_u32(nnz));
+            nnz &= nnz - 1;  // clear lowest set bit
+        }
+
+        input32 += ChunkSize;
+        base += ChunkSize;
+    }
+    count_out = count;
+
     #else
 
     using namespace SIMD;
