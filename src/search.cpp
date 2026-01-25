@@ -1874,17 +1874,37 @@ void update_all_stats(const Position& pos,
 // Updates histories of the move pairs formed by moves
 // at ply -1, -2, -3, -4, and -6 with current move.
 void update_continuation_histories(Stack* ss, Piece pc, Square to, int bonus) {
-    static std::array<ConthistBonus, 6> conthist_bonuses = {
-      {{1, 1133}, {2, 683}, {3, 312}, {4, 582}, {5, 149}, {6, 474}}};
+    // Precompute bonuses for each continuation history level
+    // Weights: 1133, 683, 312, 582, 149, 474 for indices 1, 2, 3, 4, 5, 6
+    // Extra +88 only for index 1 (since 88 * (i < 2) means only i=1 gets it)
+    const int b1 = (bonus * 1133 / 1024) + 88;
+    const int b2 = bonus * 683 / 1024;
+    const int b3 = bonus * 312 / 1024;
+    const int b4 = bonus * 582 / 1024;
+    const int b5 = bonus * 149 / 1024;
+    const int b6 = bonus * 474 / 1024;
 
-    for (const auto [i, weight] : conthist_bonuses)
+    // Unrolled updates - always update first two
+    if (((ss - 1)->currentMove).is_ok())
+        (*(ss - 1)->continuationHistory)[pc][to] << b1;
+
+    if (((ss - 2)->currentMove).is_ok())
+        (*(ss - 2)->continuationHistory)[pc][to] << b2;
+
+    // Only update remaining histories if not in check
+    if (!ss->inCheck)
     {
-        // Only update the first 2 continuation histories if we are in check
-        if (ss->inCheck && i > 2)
-            break;
+        if (((ss - 3)->currentMove).is_ok())
+            (*(ss - 3)->continuationHistory)[pc][to] << b3;
 
-        if (((ss - i)->currentMove).is_ok())
-            (*(ss - i)->continuationHistory)[pc][to] << (bonus * weight / 1024) + 88 * (i < 2);
+        if (((ss - 4)->currentMove).is_ok())
+            (*(ss - 4)->continuationHistory)[pc][to] << b4;
+
+        if (((ss - 5)->currentMove).is_ok())
+            (*(ss - 5)->continuationHistory)[pc][to] << b5;
+
+        if (((ss - 6)->currentMove).is_ok())
+            (*(ss - 6)->continuationHistory)[pc][to] << b6;
     }
 }
 
