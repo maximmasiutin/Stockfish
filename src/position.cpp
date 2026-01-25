@@ -1139,9 +1139,30 @@ void Position::update_piece_threats(Piece                     pc,
             dts->threateningSqs |= square_bb(s);
         }
 
-        DirtyThreat dt_template{pc, NO_PIECE, s, Square(0), PutPiece};
-        write_multiple_dirties<DirtyThreat::ThreatenedSqOffset, DirtyThreat::ThreatenedPcOffset>(
-          *this, threatened, dt_template, dts);
+        Bitboard nnue_threatened = threatened;
+        switch (type_of(pc))
+        {
+        case PAWN :
+            nnue_threatened &= ~(pieces(BISHOP) | pieces(QUEEN) | kings);
+            break;
+        case BISHOP :
+        case ROOK :
+            nnue_threatened &= ~pieces(QUEEN);
+            break;
+        case KING :
+            nnue_threatened &= ~(pieces(QUEEN) | kings);
+            break;
+        default :
+            break;
+        }
+
+        if (nnue_threatened)
+        {
+            DirtyThreat dt_template{pc, NO_PIECE, s, Square(0), PutPiece};
+            write_multiple_dirties<DirtyThreat::ThreatenedSqOffset,
+                                   DirtyThreat::ThreatenedPcOffset>(*this, nnue_threatened,
+                                                                    dt_template, dts);
+        }
     }
 
     Bitboard all_attackers = sliders | incoming_threats;
@@ -1154,10 +1175,45 @@ void Position::update_piece_threats(Piece                     pc,
         dts->threateningSqs |= all_attackers;
     }
 
-    DirtyThreat dt_template{NO_PIECE, pc, Square(0), s, PutPiece};
-    write_multiple_dirties<DirtyThreat::PcSqOffset, DirtyThreat::PcOffset>(*this, all_attackers,
-                                                                           dt_template, dts);
+    Bitboard nnue_attackers = all_attackers;
+    switch (type_of(pc))
+    {
+    case BISHOP :
+        nnue_attackers &= ~pieces(PAWN);
+        break;
+    case QUEEN :
+        nnue_attackers &= knights | pieces(QUEEN);
+        break;
+    case KING :
+        nnue_attackers &= ~(pieces(PAWN) | kings);
+        break;
+    default :
+        break;
+    }
+
+    if (nnue_attackers)
+    {
+        DirtyThreat dt_template{NO_PIECE, pc, Square(0), s, PutPiece};
+        write_multiple_dirties<DirtyThreat::PcSqOffset, DirtyThreat::PcOffset>(
+          *this, nnue_attackers, dt_template, dts);
+    }
 #else
+    switch (type_of(pc))
+    {
+    case PAWN :
+        threatened &= ~(pieces(BISHOP) | pieces(QUEEN) | kings);
+        break;
+    case BISHOP :
+    case ROOK :
+        threatened &= ~pieces(QUEEN);
+        break;
+    case KING :
+        threatened &= ~(pieces(QUEEN) | kings);
+        break;
+    default :
+        break;
+    }
+
     while (threatened)
     {
         Square threatenedSq = pop_lsb(threatened);
@@ -1189,7 +1245,8 @@ void Position::update_piece_threats(Piece                     pc,
             }
 
 #ifndef USE_AVX512ICL  // for ICL, direct threats were processed earlier (all_attackers)
-            add_dirty_threat<PutPiece>(dts, slider, pc, sliderSq, s);
+            if (type_of(pc) != QUEEN || type_of(slider) == QUEEN)
+                add_dirty_threat<PutPiece>(dts, slider, pc, sliderSq, s);
 #endif
         }
     }
@@ -1199,6 +1256,21 @@ void Position::update_piece_threats(Piece                     pc,
     }
 
 #ifndef USE_AVX512ICL
+    switch (type_of(pc))
+    {
+    case BISHOP :
+        incoming_threats &= ~pieces(PAWN);
+        break;
+    case QUEEN :
+        incoming_threats &= knights | pieces(QUEEN);
+        break;
+    case KING :
+        incoming_threats &= ~(pieces(PAWN) | kings);
+        break;
+    default :
+        break;
+    }
+
     while (incoming_threats)
     {
         Square srcSq = pop_lsb(incoming_threats);
