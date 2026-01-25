@@ -370,40 +370,103 @@ struct AccumulatorUpdateContext {
             for (IndexType k = 0; k < Tiling::NumRegs; ++k)
                 acc[k] = fromTile[k];
 
-            for (int i = 0; i < removed.ssize(); ++i)
+            // Fused add/sub: process paired removed/added features together
             {
-                size_t       index  = removed[i];
-                const size_t offset = Dimensions * index;
-                auto*        column = reinterpret_cast<const vec_i8_t*>(&threatWeights[offset]);
+                const int minSize = std::min(removed.ssize(), added.ssize());
+                int i = 0;
+
+                // Fused loop for paired features: acc += (A - R)
+                for (; i < minSize; ++i)
+                {
+                    const size_t offsetR = Dimensions * removed[i];
+                    const size_t offsetA = Dimensions * added[i];
+                    auto* columnR = reinterpret_cast<const vec_i8_t*>(&threatWeights[offsetR]);
+                    auto* columnA = reinterpret_cast<const vec_i8_t*>(&threatWeights[offsetA]);
+
+    #if defined(USE_SSE2)
+                    // Software prefetch: prefetch next pair's data
+                    if (i + 1 < minSize)
+                    {
+                        _mm_prefetch(
+                          reinterpret_cast<const char*>(&threatWeights[Dimensions * removed[i + 1]]),
+                          _MM_HINT_T0);
+                        _mm_prefetch(
+                          reinterpret_cast<const char*>(&threatWeights[Dimensions * added[i + 1]]),
+                          _MM_HINT_T0);
+                    }
+    #endif
 
     #ifdef USE_NEON
-                for (IndexType k = 0; k < Tiling::NumRegs; k += 2)
-                {
-                    acc[k]     = vec_sub_16(acc[k], vmovl_s8(vget_low_s8(column[k / 2])));
-                    acc[k + 1] = vec_sub_16(acc[k + 1], vmovl_high_s8(column[k / 2]));
-                }
+                    for (IndexType k = 0; k < Tiling::NumRegs; k += 2)
+                    {
+                        auto rLo = vmovl_s8(vget_low_s8(columnR[k / 2]));
+                        auto aLo = vmovl_s8(vget_low_s8(columnA[k / 2]));
+                        auto rHi = vmovl_high_s8(columnR[k / 2]);
+                        auto aHi = vmovl_high_s8(columnA[k / 2]);
+                        acc[k]     = vec_add_16(acc[k], vec_sub_16(aLo, rLo));
+                        acc[k + 1] = vec_add_16(acc[k + 1], vec_sub_16(aHi, rHi));
+                    }
     #else
-                for (IndexType k = 0; k < Tiling::NumRegs; ++k)
-                    acc[k] = vec_sub_16(acc[k], vec_convert_8_16(column[k]));
+                    for (IndexType k = 0; k < Tiling::NumRegs; ++k)
+                    {
+                        auto r = vec_convert_8_16(columnR[k]);
+                        auto a = vec_convert_8_16(columnA[k]);
+                        acc[k] = vec_add_16(acc[k], vec_sub_16(a, r));
+                    }
     #endif
-            }
+                }
 
-            for (int i = 0; i < added.ssize(); ++i)
-            {
-                size_t       index  = added[i];
-                const size_t offset = Dimensions * index;
-                auto*        column = reinterpret_cast<const vec_i8_t*>(&threatWeights[offset]);
+                // Handle remaining removed features
+                for (; i < removed.ssize(); ++i)
+                {
+                    const size_t offset = Dimensions * removed[i];
+                    auto* column = reinterpret_cast<const vec_i8_t*>(&threatWeights[offset]);
+
+    #if defined(USE_SSE2)
+                    // Software prefetch: prefetch next removed or first added
+                    if (i + 1 < removed.ssize())
+                        _mm_prefetch(
+                          reinterpret_cast<const char*>(&threatWeights[Dimensions * removed[i + 1]]),
+                          _MM_HINT_T0);
+    #endif
 
     #ifdef USE_NEON
-                for (IndexType k = 0; k < Tiling::NumRegs; k += 2)
-                {
-                    acc[k]     = vec_add_16(acc[k], vmovl_s8(vget_low_s8(column[k / 2])));
-                    acc[k + 1] = vec_add_16(acc[k + 1], vmovl_high_s8(column[k / 2]));
-                }
+                    for (IndexType k = 0; k < Tiling::NumRegs; k += 2)
+                    {
+                        acc[k]     = vec_sub_16(acc[k], vmovl_s8(vget_low_s8(column[k / 2])));
+                        acc[k + 1] = vec_sub_16(acc[k + 1], vmovl_high_s8(column[k / 2]));
+                    }
     #else
-                for (IndexType k = 0; k < Tiling::NumRegs; ++k)
-                    acc[k] = vec_add_16(acc[k], vec_convert_8_16(column[k]));
+                    for (IndexType k = 0; k < Tiling::NumRegs; ++k)
+                        acc[k] = vec_sub_16(acc[k], vec_convert_8_16(column[k]));
     #endif
+                }
+
+                // Handle remaining added features
+                for (i = minSize; i < added.ssize(); ++i)
+                {
+                    const size_t offset = Dimensions * added[i];
+                    auto* column = reinterpret_cast<const vec_i8_t*>(&threatWeights[offset]);
+
+    #if defined(USE_SSE2)
+                    // Software prefetch: prefetch next added
+                    if (i + 1 < added.ssize())
+                        _mm_prefetch(
+                          reinterpret_cast<const char*>(&threatWeights[Dimensions * added[i + 1]]),
+                          _MM_HINT_T0);
+    #endif
+
+    #ifdef USE_NEON
+                    for (IndexType k = 0; k < Tiling::NumRegs; k += 2)
+                    {
+                        acc[k]     = vec_add_16(acc[k], vmovl_s8(vget_low_s8(column[k / 2])));
+                        acc[k + 1] = vec_add_16(acc[k + 1], vmovl_high_s8(column[k / 2]));
+                    }
+    #else
+                    for (IndexType k = 0; k < Tiling::NumRegs; ++k)
+                        acc[k] = vec_add_16(acc[k], vec_convert_8_16(column[k]));
+    #endif
+                }
             }
 
             for (IndexType k = 0; k < Tiling::NumRegs; k++)
