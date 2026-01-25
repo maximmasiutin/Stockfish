@@ -144,6 +144,10 @@ void AccumulatorStack::evaluate(const Position&                       pos,
                                 AccumulatorCaches::Cache<Dimensions>& cache) noexcept {
     constexpr bool UseThreats = (Dimensions == TransformedFeatureDimensionsBig);
 
+    // Prefetch BLACK's cache entry while computing WHITE
+    const Square blackKsq = pos.square<KING>(BLACK);
+    prefetch(&cache[blackKsq][BLACK]);
+
     evaluate_side<PSQFeatureSet>(WHITE, pos, featureTransformer, cache);
 
     if (UseThreats)
