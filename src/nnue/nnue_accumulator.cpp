@@ -370,6 +370,7 @@ struct AccumulatorUpdateContext {
             for (IndexType k = 0; k < Tiling::NumRegs; ++k)
                 acc[k] = fromTile[k];
 
+    #pragma GCC unroll 2
             for (int i = 0; i < removed.ssize(); ++i)
             {
                 size_t       index  = removed[i];
@@ -388,6 +389,7 @@ struct AccumulatorUpdateContext {
     #endif
             }
 
+    #pragma GCC unroll 2
             for (int i = 0; i < added.ssize(); ++i)
             {
                 size_t       index  = added[i];
