@@ -370,6 +370,11 @@ struct AccumulatorUpdateContext {
             for (IndexType k = 0; k < Tiling::NumRegs; ++k)
                 acc[k] = fromTile[k];
 
+#if defined(__clang__)
+    #pragma unroll 2
+#elif defined(__GNUC__)
+    #pragma GCC unroll 2
+#endif
             for (int i = 0; i < removed.ssize(); ++i)
             {
                 size_t       index  = removed[i];
@@ -388,6 +393,11 @@ struct AccumulatorUpdateContext {
     #endif
             }
 
+#if defined(__clang__)
+    #pragma unroll 2
+#elif defined(__GNUC__)
+    #pragma GCC unroll 2
+#endif
             for (int i = 0; i < added.ssize(); ++i)
             {
                 size_t       index  = added[i];
