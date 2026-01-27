@@ -27,6 +27,7 @@
 #include <iostream>
 
 #include "../../bitboard.h"
+#include "../../misc.h"
 #include "../simd.h"
 #include "../nnue_common.h"
 
@@ -317,6 +318,10 @@ class AffineTransformSparseInput {
             const std::ptrdiff_t i0  = *start++;
             const std::ptrdiff_t i1  = *start++;
             const std::ptrdiff_t i2  = *start++;
+
+            if (start < end)
+                prefetch(&weights_cp[*start * OutputDimensions * ChunkSize]);
+
             const invec_t        in0 = vec_set_32(input32[i0]);
             const invec_t        in1 = vec_set_32(input32[i1]);
             const invec_t        in2 = vec_set_32(input32[i2]);
