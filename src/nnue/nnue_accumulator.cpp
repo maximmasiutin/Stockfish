@@ -632,7 +632,13 @@ void update_accumulator_incremental(
 
 Bitboard get_changed_pieces(const std::array<Piece, SQUARE_NB>& oldPieces,
                             const std::array<Piece, SQUARE_NB>& newPieces) {
-#if defined(USE_AVX512) || defined(USE_AVX2)
+#if defined(USE_AVX512)
+    static_assert(sizeof(Piece) == 1);
+    const __m512i   old_v  = _mm512_loadu_si512(reinterpret_cast<const __m512i*>(oldPieces.data()));
+    const __m512i   new_v  = _mm512_loadu_si512(reinterpret_cast<const __m512i*>(newPieces.data()));
+    const __mmask64 eqMask = _mm512_cmpeq_epi8_mask(old_v, new_v);
+    return ~static_cast<Bitboard>(eqMask);
+#elif defined(USE_AVX2)
     static_assert(sizeof(Piece) == 1);
     Bitboard sameBB = 0;
 
