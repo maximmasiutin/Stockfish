@@ -282,11 +282,13 @@ class AffineTransformSparseInput {
         constexpr IndexType OutputSimdWidth = sizeof(outvec_t) / sizeof(OutputType);
         constexpr IndexType NumChunks = ceil_to_multiple<IndexType>(InputDimensions, 8) / ChunkSize;
         constexpr IndexType NumAccums = OutputDimensions / OutputSimdWidth;
-        // If we're using high-latency dot product instructions, split the accumulators
-        // to create 3 separate dependency chains and merge at the end
+        // Split accumulators to break dependency chains for high-latency dpbusd.
+        // AVX512ICL: 6-way (32 ZMM registers); VNNI: 2-way.
         constexpr IndexType NumRegs =
-    #if defined(USE_VNNI)
-          3 * NumAccums;
+    #if defined(USE_AVX512ICL)
+          6 * NumAccums;
+    #elif defined(USE_VNNI)
+          2 * NumAccums;
     #else
           NumAccums;
     #endif
@@ -308,33 +310,78 @@ class AffineTransformSparseInput {
 
         // convince GCC to not do weird pointer arithmetic in the following loop
         const std::int8_t* weights_cp = weights;
-    #if defined(USE_VNNI)
+    #if defined(USE_AVX512ICL)
+        // AVX512ICL: 6-way unroll (32 ZMM registers available)
         for (IndexType k = NumAccums; k < NumRegs; ++k)
             acc[k] = vec_zero();
 
-        while (start < end - 2)
+        while (start < end - 5)
         {
             const std::ptrdiff_t i0  = *start++;
             const std::ptrdiff_t i1  = *start++;
             const std::ptrdiff_t i2  = *start++;
+            const std::ptrdiff_t i3  = *start++;
+            const std::ptrdiff_t i4  = *start++;
+            const std::ptrdiff_t i5  = *start++;
             const invec_t        in0 = vec_set_32(input32[i0]);
             const invec_t        in1 = vec_set_32(input32[i1]);
             const invec_t        in2 = vec_set_32(input32[i2]);
+            const invec_t        in3 = vec_set_32(input32[i3]);
+            const invec_t        in4 = vec_set_32(input32[i4]);
+            const invec_t        in5 = vec_set_32(input32[i5]);
             const auto           col0 =
               reinterpret_cast<const invec_t*>(&weights_cp[i0 * OutputDimensions * ChunkSize]);
             const auto col1 =
               reinterpret_cast<const invec_t*>(&weights_cp[i1 * OutputDimensions * ChunkSize]);
             const auto col2 =
               reinterpret_cast<const invec_t*>(&weights_cp[i2 * OutputDimensions * ChunkSize]);
+            const auto col3 =
+              reinterpret_cast<const invec_t*>(&weights_cp[i3 * OutputDimensions * ChunkSize]);
+            const auto col4 =
+              reinterpret_cast<const invec_t*>(&weights_cp[i4 * OutputDimensions * ChunkSize]);
+            const auto col5 =
+              reinterpret_cast<const invec_t*>(&weights_cp[i5 * OutputDimensions * ChunkSize]);
             for (IndexType k = 0; k < NumAccums; ++k)
             {
                 vec_add_dpbusd_32(acc[k], in0, col0[k]);
                 vec_add_dpbusd_32(acc[k + NumAccums], in1, col1[k]);
                 vec_add_dpbusd_32(acc[k + 2 * NumAccums], in2, col2[k]);
+                vec_add_dpbusd_32(acc[k + 3 * NumAccums], in3, col3[k]);
+                vec_add_dpbusd_32(acc[k + 4 * NumAccums], in4, col4[k]);
+                vec_add_dpbusd_32(acc[k + 5 * NumAccums], in5, col5[k]);
             }
         }
         for (IndexType k = 0; k < NumAccums; ++k)
-            acc[k] = vec_add_32(vec_add_32(acc[k], acc[k + NumAccums]), acc[k + 2 * NumAccums]);
+        {
+            acc[k] = vec_add_32(acc[k], acc[k + NumAccums]);
+            acc[k] = vec_add_32(acc[k], acc[k + 2 * NumAccums]);
+            acc[k] = vec_add_32(acc[k], acc[k + 3 * NumAccums]);
+            acc[k] = vec_add_32(acc[k], acc[k + 4 * NumAccums]);
+            acc[k] = vec_add_32(acc[k], acc[k + 5 * NumAccums]);
+        }
+    #elif defined(USE_VNNI)
+        // VNNI: 2-way unroll
+        for (IndexType k = NumAccums; k < NumRegs; ++k)
+            acc[k] = vec_zero();
+
+        while (start < end - 1)
+        {
+            const std::ptrdiff_t i0  = *start++;
+            const std::ptrdiff_t i1  = *start++;
+            const invec_t        in0 = vec_set_32(input32[i0]);
+            const invec_t        in1 = vec_set_32(input32[i1]);
+            const auto           col0 =
+              reinterpret_cast<const invec_t*>(&weights_cp[i0 * OutputDimensions * ChunkSize]);
+            const auto col1 =
+              reinterpret_cast<const invec_t*>(&weights_cp[i1 * OutputDimensions * ChunkSize]);
+            for (IndexType k = 0; k < NumAccums; ++k)
+            {
+                vec_add_dpbusd_32(acc[k], in0, col0[k]);
+                vec_add_dpbusd_32(acc[k + NumAccums], in1, col1[k]);
+            }
+        }
+        for (IndexType k = 0; k < NumAccums; ++k)
+            acc[k] = vec_add_32(acc[k], acc[k + NumAccums]);
     #endif
         while (start < end)
         {
