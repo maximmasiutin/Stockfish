@@ -230,6 +230,69 @@ class AffineTransform {
             for (IndexType k = 0; k < NumRegs; ++k)
                 acc[k] = biasvec[k];
 
+    #if defined(USE_AVX512ICL)
+            // 6-way unroll to break dependency chains on high-latency VNNI dpbusd
+            vec_t acc1[NumRegs], acc2[NumRegs], acc3[NumRegs], acc4[NumRegs], acc5[NumRegs];
+            for (IndexType k = 0; k < NumRegs; ++k)
+            {
+                acc1[k] = _mm512_setzero_si512();
+                acc2[k] = _mm512_setzero_si512();
+                acc3[k] = _mm512_setzero_si512();
+                acc4[k] = _mm512_setzero_si512();
+                acc5[k] = _mm512_setzero_si512();
+            }
+
+            IndexType i = 0;
+            for (; i + 5 < NumChunks; i += 6)
+            {
+                const vec_t in0 = vec_set_32(input32[i]);
+                const vec_t in1 = vec_set_32(input32[i + 1]);
+                const vec_t in2 = vec_set_32(input32[i + 2]);
+                const vec_t in3 = vec_set_32(input32[i + 3]);
+                const vec_t in4 = vec_set_32(input32[i + 4]);
+                const vec_t in5 = vec_set_32(input32[i + 5]);
+                const auto  col0 =
+                  reinterpret_cast<const vec_t*>(&weights[i * OutputDimensions * 4]);
+                const auto col1 =
+                  reinterpret_cast<const vec_t*>(&weights[(i + 1) * OutputDimensions * 4]);
+                const auto col2 =
+                  reinterpret_cast<const vec_t*>(&weights[(i + 2) * OutputDimensions * 4]);
+                const auto col3 =
+                  reinterpret_cast<const vec_t*>(&weights[(i + 3) * OutputDimensions * 4]);
+                const auto col4 =
+                  reinterpret_cast<const vec_t*>(&weights[(i + 4) * OutputDimensions * 4]);
+                const auto col5 =
+                  reinterpret_cast<const vec_t*>(&weights[(i + 5) * OutputDimensions * 4]);
+
+                for (IndexType k = 0; k < NumRegs; ++k)
+                {
+                    vec_add_dpbusd_32(acc[k], in0, col0[k]);
+                    vec_add_dpbusd_32(acc1[k], in1, col1[k]);
+                    vec_add_dpbusd_32(acc2[k], in2, col2[k]);
+                    vec_add_dpbusd_32(acc3[k], in3, col3[k]);
+                    vec_add_dpbusd_32(acc4[k], in4, col4[k]);
+                    vec_add_dpbusd_32(acc5[k], in5, col5[k]);
+                }
+            }
+            // Handle remaining chunks
+            for (; i < NumChunks; ++i)
+            {
+                const vec_t in0 = vec_set_32(input32[i]);
+                const auto  col0 =
+                  reinterpret_cast<const vec_t*>(&weights[i * OutputDimensions * 4]);
+                for (IndexType k = 0; k < NumRegs; ++k)
+                    vec_add_dpbusd_32(acc[k], in0, col0[k]);
+            }
+            // Merge accumulators
+            for (IndexType k = 0; k < NumRegs; ++k)
+            {
+                acc[k] = _mm512_add_epi32(acc[k], acc1[k]);
+                acc[k] = _mm512_add_epi32(acc[k], acc2[k]);
+                acc[k] = _mm512_add_epi32(acc[k], acc3[k]);
+                acc[k] = _mm512_add_epi32(acc[k], acc4[k]);
+                acc[k] = _mm512_add_epi32(acc[k], acc5[k]);
+            }
+    #else
             for (IndexType i = 0; i < NumChunks; ++i)
             {
                 const vec_t in0 = vec_set_32(input32[i]);
@@ -239,6 +302,7 @@ class AffineTransform {
                 for (IndexType k = 0; k < NumRegs; ++k)
                     vec_add_dpbusd_32(acc[k], in0, col0[k]);
             }
+    #endif
 
             vec_t* outptr = reinterpret_cast<vec_t*>(output);
             for (IndexType k = 0; k < NumRegs; ++k)
