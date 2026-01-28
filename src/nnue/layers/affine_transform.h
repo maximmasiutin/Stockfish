@@ -230,6 +230,41 @@ class AffineTransform {
             for (IndexType k = 0; k < NumRegs; ++k)
                 acc[k] = biasvec[k];
 
+    #if defined(USE_AVX512)
+            // 2-way unroll to break dependency chains on high-latency VNNI
+            vec_t acc2[NumRegs];
+            for (IndexType k = 0; k < NumRegs; ++k)
+                acc2[k] = _mm512_setzero_si512();
+
+            IndexType i = 0;
+            for (; i + 1 < NumChunks; i += 2)
+            {
+                const vec_t in0 = vec_set_32(input32[i]);
+                const vec_t in1 = vec_set_32(input32[i + 1]);
+                const auto  col0 =
+                  reinterpret_cast<const vec_t*>(&weights[i * OutputDimensions * 4]);
+                const auto col1 =
+                  reinterpret_cast<const vec_t*>(&weights[(i + 1) * OutputDimensions * 4]);
+
+                for (IndexType k = 0; k < NumRegs; ++k)
+                {
+                    vec_add_dpbusd_32(acc[k], in0, col0[k]);
+                    vec_add_dpbusd_32(acc2[k], in1, col1[k]);
+                }
+            }
+            // Handle remaining odd chunk
+            if (i < NumChunks)
+            {
+                const vec_t in0 = vec_set_32(input32[i]);
+                const auto  col0 =
+                  reinterpret_cast<const vec_t*>(&weights[i * OutputDimensions * 4]);
+                for (IndexType k = 0; k < NumRegs; ++k)
+                    vec_add_dpbusd_32(acc[k], in0, col0[k]);
+            }
+            // Merge accumulators
+            for (IndexType k = 0; k < NumRegs; ++k)
+                acc[k] = _mm512_add_epi32(acc[k], acc2[k]);
+    #else
             for (IndexType i = 0; i < NumChunks; ++i)
             {
                 const vec_t in0 = vec_set_32(input32[i]);
@@ -239,6 +274,7 @@ class AffineTransform {
                 for (IndexType k = 0; k < NumRegs; ++k)
                     vec_add_dpbusd_32(acc[k], in0, col0[k]);
             }
+    #endif
 
             vec_t* outptr = reinterpret_cast<vec_t*>(output);
             for (IndexType k = 0; k < NumRegs; ++k)
