@@ -335,7 +335,30 @@ class AffineTransformSparseInput {
         }
         for (IndexType k = 0; k < NumAccums; ++k)
             acc[k] = vec_add_32(vec_add_32(acc[k], acc[k + NumAccums]), acc[k + 2 * NumAccums]);
-    #endif
+
+        // Unrolled tail: after 3-way processing, 0-2 elements remain
+        {
+            const auto remaining = end - start;
+            if (remaining >= 1)
+            {
+                const std::ptrdiff_t i0  = start[0];
+                const invec_t        in0 = vec_set_32(input32[i0]);
+                const auto           col0 =
+                  reinterpret_cast<const invec_t*>(&weights_cp[i0 * OutputDimensions * ChunkSize]);
+                for (IndexType k = 0; k < NumAccums; ++k)
+                    vec_add_dpbusd_32(acc[k], in0, col0[k]);
+            }
+            if (remaining >= 2)
+            {
+                const std::ptrdiff_t i1  = start[1];
+                const invec_t        in1 = vec_set_32(input32[i1]);
+                const auto           col1 =
+                  reinterpret_cast<const invec_t*>(&weights_cp[i1 * OutputDimensions * ChunkSize]);
+                for (IndexType k = 0; k < NumAccums; ++k)
+                    vec_add_dpbusd_32(acc[k], in1, col1[k]);
+            }
+        }
+    #else
         while (start < end)
         {
             const std::ptrdiff_t i  = *start++;
@@ -345,6 +368,7 @@ class AffineTransformSparseInput {
             for (IndexType k = 0; k < NumAccums; ++k)
                 vec_add_dpbusd_32(acc[k], in, col[k]);
         }
+    #endif
 
         outvec_t* outptr = reinterpret_cast<outvec_t*>(output);
         for (IndexType k = 0; k < NumAccums; ++k)
