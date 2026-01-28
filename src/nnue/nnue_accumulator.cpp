@@ -716,33 +716,43 @@ void update_accumulator_refresh_cache(Color                                 pers
         for (IndexType k = 0; k < Tiling::NumRegs; ++k)
             acc[k] = entryTile[k];
 
-        int i = 0;
-        for (; i < std::min(removed.ssize(), added.ssize()); ++i)
+        int       i           = 0;
+        const int minPairSize = std::min(removed.ssize(), added.ssize());
+
+        // 2-way unroll with pre-combine: compute net diff of two pairs
+        // independently, then apply once to acc (breaks acc dependency chain)
+        for (; i + 1 < minPairSize; i += 2)
         {
-            size_t       indexR  = removed[i];
-            const size_t offsetR = Dimensions * indexR;
-            auto*        columnR = reinterpret_cast<const vec_t*>(&weights[offsetR]);
-            size_t       indexA  = added[i];
-            const size_t offsetA = Dimensions * indexA;
-            auto*        columnA = reinterpret_cast<const vec_t*>(&weights[offsetA]);
+            auto* columnR0 = reinterpret_cast<const vec_t*>(&weights[Dimensions * removed[i]]);
+            auto* columnA0 = reinterpret_cast<const vec_t*>(&weights[Dimensions * added[i]]);
+            auto* columnR1 = reinterpret_cast<const vec_t*>(&weights[Dimensions * removed[i + 1]]);
+            auto* columnA1 = reinterpret_cast<const vec_t*>(&weights[Dimensions * added[i + 1]]);
+
+            for (IndexType k = 0; k < Tiling::NumRegs; ++k)
+            {
+                const vec_t net = vec_add_16(vec_sub_16(columnA0[k], columnR0[k]),
+                                             vec_sub_16(columnA1[k], columnR1[k]));
+                acc[k]          = vec_add_16(acc[k], net);
+            }
+        }
+        for (; i < minPairSize; ++i)
+        {
+            auto* columnR = reinterpret_cast<const vec_t*>(&weights[Dimensions * removed[i]]);
+            auto* columnA = reinterpret_cast<const vec_t*>(&weights[Dimensions * added[i]]);
 
             for (IndexType k = 0; k < Tiling::NumRegs; ++k)
                 acc[k] = fused<Vec16Wrapper, Add, Sub>(acc[k], columnA[k], columnR[k]);
         }
         for (; i < removed.ssize(); ++i)
         {
-            size_t       index  = removed[i];
-            const size_t offset = Dimensions * index;
-            auto*        column = reinterpret_cast<const vec_t*>(&weights[offset]);
+            auto* column = reinterpret_cast<const vec_t*>(&weights[Dimensions * removed[i]]);
 
             for (IndexType k = 0; k < Tiling::NumRegs; ++k)
                 acc[k] = vec_sub_16(acc[k], column[k]);
         }
         for (; i < added.ssize(); ++i)
         {
-            size_t       index  = added[i];
-            const size_t offset = Dimensions * index;
-            auto*        column = reinterpret_cast<const vec_t*>(&weights[offset]);
+            auto* column = reinterpret_cast<const vec_t*>(&weights[Dimensions * added[i]]);
 
             for (IndexType k = 0; k < Tiling::NumRegs; ++k)
                 acc[k] = vec_add_16(acc[k], column[k]);
