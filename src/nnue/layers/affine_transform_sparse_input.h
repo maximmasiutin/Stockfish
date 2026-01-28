@@ -314,13 +314,30 @@ class AffineTransformSparseInput {
 
         while (start < end - 2)
         {
-            const std::ptrdiff_t i0  = *start++;
-            const std::ptrdiff_t i1  = *start++;
-            const std::ptrdiff_t i2  = *start++;
-            const invec_t        in0 = vec_set_32(input32[i0]);
-            const invec_t        in1 = vec_set_32(input32[i1]);
-            const invec_t        in2 = vec_set_32(input32[i2]);
-            const auto           col0 =
+            const std::ptrdiff_t i0 = *start++;
+            const std::ptrdiff_t i1 = *start++;
+            const std::ptrdiff_t i2 = *start++;
+
+        #if defined(USE_AVX512)
+            // Prefetch weights for next iteration (3 indices ahead)
+            if (start + 2 < end)
+            {
+                _mm_prefetch(reinterpret_cast<const char*>(
+                               &weights_cp[start[0] * OutputDimensions * ChunkSize]),
+                             _MM_HINT_T0);
+                _mm_prefetch(reinterpret_cast<const char*>(
+                               &weights_cp[start[1] * OutputDimensions * ChunkSize]),
+                             _MM_HINT_T0);
+                _mm_prefetch(reinterpret_cast<const char*>(
+                               &weights_cp[start[2] * OutputDimensions * ChunkSize]),
+                             _MM_HINT_T0);
+            }
+        #endif
+
+            const invec_t in0 = vec_set_32(input32[i0]);
+            const invec_t in1 = vec_set_32(input32[i1]);
+            const invec_t in2 = vec_set_32(input32[i2]);
+            const auto    col0 =
               reinterpret_cast<const invec_t*>(&weights_cp[i0 * OutputDimensions * ChunkSize]);
             const auto col1 =
               reinterpret_cast<const invec_t*>(&weights_cp[i1 * OutputDimensions * ChunkSize]);
