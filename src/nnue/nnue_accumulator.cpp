@@ -422,6 +422,62 @@ struct AccumulatorUpdateContext {
             for (IndexType k = 0; k < Tiling::NumPsqtRegs; ++k)
                 psqt[k] = fromTilePsqt[k];
 
+    #if defined(USE_AVX512ICL)
+            // AVX-512 ICL: 2-way unroll for PSQT to break dependency chains
+            {
+                int i = 0;
+                for (; i + 1 < removed.ssize(); i += 2)
+                {
+                    const size_t offset0 = PSQTBuckets * removed[i] + j * Tiling::PsqtTileHeight;
+                    const size_t offset1 =
+                      PSQTBuckets * removed[i + 1] + j * Tiling::PsqtTileHeight;
+                    auto* col0 = reinterpret_cast<const psqt_vec_t*>(
+                      &featureTransformer.threatPsqtWeights[offset0]);
+                    auto* col1 = reinterpret_cast<const psqt_vec_t*>(
+                      &featureTransformer.threatPsqtWeights[offset1]);
+
+                    for (std::size_t k = 0; k < Tiling::NumPsqtRegs; ++k)
+                    {
+                        psqt[k] = vec_sub_psqt_32(psqt[k], col0[k]);
+                        psqt[k] = vec_sub_psqt_32(psqt[k], col1[k]);
+                    }
+                }
+                for (; i < removed.ssize(); ++i)
+                {
+                    const size_t offset     = PSQTBuckets * removed[i] + j * Tiling::PsqtTileHeight;
+                    auto*        columnPsqt = reinterpret_cast<const psqt_vec_t*>(
+                      &featureTransformer.threatPsqtWeights[offset]);
+                    for (std::size_t k = 0; k < Tiling::NumPsqtRegs; ++k)
+                        psqt[k] = vec_sub_psqt_32(psqt[k], columnPsqt[k]);
+                }
+            }
+            {
+                int i = 0;
+                for (; i + 1 < added.ssize(); i += 2)
+                {
+                    const size_t offset0 = PSQTBuckets * added[i] + j * Tiling::PsqtTileHeight;
+                    const size_t offset1 = PSQTBuckets * added[i + 1] + j * Tiling::PsqtTileHeight;
+                    auto*        col0    = reinterpret_cast<const psqt_vec_t*>(
+                      &featureTransformer.threatPsqtWeights[offset0]);
+                    auto* col1 = reinterpret_cast<const psqt_vec_t*>(
+                      &featureTransformer.threatPsqtWeights[offset1]);
+
+                    for (std::size_t k = 0; k < Tiling::NumPsqtRegs; ++k)
+                    {
+                        psqt[k] = vec_add_psqt_32(psqt[k], col0[k]);
+                        psqt[k] = vec_add_psqt_32(psqt[k], col1[k]);
+                    }
+                }
+                for (; i < added.ssize(); ++i)
+                {
+                    const size_t offset     = PSQTBuckets * added[i] + j * Tiling::PsqtTileHeight;
+                    auto*        columnPsqt = reinterpret_cast<const psqt_vec_t*>(
+                      &featureTransformer.threatPsqtWeights[offset]);
+                    for (std::size_t k = 0; k < Tiling::NumPsqtRegs; ++k)
+                        psqt[k] = vec_add_psqt_32(psqt[k], columnPsqt[k]);
+                }
+            }
+    #else
             for (int i = 0; i < removed.ssize(); ++i)
             {
                 size_t       index      = removed[i];
@@ -443,6 +499,7 @@ struct AccumulatorUpdateContext {
                 for (std::size_t k = 0; k < Tiling::NumPsqtRegs; ++k)
                     psqt[k] = vec_add_psqt_32(psqt[k], columnPsqt[k]);
             }
+    #endif
 
             for (IndexType k = 0; k < Tiling::NumPsqtRegs; ++k)
                 vec_store_psqt(&toTilePsqt[k], psqt[k]);
