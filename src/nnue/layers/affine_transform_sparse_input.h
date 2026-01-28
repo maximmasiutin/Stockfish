@@ -283,9 +283,12 @@ class AffineTransformSparseInput {
         constexpr IndexType NumChunks = ceil_to_multiple<IndexType>(InputDimensions, 8) / ChunkSize;
         constexpr IndexType NumAccums = OutputDimensions / OutputSimdWidth;
         // If we're using high-latency dot product instructions, split the accumulators
-        // to create 3 separate dependency chains and merge at the end
+        // to create multiple dependency chains and merge at the end.
+        // AVX512 has 32 registers so can use 6-way; AVX2-VNNI has 16 so use 3-way.
         constexpr IndexType NumRegs =
-    #if defined(USE_VNNI)
+    #if defined(USE_AVX512)
+          6 * NumAccums;
+    #elif defined(USE_VNNI)
           3 * NumAccums;
     #else
           NumAccums;
@@ -308,7 +311,107 @@ class AffineTransformSparseInput {
 
         // convince GCC to not do weird pointer arithmetic in the following loop
         const std::int8_t* weights_cp = weights;
-    #if defined(USE_VNNI)
+    #if defined(USE_AVX512)
+        // AVX512: 6-way unroll (32 ZMM registers available)
+        for (IndexType k = NumAccums; k < NumRegs; ++k)
+            acc[k] = vec_zero();
+
+        while (start < end - 5)
+        {
+            const std::ptrdiff_t i0  = *start++;
+            const std::ptrdiff_t i1  = *start++;
+            const std::ptrdiff_t i2  = *start++;
+            const std::ptrdiff_t i3  = *start++;
+            const std::ptrdiff_t i4  = *start++;
+            const std::ptrdiff_t i5  = *start++;
+            const invec_t        in0 = vec_set_32(input32[i0]);
+            const invec_t        in1 = vec_set_32(input32[i1]);
+            const invec_t        in2 = vec_set_32(input32[i2]);
+            const invec_t        in3 = vec_set_32(input32[i3]);
+            const invec_t        in4 = vec_set_32(input32[i4]);
+            const invec_t        in5 = vec_set_32(input32[i5]);
+            const auto           col0 =
+              reinterpret_cast<const invec_t*>(&weights_cp[i0 * OutputDimensions * ChunkSize]);
+            const auto col1 =
+              reinterpret_cast<const invec_t*>(&weights_cp[i1 * OutputDimensions * ChunkSize]);
+            const auto col2 =
+              reinterpret_cast<const invec_t*>(&weights_cp[i2 * OutputDimensions * ChunkSize]);
+            const auto col3 =
+              reinterpret_cast<const invec_t*>(&weights_cp[i3 * OutputDimensions * ChunkSize]);
+            const auto col4 =
+              reinterpret_cast<const invec_t*>(&weights_cp[i4 * OutputDimensions * ChunkSize]);
+            const auto col5 =
+              reinterpret_cast<const invec_t*>(&weights_cp[i5 * OutputDimensions * ChunkSize]);
+            for (IndexType k = 0; k < NumAccums; ++k)
+            {
+                vec_add_dpbusd_32(acc[k], in0, col0[k]);
+                vec_add_dpbusd_32(acc[k + NumAccums], in1, col1[k]);
+                vec_add_dpbusd_32(acc[k + 2 * NumAccums], in2, col2[k]);
+                vec_add_dpbusd_32(acc[k + 3 * NumAccums], in3, col3[k]);
+                vec_add_dpbusd_32(acc[k + 4 * NumAccums], in4, col4[k]);
+                vec_add_dpbusd_32(acc[k + 5 * NumAccums], in5, col5[k]);
+            }
+        }
+        // Merge 6 accumulator chains into one
+        for (IndexType k = 0; k < NumAccums; ++k)
+        {
+            acc[k] = vec_add_32(acc[k], acc[k + NumAccums]);
+            acc[k] = vec_add_32(acc[k], acc[k + 2 * NumAccums]);
+            acc[k] = vec_add_32(acc[k], acc[k + 3 * NumAccums]);
+            acc[k] = vec_add_32(acc[k], acc[k + 4 * NumAccums]);
+            acc[k] = vec_add_32(acc[k], acc[k + 5 * NumAccums]);
+        }
+        // Unrolled tail: after 6-way processing, 0-5 elements remain
+        {
+            const auto remaining = end - start;
+            if (remaining >= 1)
+            {
+                const std::ptrdiff_t i0  = start[0];
+                const invec_t        in0 = vec_set_32(input32[i0]);
+                const auto           col0 =
+                  reinterpret_cast<const invec_t*>(&weights_cp[i0 * OutputDimensions * ChunkSize]);
+                for (IndexType k = 0; k < NumAccums; ++k)
+                    vec_add_dpbusd_32(acc[k], in0, col0[k]);
+            }
+            if (remaining >= 2)
+            {
+                const std::ptrdiff_t i1  = start[1];
+                const invec_t        in1 = vec_set_32(input32[i1]);
+                const auto           col1 =
+                  reinterpret_cast<const invec_t*>(&weights_cp[i1 * OutputDimensions * ChunkSize]);
+                for (IndexType k = 0; k < NumAccums; ++k)
+                    vec_add_dpbusd_32(acc[k], in1, col1[k]);
+            }
+            if (remaining >= 3)
+            {
+                const std::ptrdiff_t i2  = start[2];
+                const invec_t        in2 = vec_set_32(input32[i2]);
+                const auto           col2 =
+                  reinterpret_cast<const invec_t*>(&weights_cp[i2 * OutputDimensions * ChunkSize]);
+                for (IndexType k = 0; k < NumAccums; ++k)
+                    vec_add_dpbusd_32(acc[k], in2, col2[k]);
+            }
+            if (remaining >= 4)
+            {
+                const std::ptrdiff_t i3  = start[3];
+                const invec_t        in3 = vec_set_32(input32[i3]);
+                const auto           col3 =
+                  reinterpret_cast<const invec_t*>(&weights_cp[i3 * OutputDimensions * ChunkSize]);
+                for (IndexType k = 0; k < NumAccums; ++k)
+                    vec_add_dpbusd_32(acc[k], in3, col3[k]);
+            }
+            if (remaining >= 5)
+            {
+                const std::ptrdiff_t i4  = start[4];
+                const invec_t        in4 = vec_set_32(input32[i4]);
+                const auto           col4 =
+                  reinterpret_cast<const invec_t*>(&weights_cp[i4 * OutputDimensions * ChunkSize]);
+                for (IndexType k = 0; k < NumAccums; ++k)
+                    vec_add_dpbusd_32(acc[k], in4, col4[k]);
+            }
+        }
+    #elif defined(USE_VNNI)
+        // AVX2-VNNI: 3-way unroll (16 YMM registers)
         for (IndexType k = NumAccums; k < NumRegs; ++k)
             acc[k] = vec_zero();
 
@@ -335,7 +438,30 @@ class AffineTransformSparseInput {
         }
         for (IndexType k = 0; k < NumAccums; ++k)
             acc[k] = vec_add_32(vec_add_32(acc[k], acc[k + NumAccums]), acc[k + 2 * NumAccums]);
-    #endif
+
+        // Unrolled tail: after 3-way processing, 0-2 elements remain
+        {
+            const auto remaining = end - start;
+            if (remaining >= 1)
+            {
+                const std::ptrdiff_t i0  = start[0];
+                const invec_t        in0 = vec_set_32(input32[i0]);
+                const auto           col0 =
+                  reinterpret_cast<const invec_t*>(&weights_cp[i0 * OutputDimensions * ChunkSize]);
+                for (IndexType k = 0; k < NumAccums; ++k)
+                    vec_add_dpbusd_32(acc[k], in0, col0[k]);
+            }
+            if (remaining >= 2)
+            {
+                const std::ptrdiff_t i1  = start[1];
+                const invec_t        in1 = vec_set_32(input32[i1]);
+                const auto           col1 =
+                  reinterpret_cast<const invec_t*>(&weights_cp[i1 * OutputDimensions * ChunkSize]);
+                for (IndexType k = 0; k < NumAccums; ++k)
+                    vec_add_dpbusd_32(acc[k], in1, col1[k]);
+            }
+        }
+    #else
         while (start < end)
         {
             const std::ptrdiff_t i  = *start++;
@@ -345,6 +471,7 @@ class AffineTransformSparseInput {
             for (IndexType k = 0; k < NumAccums; ++k)
                 vec_add_dpbusd_32(acc[k], in, col[k]);
         }
+    #endif
 
         outvec_t* outptr = reinterpret_cast<outvec_t*>(output);
         for (IndexType k = 0; k < NumAccums; ++k)
