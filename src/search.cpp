@@ -81,14 +81,24 @@ int correction_value(const Worker& w, const Position& pos, const Stack* const ss
     const Color us     = pos.side_to_move();
     const auto  m      = (ss - 1)->currentMove;
     const auto& shared = w.sharedHistory;
-    const int   pcv    = shared.pawn_correction_entry(pos).at(us).pawn;
-    const int   micv   = shared.minor_piece_correction_entry(pos).at(us).minor;
-    const int   wnpcv  = shared.nonpawn_correction_entry<WHITE>(pos).at(us).nonPawnWhite;
-    const int   bnpcv  = shared.nonpawn_correction_entry<BLACK>(pos).at(us).nonPawnBlack;
-    const int   cntcv =
+
+    // Prefetch continuation correction entries early to overlap with other lookups
+    if (m.is_ok())
+    {
+        const auto pc = pos.piece_on(m.to_sq());
+        const auto sq = m.to_sq();
+        prefetch(&(*(ss - 2)->continuationCorrectionHistory)[pc][sq]);
+        prefetch(&(*(ss - 4)->continuationCorrectionHistory)[pc][sq]);
+    }
+
+    const int pcv   = shared.pawn_correction_entry(pos).at(us).pawn;
+    const int micv  = shared.minor_piece_correction_entry(pos).at(us).minor;
+    const int wnpcv = shared.nonpawn_correction_entry<WHITE>(pos).at(us).nonPawnWhite;
+    const int bnpcv = shared.nonpawn_correction_entry<BLACK>(pos).at(us).nonPawnBlack;
+    const int cntcv =
       m.is_ok() ? (*(ss - 2)->continuationCorrectionHistory)[pos.piece_on(m.to_sq())][m.to_sq()]
                     + (*(ss - 4)->continuationCorrectionHistory)[pos.piece_on(m.to_sq())][m.to_sq()]
-                  : 8;
+                : 8;
 
     return 10347 * pcv + 8821 * micv + 11665 * (wnpcv + bnpcv) + 7841 * cntcv;
 }
