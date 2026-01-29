@@ -114,13 +114,14 @@ void update_correction_history(const Position& pos,
     shared.nonpawn_correction_entry<WHITE>(pos).at(us).nonPawnWhite << bonus * nonPawnWeight / 128;
     shared.nonpawn_correction_entry<BLACK>(pos).at(us).nonPawnBlack << bonus * nonPawnWeight / 128;
 
-    if (m.is_ok())
-    {
-        const Square to = m.to_sq();
-        const Piece  pc = pos.piece_on(m.to_sq());
-        (*(ss - 2)->continuationCorrectionHistory)[pc][to] << bonus * 127 / 128;
-        (*(ss - 4)->continuationCorrectionHistory)[pc][to] << bonus * 59 / 128;
-    }
+    // Branchless: multiply bonus by mask (0 or 1) to zero it when move is not ok
+    const int    mask   = int(m.is_ok());
+    const Square to     = m.to_sq();
+    const Piece  pc     = pos.piece_on(to);
+    const int    bonus2 = (bonus * 127 / 128) * mask;
+    const int    bonus4 = (bonus * 59 / 128) * mask;
+    (*(ss - 2)->continuationCorrectionHistory)[pc][to] << bonus2;
+    (*(ss - 4)->continuationCorrectionHistory)[pc][to] << bonus4;
 }
 
 // Add a small random component to draw evaluations to avoid 3-fold blindness
@@ -1196,36 +1197,25 @@ moves_loop:  // When in check, search starts here
         r -= moveCount * 73;
         r -= std::abs(correctionValue) / 30370;
 
-        // Increase reduction for cut nodes
-        if (cutNode)
-            r += 3372 + 997 * !ttData.move;
+        // Branchless reduction adjustments
+        r += cutNode * (3372 + 997 * !ttData.move);
+        r += ttCapture * 1119;
+        r += ((ss + 1)->cutoffCnt > 1) * (256 + 1024 * ((ss + 1)->cutoffCnt > 2) + 1024 * allNode);
+        r -= (move == ttData.move) * 2151;
 
-        // Increase reduction if ttMove is a capture
-        if (ttCapture)
-            r += 1119;
-
-        // Increase reduction if next ply has a lot of fail high
-        if ((ss + 1)->cutoffCnt > 1)
-            r += 256 + 1024 * ((ss + 1)->cutoffCnt > 2) + 1024 * allNode;
-
-        // For first picked move (ttMove) reduce reduction
-        if (move == ttData.move)
-            r -= 2151;
-
-        if (capture)
-            ss->statScore = 868 * int(PieceValue[pos.captured_piece()]) / 128
-                          + captureHistory[movedPiece][move.to_sq()][type_of(pos.captured_piece())];
-        else
-            ss->statScore = 2 * mainHistory[us][move.raw()]
-                          + (*contHist[0])[movedPiece][move.to_sq()]
-                          + (*contHist[1])[movedPiece][move.to_sq()];
+        // Branchless statScore: compute both and select via arithmetic blend
+        const Square toSq         = move.to_sq();
+        const int    captureScore = 868 * int(PieceValue[pos.captured_piece()]) / 128
+                               + captureHistory[movedPiece][toSq][type_of(pos.captured_piece())];
+        const int quietScore = 2 * mainHistory[us][move.raw()] + (*contHist[0])[movedPiece][toSq]
+                             + (*contHist[1])[movedPiece][toSq];
+        ss->statScore = quietScore + capture * (captureScore - quietScore);
 
         // Decrease/increase reduction for moves with a good/bad history
         r -= ss->statScore * 850 / 8192;
 
-        // Scale up reductions for expected ALL nodes
-        if (allNode)
-            r += r / (depth + 1);
+        // Scale up reductions for expected ALL nodes (branchless)
+        r += allNode * (r / (depth + 1));
 
         // Step 17. Late moves reduction / extension (LMR)
         if (depth >= 2 && moveCount > 1)
@@ -1873,19 +1863,33 @@ void update_all_stats(const Position& pos,
 
 // Updates histories of the move pairs formed by moves
 // at ply -1, -2, -3, -4, and -6 with current move.
+// Fully unrolled branchless implementation - eliminates loop, early break, and move validity branches
 void update_continuation_histories(Stack* ss, Piece pc, Square to, int bonus) {
-    static std::array<ConthistBonus, 6> conthist_bonuses = {
-      {{1, 1133}, {2, 683}, {3, 312}, {4, 582}, {5, 149}, {6, 474}}};
+    // Precompute all weighted bonuses (only i=1 gets +88 extra, since i<2 means i==1)
+    const int b1 = (bonus * 1133 / 1024) + 88;
+    const int b2 = bonus * 683 / 1024;
+    const int b3 = bonus * 312 / 1024;
+    const int b4 = bonus * 582 / 1024;
+    const int b5 = bonus * 149 / 1024;
+    const int b6 = bonus * 474 / 1024;
 
-    for (const auto [i, weight] : conthist_bonuses)
-    {
-        // Only update the first 2 continuation histories if we are in check
-        if (ss->inCheck && i > 2)
-            break;
+    // Compute validity masks: move must be ok, and for i>2 must not be in check
+    // notInCheck is 1 when not in check, 0 when in check (gates entries 3-6)
+    const int notInCheck = 1 - int(ss->inCheck);
+    const int m1         = int(((ss - 1)->currentMove).is_ok());
+    const int m2         = int(((ss - 2)->currentMove).is_ok());
+    const int m3         = notInCheck * int(((ss - 3)->currentMove).is_ok());
+    const int m4         = notInCheck * int(((ss - 4)->currentMove).is_ok());
+    const int m5         = notInCheck * int(((ss - 5)->currentMove).is_ok());
+    const int m6         = notInCheck * int(((ss - 6)->currentMove).is_ok());
 
-        if (((ss - i)->currentMove).is_ok())
-            (*(ss - i)->continuationHistory)[pc][to] << (bonus * weight / 1024) + 88 * (i < 2);
-    }
+    // Apply masked bonuses - zero bonus is a no-op for the history update
+    (*(ss - 1)->continuationHistory)[pc][to] << (b1 * m1);
+    (*(ss - 2)->continuationHistory)[pc][to] << (b2 * m2);
+    (*(ss - 3)->continuationHistory)[pc][to] << (b3 * m3);
+    (*(ss - 4)->continuationHistory)[pc][to] << (b4 * m4);
+    (*(ss - 5)->continuationHistory)[pc][to] << (b5 * m5);
+    (*(ss - 6)->continuationHistory)[pc][to] << (b6 * m6);
 }
 
 // Updates move sorting heuristics
@@ -1893,16 +1897,21 @@ void update_continuation_histories(Stack* ss, Piece pc, Square to, int bonus) {
 void update_quiet_histories(
   const Position& pos, Stack* ss, Search::Worker& workerThread, Move move, int bonus) {
 
-    Color us = pos.side_to_move();
+    Color        us = pos.side_to_move();
+    const Piece  pc = pos.moved_piece(move);
+    const Square to = move.to_sq();
+
     workerThread.mainHistory[us][move.raw()] << bonus;  // Untuned to prevent duplicate effort
 
     if (ss->ply < LOW_PLY_HISTORY_SIZE)
         workerThread.lowPlyHistory[ss->ply][move.raw()] << bonus * 805 / 1024;
 
-    update_continuation_histories(ss, pos.moved_piece(move), move.to_sq(), bonus * 896 / 1024);
+    update_continuation_histories(ss, pc, to, bonus * 896 / 1024);
 
-    workerThread.sharedHistory.pawn_entry(pos)[pos.moved_piece(move)][move.to_sq()]
-      << bonus * (bonus > 0 ? 905 : 505) / 1024;
+    // Branchless pawn history weight selection: 905 if bonus>0, else 505
+    // (905 - 505) = 400, so weight = 505 + 400*(bonus>0)
+    const int pawnWeight = 505 + 400 * int(bonus > 0);
+    workerThread.sharedHistory.pawn_entry(pos)[pc][to] << bonus * pawnWeight / 1024;
 }
 
 }

@@ -181,10 +181,11 @@ ExtMove* MovePicker::score(MoveList<Type>& ml) {
 
         else  // Type == EVASIONS
         {
-            if (pos.capture_stage(m))
-                m.value = PieceValue[capturedPiece] + (1 << 28);
-            else
-                m.value = (*mainHistory)[us][m.raw()] + (*continuationHistory[0])[pc][to];
+            // Branchless: compute both values and blend based on capture flag
+            const int isCapture    = pos.capture_stage(m);
+            const int captureValue = PieceValue[capturedPiece] + (1 << 28);
+            const int quietValue = (*mainHistory)[us][m.raw()] + (*continuationHistory[0])[pc][to];
+            m.value              = quietValue + isCapture * (captureValue - quietValue);
         }
     }
     return it;
