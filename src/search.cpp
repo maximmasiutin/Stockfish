@@ -1212,13 +1212,13 @@ moves_loop:  // When in check, search starts here
         if (move == ttData.move)
             r -= 2151;
 
-        if (capture)
-            ss->statScore = 868 * int(PieceValue[pos.captured_piece()]) / 128
-                          + captureHistory[movedPiece][move.to_sq()][type_of(pos.captured_piece())];
-        else
-            ss->statScore = 2 * mainHistory[us][move.raw()]
-                          + (*contHist[0])[movedPiece][move.to_sq()]
-                          + (*contHist[1])[movedPiece][move.to_sq()];
+        // Branchless statScore: compute both and select via ternary (CMOV)
+        int captureScore = 868 * int(PieceValue[pos.captured_piece()]) / 128
+                         + captureHistory[movedPiece][move.to_sq()][type_of(pos.captured_piece())];
+        int quietScore = 2 * mainHistory[us][move.raw()]
+                       + (*contHist[0])[movedPiece][move.to_sq()]
+                       + (*contHist[1])[movedPiece][move.to_sq()];
+        ss->statScore = capture ? captureScore : quietScore;
 
         // Decrease/increase reduction for moves with a good/bad history
         r -= ss->statScore * 850 / 8192;
