@@ -281,6 +281,104 @@ void FullThreats::append_changed_indices(Color            perspective,
                                          FusedUpdateData* fusedData,
                                          bool             first) {
 
+#ifdef USE_AVX512
+    if (!fusedData)
+    {
+        const int count = diff.list.ssize();
+        if (count == 0)
+            return;
+
+        // Precompute constants (same for all entries in this call)
+        const std::int8_t orientation = OrientTBL[ksq] ^ (56 * perspective);
+        const std::int8_t swap_val    = 8 * perspective;
+
+        const __m512i zmm_orient   = _mm512_set1_epi32(orientation);
+        const __m512i zmm_swap     = _mm512_set1_epi32(swap_val);
+        const __m512i zmm_dim      = _mm512_set1_epi32(Dimensions);
+        const __m512i zmm_0xff     = _mm512_set1_epi32(0xFF);
+        const __m512i zmm_0xf      = _mm512_set1_epi32(0xF);
+        const __m512i zmm_one      = _mm512_set1_epi32(1);
+        const __m512i zmm_sign_bit = _mm512_set1_epi32(int(0x80000000u));
+
+        const auto* raw_ptr   = reinterpret_cast<const int32_t*>(diff.list.begin());
+        const auto* lut1_base = reinterpret_cast<const int32_t*>(&index_lut1);
+        const auto* off_base  = reinterpret_cast<const int32_t*>(&offsets);
+        const auto* lut2_base = reinterpret_cast<const int8_t*>(&index_lut2);
+
+        for (int i = 0; i < count; i += 16)
+        {
+            const int       batch    = (count - i < 16) ? count - i : 16;
+            const __mmask16 k_active = (__mmask16) ((1u << batch) - 1);
+
+            // Load 16 packed DirtyThreat entries (zeroed beyond count)
+            __m512i zmm_raw = _mm512_maskz_loadu_epi32(k_active, raw_ptr + i);
+
+            // Extract fields: from[7:0], to[15:8], attacked[19:16], attacker[23:20]
+            __m512i zmm_from     = _mm512_and_epi32(zmm_raw, zmm_0xff);
+            __m512i zmm_to       = _mm512_and_epi32(_mm512_srli_epi32(zmm_raw, 8), zmm_0xff);
+            __m512i zmm_attacked = _mm512_and_epi32(_mm512_srli_epi32(zmm_raw, 16), zmm_0xf);
+            __m512i zmm_attacker = _mm512_and_epi32(_mm512_srli_epi32(zmm_raw, 20), zmm_0xf);
+
+            // Orient squares and pieces
+            __m512i zmm_from_o = _mm512_xor_epi32(zmm_from, zmm_orient);
+            __m512i zmm_to_o   = _mm512_xor_epi32(zmm_to, zmm_orient);
+            __m512i zmm_atk_o  = _mm512_xor_epi32(zmm_attacker, zmm_swap);
+            __m512i zmm_atkd_o = _mm512_xor_epi32(zmm_attacked, zmm_swap);
+
+            // from_oriented < to_oriented -> 0 or 1
+            __mmask16 k_cmp   = _mm512_cmplt_epu32_mask(zmm_from_o, zmm_to_o);
+            __m512i   zmm_cmp = _mm512_maskz_mov_epi32(k_cmp, zmm_one);
+
+            // Gather index_lut1[AO][atkd_o][cmp]: flat = AO*32 + atkd_o*2 + cmp
+            __m512i zmm_idx1 = _mm512_add_epi32(
+              _mm512_add_epi32(_mm512_slli_epi32(zmm_atk_o, 5), _mm512_slli_epi32(zmm_atkd_o, 1)),
+              zmm_cmp);
+            __m512i zmm_lut1 = _mm512_i32gather_epi32(zmm_idx1, lut1_base, 4);
+
+            // Gather offsets[AO][from_o]: flat = AO*64 + from_o
+            __m512i zmm_idx_off = _mm512_add_epi32(_mm512_slli_epi32(zmm_atk_o, 6), zmm_from_o);
+            __m512i zmm_off     = _mm512_i32gather_epi32(zmm_idx_off, off_base, 4);
+
+            // Gather index_lut2[AO][from_o][to_o]: flat = AO*4096 + from_o*64 + to_o
+            __m512i zmm_idx2 = _mm512_add_epi32(
+              _mm512_add_epi32(_mm512_slli_epi32(zmm_atk_o, 12), _mm512_slli_epi32(zmm_from_o, 6)),
+              zmm_to_o);
+            __m512i zmm_lut2 =
+              _mm512_and_epi32(_mm512_i32gather_epi32(zmm_idx2, lut2_base, 1), zmm_0xff);
+
+            // Sum the three components
+            __m512i zmm_result = _mm512_add_epi32(_mm512_add_epi32(zmm_lut1, zmm_off), zmm_lut2);
+
+            // Filter: index < Dimensions, only within active lanes
+            __mmask16 k_valid = _mm512_mask_cmplt_epu32_mask(k_active, zmm_result, zmm_dim);
+
+            // Split by add flag (bit 31 of raw DirtyThreat)
+            __mmask16 k_is_add    = _mm512_test_epi32_mask(zmm_raw, zmm_sign_bit);
+            __mmask16 k_valid_add = k_valid & k_is_add;
+            __mmask16 k_valid_rem = k_valid & ~k_is_add;
+
+            // Compress-store valid adds
+            int n_add = popcount(Bitboard(k_valid_add));
+            if (n_add)
+            {
+                auto* ptr = added.make_space(n_add);
+                _mm512_storeu_si512(reinterpret_cast<__m512i*>(ptr),
+                                    _mm512_maskz_compress_epi32(k_valid_add, zmm_result));
+            }
+
+            // Compress-store valid removes
+            int n_rem = popcount(Bitboard(k_valid_rem));
+            if (n_rem)
+            {
+                auto* ptr = removed.make_space(n_rem);
+                _mm512_storeu_si512(reinterpret_cast<__m512i*>(ptr),
+                                    _mm512_maskz_compress_epi32(k_valid_rem, zmm_result));
+            }
+        }
+        return;
+    }
+#endif
+
     for (const auto& dirty : diff.list)
     {
         auto attacker = dirty.pc();
