@@ -1212,7 +1212,12 @@ moves_loop:  // When in check, search starts here
         if (move == ttData.move)
             r -= 2151;
 
-        if (capture)
+        if
+#if defined(__GNUC__)
+            (__builtin_expect(capture, 0))
+#else
+            (capture)
+#endif
             ss->statScore = 868 * int(PieceValue[pos.captured_piece()]) / 128
                           + captureHistory[movedPiece][move.to_sq()][type_of(pos.captured_piece())];
         else
