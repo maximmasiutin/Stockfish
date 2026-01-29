@@ -236,6 +236,14 @@ class AffineTransform {
                 const auto  col0 =
                   reinterpret_cast<const vec_t*>(&weights[i * OutputDimensions * 4]);
 
+    #if defined(USE_AVX512)
+                // Prefetch next iteration's weights
+                if (i + 1 < NumChunks)
+                    _mm_prefetch(
+                      reinterpret_cast<const char*>(&weights[(i + 1) * OutputDimensions * 4]),
+                      _MM_HINT_T0);
+    #endif
+
                 for (IndexType k = 0; k < NumRegs; ++k)
                     vec_add_dpbusd_32(acc[k], in0, col0[k]);
             }
