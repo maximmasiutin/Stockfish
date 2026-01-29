@@ -1070,15 +1070,15 @@ inline void add_dirty_threat(
 
 #ifdef USE_AVX512ICL
 // Given a DirtyThreat template and bit offsets to insert the piece type and square, write the threats
-// present at the given bitboard.
+// present at the given bitboard. The board register is preloaded to avoid redundant loads
+// when this function is called multiple times in update_piece_threats.
 template<int SqShift, int PcShift>
-void write_multiple_dirties(const Position& p,
+void write_multiple_dirties(__m512i         board,
                             Bitboard        mask,
                             DirtyThreat     dt_template,
                             DirtyThreats*   dts) {
     static_assert(sizeof(DirtyThreat) == 4);
 
-    const __m512i board      = _mm512_loadu_si512(p.piece_array().data());
     const __m512i AllSquares = _mm512_set_epi8(
       63, 62, 61, 60, 59, 58, 57, 56, 55, 54, 53, 52, 51, 50, 49, 48, 47, 46, 45, 44, 43, 42, 41,
       40, 39, 38, 37, 36, 35, 34, 33, 32, 31, 30, 29, 28, 27, 26, 25, 24, 23, 22, 21, 20, 19, 18,
@@ -1131,6 +1131,9 @@ void Position::update_piece_threats(Piece                     pc,
       | (attacks_bb<PAWN>(s, BLACK) & whitePawns) | (PseudoAttacks[KING][s] & kings);
 
 #ifdef USE_AVX512ICL
+    // Hoist board load: load piece array once for both write_multiple_dirties calls
+    const __m512i board = _mm512_loadu_si512(piece_array().data());
+
     if (threatened)
     {
         if constexpr (PutPiece)
@@ -1141,7 +1144,7 @@ void Position::update_piece_threats(Piece                     pc,
 
         DirtyThreat dt_template{pc, NO_PIECE, s, Square(0), PutPiece};
         write_multiple_dirties<DirtyThreat::ThreatenedSqOffset, DirtyThreat::ThreatenedPcOffset>(
-          *this, threatened, dt_template, dts);
+          board, threatened, dt_template, dts);
     }
 
     Bitboard all_attackers = sliders | incoming_threats;
@@ -1155,7 +1158,7 @@ void Position::update_piece_threats(Piece                     pc,
     }
 
     DirtyThreat dt_template{NO_PIECE, pc, Square(0), s, PutPiece};
-    write_multiple_dirties<DirtyThreat::PcSqOffset, DirtyThreat::PcOffset>(*this, all_attackers,
+    write_multiple_dirties<DirtyThreat::PcSqOffset, DirtyThreat::PcOffset>(board, all_attackers,
                                                                            dt_template, dts);
 #else
     while (threatened)
