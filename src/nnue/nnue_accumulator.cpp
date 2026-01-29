@@ -18,6 +18,7 @@
 
 #include "nnue_accumulator.h"
 
+#include <algorithm>
 #include <cassert>
 #include <cstdint>
 #include <new>
@@ -362,6 +363,12 @@ struct AccumulatorUpdateContext {
 
         const auto* threatWeights = &featureTransformer.threatWeights[0];
 
+        // Prefetch first few weight rows before entering tile loop
+        for (int i = 0; i < std::min(removed.ssize(), 4); ++i)
+            prefetch(&featureTransformer.threatWeights[Dimensions * removed[i]]);
+        for (int i = 0; i < std::min(added.ssize(), 4); ++i)
+            prefetch(&featureTransformer.threatWeights[Dimensions * added[i]]);
+
         for (IndexType j = 0; j < Dimensions / Tiling::TileHeight; ++j)
         {
             auto* fromTile = reinterpret_cast<const vec_t*>(&fromAcc[j * Tiling::TileHeight]);
@@ -375,6 +382,12 @@ struct AccumulatorUpdateContext {
                 size_t       index  = removed[i];
                 const size_t offset = Dimensions * index;
                 auto*        column = reinterpret_cast<const vec_i8_t*>(&threatWeights[offset]);
+
+                // Prefetch weight row 2 entries ahead for latency hiding
+                if (i + 2 < removed.ssize())
+                    prefetch(&threatWeights[Dimensions * removed[i + 2]]);
+                else if (i + 2 - removed.ssize() < added.ssize())
+                    prefetch(&threatWeights[Dimensions * added[i + 2 - removed.ssize()]]);
 
     #ifdef USE_NEON
                 for (IndexType k = 0; k < Tiling::NumRegs; k += 2)
@@ -393,6 +406,10 @@ struct AccumulatorUpdateContext {
                 size_t       index  = added[i];
                 const size_t offset = Dimensions * index;
                 auto*        column = reinterpret_cast<const vec_i8_t*>(&threatWeights[offset]);
+
+                // Prefetch weight row 2 entries ahead
+                if (i + 2 < added.ssize())
+                    prefetch(&threatWeights[Dimensions * added[i + 2]]);
 
     #ifdef USE_NEON
                 for (IndexType k = 0; k < Tiling::NumRegs; k += 2)
