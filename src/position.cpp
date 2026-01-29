@@ -1131,6 +1131,17 @@ void Position::update_piece_threats(Piece                     pc,
       | (attacks_bb<PAWN>(s, BLACK) & whitePawns) | (PseudoAttacks[KING][s] & kings);
 
 #ifdef USE_AVX512ICL
+    // Pre-filter threatened mask: remove piece types that pc cannot threaten
+    // PAWN cannot threaten BISHOP, QUEEN, KING; BISHOP/ROOK cannot threaten QUEEN
+    // KING cannot threaten QUEEN, KING
+    const PieceType pt = type_of(pc);
+    if (pt == PAWN)
+        threatened &= ~(bishopQueens | kings);
+    else if (pt == BISHOP || pt == ROOK)
+        threatened &= ~pieces(QUEEN);
+    else if (pt == KING)
+        threatened &= ~(pieces(QUEEN) | kings);
+
     if (threatened)
     {
         if constexpr (PutPiece)
@@ -1144,7 +1155,19 @@ void Position::update_piece_threats(Piece                     pc,
           *this, threatened, dt_template, dts);
     }
 
-    Bitboard all_attackers = sliders | incoming_threats;
+    // Pre-filter incoming attackers: remove pieces that cannot threaten pc
+    // PAWN cannot threaten BISHOP, QUEEN, KING
+    // BISHOP/ROOK cannot threaten QUEEN; KING cannot threaten QUEEN, KING
+    Bitboard filteredIncoming = incoming_threats;
+    Bitboard filteredSliders  = sliders;
+    if (pt == BISHOP || pt == QUEEN || pt == KING)
+        filteredIncoming &= ~(whitePawns | blackPawns);  // Pawns can't threaten these
+    if (pt == QUEEN)
+        filteredSliders &= pieces(QUEEN);  // Only queens can threaten queen (not B/R)
+    if (pt == KING)
+        filteredIncoming &= ~kings;  // Kings can't threaten king
+
+    Bitboard all_attackers = filteredSliders | filteredIncoming;
     if (!all_attackers)
         return;  // Square s is threatened iff there's at least one attacker
 
