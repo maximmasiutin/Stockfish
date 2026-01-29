@@ -1877,11 +1877,12 @@ void update_continuation_histories(Stack* ss, Piece pc, Square to, int bonus) {
     static std::array<ConthistBonus, 6> conthist_bonuses = {
       {{1, 1133}, {2, 683}, {3, 312}, {4, 582}, {5, 149}, {6, 474}}};
 
-    for (const auto [i, weight] : conthist_bonuses)
+    // Pre-compute loop limit: only first 2 entries if in check, all 6 otherwise
+    const size_t limit = ss->inCheck ? 2 : conthist_bonuses.size();
+
+    for (size_t idx = 0; idx < limit; ++idx)
     {
-        // Only update the first 2 continuation histories if we are in check
-        if (ss->inCheck && i > 2)
-            break;
+        const auto [i, weight] = conthist_bonuses[idx];
 
         if (((ss - i)->currentMove).is_ok())
             (*(ss - i)->continuationHistory)[pc][to] << (bonus * weight / 1024) + 88 * (i < 2);
