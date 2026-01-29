@@ -25,6 +25,10 @@
 #include <initializer_list>
 #include <utility>
 
+#ifdef USE_AVX512
+    #include <immintrin.h>
+#endif
+
 #include "../../bitboard.h"
 #include "../../misc.h"
 #include "../../position.h"
@@ -185,7 +189,15 @@ constexpr auto init_index_luts() {
 // [attacker][attacked][from < to]
 constexpr auto index_lut1 = init_index_luts();
 // [attacker][from][to]
-constexpr auto index_lut2 = index_lut2_array();
+// Padded struct: i32gather reads 4 bytes per lane at byte offsets, so the last
+// element (offset 65535) reads 3 bytes past the 65536-byte array end.
+struct IndexLut2Padded {
+    std::array<std::array<std::array<uint8_t, SQUARE_NB>, SQUARE_NB>, PIECE_NB> lut;
+    uint8_t                                                                     _pad[4]{};
+
+    constexpr const auto& operator[](std::size_t i) const { return lut[i]; }
+};
+constexpr IndexLut2Padded index_lut2 = {index_lut2_array()};
 
 // Index of a feature for a given king position and another piece on some square
 inline sf_always_inline IndexType FullThreats::make_index(
@@ -280,6 +292,105 @@ void FullThreats::append_changed_indices(Color            perspective,
                                          IndexList&       added,
                                          FusedUpdateData* fusedData,
                                          bool             first) {
+
+#ifdef USE_AVX512
+    if (!fusedData)
+    {
+        const std::int8_t orientation = OrientTBL[ksq] ^ (56 * perspective);
+        const std::int8_t swap        = 8 * perspective;
+        const int         n           = diff.list.ssize();
+
+        const __m512i orient_v = _mm512_set1_epi32(orientation);
+        const __m512i swap_v   = _mm512_set1_epi32(swap);
+        const __m512i dim_v    = _mm512_set1_epi32(Dimensions);
+        const __m512i mask8    = _mm512_set1_epi32(0xFF);
+        const __m512i mask4    = _mm512_set1_epi32(0xF);
+        const __m512i bit31_v  = _mm512_set1_epi32(1u << 31);
+        const __m512i ones     = _mm512_set1_epi32(1);
+
+        const void* lut1_base = &index_lut1[0][0][0];
+        const void* lut2_base = &index_lut2.lut[0][0][0];
+        const void* off_base  = &offsets[0][0];
+
+        int i = 0;
+        for (; i + 16 <= n; i += 16)
+        {
+            // Load 16 DirtyThreat raw uint32 values
+            __m512i raw = _mm512_loadu_si512(diff.list.begin() + i);
+
+            // Extract fields: from(0:7), to(8:15), attacked(16:19), attacker(20:23)
+            __m512i from     = _mm512_and_si512(raw, mask8);
+            __m512i to       = _mm512_and_si512(_mm512_srli_epi32(raw, 8), mask8);
+            __m512i attacked = _mm512_and_si512(_mm512_srli_epi32(raw, 16), mask4);
+            __m512i attacker = _mm512_and_si512(_mm512_srli_epi32(raw, 20), mask4);
+
+            // Apply orientation and color swap
+            __m512i from_o     = _mm512_xor_si512(from, orient_v);
+            __m512i to_o       = _mm512_xor_si512(to, orient_v);
+            __m512i attacker_o = _mm512_xor_si512(attacker, swap_v);
+            __m512i attacked_o = _mm512_xor_si512(attacked, swap_v);
+
+            // lut1_idx = attacker_o*32 + attacked_o*2 + (from_o < to_o)
+            __mmask16 cmp_lt = _mm512_cmplt_epu32_mask(from_o, to_o);
+            __m512i   lut1_idx =
+              _mm512_add_epi32(_mm512_slli_epi32(attacker_o, 5), _mm512_slli_epi32(attacked_o, 1));
+            lut1_idx = _mm512_mask_add_epi32(lut1_idx, cmp_lt, lut1_idx, ones);
+
+            // off_idx = attacker_o*64 + from_o
+            __m512i off_idx = _mm512_add_epi32(_mm512_slli_epi32(attacker_o, 6), from_o);
+
+            // lut2_idx = attacker_o*4096 + from_o*64 + to_o
+            __m512i lut2_idx = _mm512_add_epi32(
+              _mm512_add_epi32(_mm512_slli_epi32(attacker_o, 12), _mm512_slli_epi32(from_o, 6)),
+              to_o);
+
+            // Gather from 3 LUTs (independent, can pipeline)
+            __m512i g1 = _mm512_i32gather_epi32(lut1_idx, lut1_base, 4);
+            __m512i g2 = _mm512_i32gather_epi32(off_idx, off_base, 4);
+            __m512i g3 = _mm512_i32gather_epi32(lut2_idx, lut2_base, 1);
+            g3         = _mm512_and_si512(g3, mask8);
+
+            // Final index = g1 + g2 + g3
+            __m512i result = _mm512_add_epi32(_mm512_add_epi32(g1, g2), g3);
+
+            // Valid entries: result < Dimensions
+            __mmask16 valid = _mm512_cmplt_epu32_mask(result, dim_v);
+
+            // Separate adds (bit 31 set) from removes
+            __mmask16 is_add    = _mm512_test_epi32_mask(raw, bit31_v);
+            __mmask16 add_valid = valid & is_add;
+            __mmask16 rem_valid = valid & ~is_add;
+
+            int add_count = _mm_popcnt_u32(add_valid);
+            if (add_count)
+            {
+                auto* dst = added.make_space(add_count);
+                _mm512_storeu_si512(dst, _mm512_maskz_compress_epi32(add_valid, result));
+            }
+
+            int rem_count = _mm_popcnt_u32(rem_valid);
+            if (rem_count)
+            {
+                auto* dst = removed.make_space(rem_count);
+                _mm512_storeu_si512(dst, _mm512_maskz_compress_epi32(rem_valid, result));
+            }
+        }
+
+        // Scalar tail for remaining < 16 entries
+        for (; i < n; i++)
+        {
+            const auto&     dirty  = diff.list[i];
+            auto&           insert = dirty.add() ? added : removed;
+            const IndexType idx    = make_index(perspective, dirty.pc(), dirty.pc_sq(),
+                                                dirty.threatened_sq(), dirty.threatened_pc(), ksq);
+
+            if (idx < Dimensions)
+                insert.push_back(idx);
+        }
+
+        return;
+    }
+#endif
 
     for (const auto& dirty : diff.list)
     {
