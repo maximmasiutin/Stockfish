@@ -18,6 +18,7 @@
 
 #include "nnue_accumulator.h"
 
+#include <algorithm>
 #include <cassert>
 #include <cstdint>
 #include <new>
@@ -555,6 +556,10 @@ void double_inc_update(Color                                                   p
     ThreatFeatureSet::append_changed_indices(perspective, ksq, target_state.diff, removed, added,
                                              &fusedData, false);
 
+    // Sort indices for sequential weight table access (improves cache locality)
+    std::sort(added.begin(), added.end());
+    std::sort(removed.begin(), removed.end());
+
     auto updateContext =
       make_accumulator_update_context(perspective, featureTransformer, computed, target_state);
 
@@ -585,6 +590,13 @@ void update_accumulator_incremental(
         FeatureSet::append_changed_indices(perspective, ksq, target_state.diff, removed, added);
     else
         FeatureSet::append_changed_indices(perspective, ksq, computed.diff, added, removed);
+
+    // Sort threat indices for sequential weight table access (improves cache locality)
+    if constexpr (std::is_same_v<FeatureSet, ThreatFeatureSet>)
+    {
+        std::sort(added.begin(), added.end());
+        std::sort(removed.begin(), removed.end());
+    }
 
     auto updateContext =
       make_accumulator_update_context(perspective, featureTransformer, computed, target_state);
