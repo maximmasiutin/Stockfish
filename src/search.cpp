@@ -1560,7 +1560,8 @@ Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta)
         bestValue = futilityBase = -VALUE_INFINITE;
     else
     {
-        const auto correctionValue = correction_value(*this, pos, ss);
+        const int correctionValue =
+          10347 * int(sharedHistory.pawn_correction_entry(pos).at(pos.side_to_move()).pawn);
 
         if (ss->ttHit)
         {
