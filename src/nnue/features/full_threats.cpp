@@ -329,25 +329,62 @@ void FullThreats::append_changed_indices(Color            perspective,
             __mmask16 k_cmp   = _mm512_cmplt_epu32_mask(zmm_from_o, zmm_to_o);
             __m512i   zmm_cmp = _mm512_maskz_mov_epi32(k_cmp, zmm_one);
 
-            // Gather index_lut1[AO][atkd_o][cmp]: flat = AO*32 + atkd_o*2 + cmp
-            __m512i zmm_idx1 = _mm512_add_epi32(
-              _mm512_add_epi32(_mm512_slli_epi32(zmm_atk_o, 5), _mm512_slli_epi32(zmm_atkd_o, 1)),
-              zmm_cmp);
-            __m512i zmm_lut1 = _mm512_i32gather_epi32(zmm_idx1, lut1_base, 4);
+            __m512i zmm_result;
 
-            // Gather offsets[AO][from_o]: flat = AO*64 + from_o
-            __m512i zmm_idx_off = _mm512_add_epi32(_mm512_slli_epi32(zmm_atk_o, 6), zmm_from_o);
-            __m512i zmm_off     = _mm512_i32gather_epi32(zmm_idx_off, off_base, 4);
+    #ifdef USE_AVX512ICL
+            // Check if all active entries share same attacker and from_sq.
+            // Outgoing threats from a single write_multiple_dirties call are
+            // contiguous and share these fields, enabling VPERMB/VPERMI2D.
+            const __m512i key_mask  = _mm512_set1_epi32(0x00F000FF);
+            __m512i       key       = _mm512_and_epi32(zmm_raw, key_mask);
+            __m512i       first_key = _mm512_broadcastd_epi32(_mm512_castsi512_si128(key));
+            __mmask16     k_same    = _mm512_mask_cmpeq_epi32_mask(k_active, key, first_key);
 
-            // Gather index_lut2[AO][from_o][to_o]: flat = AO*4096 + from_o*64 + to_o
-            __m512i zmm_idx2 = _mm512_add_epi32(
-              _mm512_add_epi32(_mm512_slli_epi32(zmm_atk_o, 12), _mm512_slli_epi32(zmm_from_o, 6)),
-              zmm_to_o);
-            __m512i zmm_lut2 =
-              _mm512_and_epi32(_mm512_i32gather_epi32(zmm_idx2, lut2_base, 1), zmm_0xff);
+            if (k_same == k_active)
+            {
+                // VPERMB/VPERMI2D path: all entries share same attacker + from_sq
+                unsigned atk_o  = _mm_cvtsi128_si32(_mm512_castsi512_si128(zmm_atk_o));
+                unsigned from_o = _mm_cvtsi128_si32(_mm512_castsi512_si128(zmm_from_o));
 
-            // Sum the three components
-            __m512i zmm_result = _mm512_add_epi32(_mm512_add_epi32(zmm_lut1, zmm_off), zmm_lut2);
+                // offsets[AO][from_o]: both indices constant, scalar broadcast
+                __m512i zmm_off = _mm512_set1_epi32(offsets[atk_o][from_o]);
+
+                // index_lut2[AO][from_o][*]: load 64-byte row, VPERMB by to_oriented
+                __m512i zmm_lut2_row = _mm512_loadu_si512(&index_lut2[atk_o][from_o][0]);
+                __m512i zmm_lut2 =
+                  _mm512_and_epi32(_mm512_permutexvar_epi8(zmm_to_o, zmm_lut2_row), zmm_0xff);
+
+                // index_lut1[AO][*][*]: 32 dwords for this attacker, VPERMI2D
+                const auto* lut1_row = reinterpret_cast<const __m512i*>(&index_lut1[atk_o][0][0]);
+                __m512i     zmm_lut1_lo = _mm512_loadu_si512(lut1_row);
+                __m512i     zmm_lut1_hi = _mm512_loadu_si512(lut1_row + 1);
+                __m512i     zmm_idx1 = _mm512_add_epi32(_mm512_slli_epi32(zmm_atkd_o, 1), zmm_cmp);
+                __m512i zmm_lut1 = _mm512_permutex2var_epi32(zmm_lut1_lo, zmm_idx1, zmm_lut1_hi);
+
+                zmm_result = _mm512_add_epi32(_mm512_add_epi32(zmm_lut1, zmm_off), zmm_lut2);
+            }
+            else
+    #endif
+            {
+                // Gather path for heterogeneous batches (mixed attacker/from_sq)
+                __m512i zmm_idx1 =
+                  _mm512_add_epi32(_mm512_add_epi32(_mm512_slli_epi32(zmm_atk_o, 5),
+                                                    _mm512_slli_epi32(zmm_atkd_o, 1)),
+                                   zmm_cmp);
+                __m512i zmm_lut1 = _mm512_i32gather_epi32(zmm_idx1, lut1_base, 4);
+
+                __m512i zmm_idx_off = _mm512_add_epi32(_mm512_slli_epi32(zmm_atk_o, 6), zmm_from_o);
+                __m512i zmm_off     = _mm512_i32gather_epi32(zmm_idx_off, off_base, 4);
+
+                __m512i zmm_idx2 =
+                  _mm512_add_epi32(_mm512_add_epi32(_mm512_slli_epi32(zmm_atk_o, 12),
+                                                    _mm512_slli_epi32(zmm_from_o, 6)),
+                                   zmm_to_o);
+                __m512i zmm_lut2 =
+                  _mm512_and_epi32(_mm512_i32gather_epi32(zmm_idx2, lut2_base, 1), zmm_0xff);
+
+                zmm_result = _mm512_add_epi32(_mm512_add_epi32(zmm_lut1, zmm_off), zmm_lut2);
+            }
 
             // Filter: index < Dimensions, only within active lanes
             __mmask16 k_valid = _mm512_mask_cmplt_epu32_mask(k_active, zmm_result, zmm_dim);
