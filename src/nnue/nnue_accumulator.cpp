@@ -360,7 +360,22 @@ struct AccumulatorUpdateContext {
         vec_t      acc[Tiling::NumRegs];
         psqt_vec_t psqt[Tiling::NumPsqtRegs];
 
-        const auto* threatWeights = &featureTransformer.threatWeights[0];
+        const auto* threatWeights     = &featureTransformer.threatWeights[0];
+        const auto* threatWeightsBase = threatWeights;
+
+        // Prefetch distance: 6 entries ahead gives ~192 cycles lead time
+        // (6 entries * ~32 cycles/entry), enough to cover most DRAM misses.
+        constexpr int PF = 6;
+
+        // Prefetch the first PF entries of both removed and added lists
+        // before entering the tiled loop. Only first cache line per row;
+        // hardware spatial prefetcher handles the remaining 15 lines.
+        for (int p = 0; p < std::min(PF, removed.ssize()); ++p)
+            __builtin_prefetch(&threatWeightsBase[Dimensions * static_cast<size_t>(removed[p])], 0,
+                               1);
+        for (int p = 0; p < std::min(PF - removed.ssize(), added.ssize()); ++p)
+            __builtin_prefetch(&threatWeightsBase[Dimensions * static_cast<size_t>(added[p])], 0,
+                               1);
 
         for (IndexType j = 0; j < Dimensions / Tiling::TileHeight; ++j)
         {
@@ -372,6 +387,17 @@ struct AccumulatorUpdateContext {
 
             for (int i = 0; i < removed.ssize(); ++i)
             {
+                // Prefetch entry i+PF ahead (may be in removed or added list)
+                int target = i + PF;
+                if (target < removed.ssize())
+                    __builtin_prefetch(
+                      &threatWeightsBase[Dimensions * static_cast<size_t>(removed[target])], 0, 1);
+                else if (target - removed.ssize() < added.ssize())
+                    __builtin_prefetch(
+                      &threatWeightsBase[Dimensions
+                                         * static_cast<size_t>(added[target - removed.ssize()])],
+                      0, 1);
+
                 size_t       index  = removed[i];
                 const size_t offset = Dimensions * index;
                 auto*        column = reinterpret_cast<const vec_i8_t*>(&threatWeights[offset]);
@@ -390,6 +416,14 @@ struct AccumulatorUpdateContext {
 
             for (int i = 0; i < added.ssize(); ++i)
             {
+                // Prefetch next added entries beyond what removed loop covered
+                int target = removed.ssize() + i + PF;
+                if (target - removed.ssize() < added.ssize() && target - removed.ssize() > i)
+                    __builtin_prefetch(
+                      &threatWeightsBase[Dimensions
+                                         * static_cast<size_t>(added[target - removed.ssize()])],
+                      0, 1);
+
                 size_t       index  = added[i];
                 const size_t offset = Dimensions * index;
                 auto*        column = reinterpret_cast<const vec_i8_t*>(&threatWeights[offset]);
@@ -550,10 +584,12 @@ void double_inc_update(Color                                                   p
     fusedData.dp2removed = dp2.remove_sq;
 
     ThreatFeatureSet::IndexList removed, added;
+    const auto*                 pfBase   = &featureTransformer.threatWeights[0];
+    auto                        pfStride = static_cast<IndexType>(TransformedFeatureDimensions);
     ThreatFeatureSet::append_changed_indices(perspective, ksq, middle_state.diff, removed, added,
-                                             &fusedData, true);
+                                             &fusedData, true, pfBase, pfStride);
     ThreatFeatureSet::append_changed_indices(perspective, ksq, target_state.diff, removed, added,
-                                             &fusedData, false);
+                                             &fusedData, false, pfBase, pfStride);
 
     auto updateContext =
       make_accumulator_update_context(perspective, featureTransformer, computed, target_state);
@@ -581,10 +617,24 @@ void update_accumulator_incremental(
     // In this case, the maximum size of both feature addition and removal
     // is 2, since we are incrementally updating one move at a time.
     typename FeatureSet::IndexList removed, added;
-    if constexpr (Forward)
-        FeatureSet::append_changed_indices(perspective, ksq, target_state.diff, removed, added);
+    if constexpr (std::is_same_v<FeatureSet, ThreatFeatureSet>)
+    {
+        const auto* pfBase   = &featureTransformer.threatWeights[0];
+        auto        pfStride = static_cast<IndexType>(TransformedFeatureDimensions);
+        if constexpr (Forward)
+            FeatureSet::append_changed_indices(perspective, ksq, target_state.diff, removed, added,
+                                               nullptr, false, pfBase, pfStride);
+        else
+            FeatureSet::append_changed_indices(perspective, ksq, computed.diff, added, removed,
+                                               nullptr, false, pfBase, pfStride);
+    }
     else
-        FeatureSet::append_changed_indices(perspective, ksq, computed.diff, added, removed);
+    {
+        if constexpr (Forward)
+            FeatureSet::append_changed_indices(perspective, ksq, target_state.diff, removed, added);
+        else
+            FeatureSet::append_changed_indices(perspective, ksq, computed.diff, added, removed);
+    }
 
     auto updateContext =
       make_accumulator_update_context(perspective, featureTransformer, computed, target_state);
