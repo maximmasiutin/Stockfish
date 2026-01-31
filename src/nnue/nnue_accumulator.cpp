@@ -147,7 +147,41 @@ void AccumulatorStack::evaluate(const Position&                       pos,
     evaluate_side<PSQFeatureSet>(WHITE, pos, featureTransformer, cache);
 
     if (UseThreats)
+    {
         evaluate_side<ThreatFeatureSet>(WHITE, pos, featureTransformer, cache);
+
+        // Cross-perspective prefetch: pre-compute BLACK's threat indices and
+        // prefetch weight rows. By the time BLACK's ThreatFeatureSet eval runs
+        // (~2000+ cycles later), the weight data is warm in cache.
+        {
+            const auto last_usable =
+              find_last_usable_accumulator<ThreatFeatureSet, Dimensions>(BLACK);
+            const auto& accums = accumulators<ThreatFeatureSet>();
+
+            // Only prefetch when BLACK needs a forward incremental update
+            // (most common case: last_usable has computed state, need to
+            // update one step to size-1).
+            if (last_usable + 1 < size
+                && (accums[last_usable].template acc<Dimensions>()).computed[BLACK])
+            {
+                const Square                blackKsq = pos.square<KING>(BLACK);
+                ThreatFeatureSet::IndexList pfRemoved, pfAdded;
+
+                // Prefetch weight rows for each incremental step
+                for (std::size_t next = last_usable + 1; next < size; ++next)
+                {
+                    ThreatFeatureSet::append_changed_indices(BLACK, blackKsq, accums[next].diff,
+                                                             pfRemoved, pfAdded);
+                }
+
+                const auto* base = &featureTransformer.threatWeights[0];
+                for (int i = 0; i < pfRemoved.ssize(); ++i)
+                    __builtin_prefetch(&base[Dimensions * static_cast<size_t>(pfRemoved[i])], 0, 1);
+                for (int i = 0; i < pfAdded.ssize(); ++i)
+                    __builtin_prefetch(&base[Dimensions * static_cast<size_t>(pfAdded[i])], 0, 1);
+            }
+        }
+    }
 
     evaluate_side<PSQFeatureSet>(BLACK, pos, featureTransformer, cache);
 
