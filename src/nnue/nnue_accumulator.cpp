@@ -145,14 +145,37 @@ void AccumulatorStack::evaluate(const Position&                       pos,
     constexpr bool UseThreats = (Dimensions == TransformedFeatureDimensionsBig);
 
     evaluate_side<PSQFeatureSet>(WHITE, pos, featureTransformer, cache);
-
-    if (UseThreats)
-        evaluate_side<ThreatFeatureSet>(WHITE, pos, featureTransformer, cache);
-
     evaluate_side<PSQFeatureSet>(BLACK, pos, featureTransformer, cache);
 
     if (UseThreats)
+    {
+        // Prefetch threat weight rows for both perspectives while PSQ data
+        // is still being written back.  Lead time: the entire PSQ write-back
+        // plus the first threat evaluation.
+        for (Color c : {WHITE, BLACK})
+        {
+            const auto  last_usable = find_last_usable_accumulator<ThreatFeatureSet, Dimensions>(c);
+            const auto& accums      = accumulators<ThreatFeatureSet>();
+            if (last_usable + 1 < size
+                && (accums[last_usable].template acc<Dimensions>()).computed[c])
+            {
+                const Square                ksq = pos.square<KING>(c);
+                ThreatFeatureSet::IndexList pfRemoved, pfAdded;
+                for (std::size_t next = last_usable + 1; next < size; ++next)
+                    ThreatFeatureSet::append_changed_indices(c, ksq, accums[next].diff, pfRemoved,
+                                                             pfAdded);
+
+                const auto* base = &featureTransformer.threatWeights[0];
+                for (int i = 0; i < pfRemoved.ssize(); ++i)
+                    __builtin_prefetch(&base[Dimensions * static_cast<size_t>(pfRemoved[i])], 0, 1);
+                for (int i = 0; i < pfAdded.ssize(); ++i)
+                    __builtin_prefetch(&base[Dimensions * static_cast<size_t>(pfAdded[i])], 0, 1);
+            }
+        }
+
+        evaluate_side<ThreatFeatureSet>(WHITE, pos, featureTransformer, cache);
         evaluate_side<ThreatFeatureSet>(BLACK, pos, featureTransformer, cache);
+    }
 }
 
 template<typename FeatureSet, IndexType Dimensions>
