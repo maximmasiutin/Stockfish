@@ -167,12 +167,8 @@ void AccumulatorStack::evaluate(const Position&                       pos,
                 const Square                blackKsq = pos.square<KING>(BLACK);
                 ThreatFeatureSet::IndexList pfRemoved, pfAdded;
 
-                // Prefetch weight rows for each incremental step
-                for (std::size_t next = last_usable + 1; next < size; ++next)
-                {
-                    ThreatFeatureSet::append_changed_indices(BLACK, blackKsq, accums[next].diff,
-                                                             pfRemoved, pfAdded);
-                }
+                ThreatFeatureSet::append_changed_indices(
+                  BLACK, blackKsq, accums[last_usable + 1].diff, pfRemoved, pfAdded);
 
                 const auto* base = &featureTransformer.threatWeights[0];
                 for (int i = 0; i < pfRemoved.ssize(); ++i)
