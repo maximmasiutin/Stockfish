@@ -360,7 +360,17 @@ struct AccumulatorUpdateContext {
         vec_t      acc[Tiling::NumRegs];
         psqt_vec_t psqt[Tiling::NumPsqtRegs];
 
-        const auto* threatWeights = &featureTransformer.threatWeights[0];
+        const auto* threatWeights     = &featureTransformer.threatWeights[0];
+        const auto* threatWeightsBase = threatWeights;
+
+        // Prefetch first cache line of each weight row for all
+        // removed+added entries before entering the tiled loop.
+        for (int p = 0; p < removed.ssize(); ++p)
+            __builtin_prefetch(&threatWeightsBase[Dimensions * static_cast<size_t>(removed[p])], 0,
+                               1);
+        for (int p = 0; p < added.ssize(); ++p)
+            __builtin_prefetch(&threatWeightsBase[Dimensions * static_cast<size_t>(added[p])], 0,
+                               1);
 
         for (IndexType j = 0; j < Dimensions / Tiling::TileHeight; ++j)
         {
