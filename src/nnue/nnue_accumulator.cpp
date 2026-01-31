@@ -362,6 +362,17 @@ struct AccumulatorUpdateContext {
 
         const auto* threatWeights = &featureTransformer.threatWeights[0];
 
+        // Prefetch PSQT weight rows now; the main loop below gives ~2000+
+        // cycles of lead time before the PSQT loop accesses them.
+        for (int i = 0; i < removed.ssize(); ++i)
+            __builtin_prefetch(
+              &featureTransformer.threatPsqtWeights[PSQTBuckets * static_cast<size_t>(removed[i])],
+              0, 1);
+        for (int i = 0; i < added.ssize(); ++i)
+            __builtin_prefetch(
+              &featureTransformer.threatPsqtWeights[PSQTBuckets * static_cast<size_t>(added[i])], 0,
+              1);
+
         for (IndexType j = 0; j < Dimensions / Tiling::TileHeight; ++j)
         {
             auto* fromTile = reinterpret_cast<const vec_t*>(&fromAcc[j * Tiling::TileHeight]);
