@@ -555,6 +555,16 @@ void double_inc_update(Color                                                   p
     ThreatFeatureSet::append_changed_indices(perspective, ksq, target_state.diff, removed, added,
                                              &fusedData, false);
 
+    // Prefetch threat weight rows after index collection.
+    // Lead time: ~300-600 cycles (updateContext setup + tile overhead).
+    const auto* pfBase = &featureTransformer.threatWeights[0];
+    for (int i = 0; i < removed.ssize(); ++i)
+        __builtin_prefetch(&pfBase[TransformedFeatureDimensions * static_cast<size_t>(removed[i])],
+                           0, 1);
+    for (int i = 0; i < added.ssize(); ++i)
+        __builtin_prefetch(&pfBase[TransformedFeatureDimensions * static_cast<size_t>(added[i])], 0,
+                           1);
+
     auto updateContext =
       make_accumulator_update_context(perspective, featureTransformer, computed, target_state);
 
@@ -585,6 +595,19 @@ void update_accumulator_incremental(
         FeatureSet::append_changed_indices(perspective, ksq, target_state.diff, removed, added);
     else
         FeatureSet::append_changed_indices(perspective, ksq, computed.diff, added, removed);
+
+    // Prefetch threat weight rows for the upcoming tiled accumulator loop.
+    // Only fires for ThreatFeatureSet (PSQ rows are tiny, no benefit).
+    if constexpr (std::is_same_v<FeatureSet, ThreatFeatureSet>)
+    {
+        const auto* pfBase = &featureTransformer.threatWeights[0];
+        for (int i = 0; i < removed.ssize(); ++i)
+            __builtin_prefetch(
+              &pfBase[TransformedFeatureDimensions * static_cast<size_t>(removed[i])], 0, 1);
+        for (int i = 0; i < added.ssize(); ++i)
+            __builtin_prefetch(
+              &pfBase[TransformedFeatureDimensions * static_cast<size_t>(added[i])], 0, 1);
+    }
 
     auto updateContext =
       make_accumulator_update_context(perspective, featureTransformer, computed, target_state);
