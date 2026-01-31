@@ -91,8 +91,10 @@ class FullThreats {
                                        const DiffType&  diff,
                                        IndexList&       removed,
                                        IndexList&       added,
-                                       FusedUpdateData* fd    = nullptr,
-                                       bool             first = false);
+                                       FusedUpdateData* fd             = nullptr,
+                                       bool             first          = false,
+                                       const int8_t*    prefetchBase   = nullptr,
+                                       IndexType        prefetchStride = 0);
 
     // Returns whether the change stored in this DirtyPiece means
     // that a full accumulator refresh is required.
