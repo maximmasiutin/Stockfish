@@ -1471,9 +1471,7 @@ moves_loop:  // When in check, search starts here
                        unadjustedStaticEval, tt.generation());
 
     // Adjust correction history if the best move is not a capture
-    // and the error direction matches whether we are above/below bounds.
-    if (!ss->inCheck && !(bestMove && pos.capture(bestMove))
-        && (bestValue > ss->staticEval) == bool(bestMove))
+    if (!ss->inCheck && !(bestMove && pos.capture(bestMove)))
     {
         auto bonus = std::clamp(int(bestValue - ss->staticEval) * depth / (bestMove ? 10 : 8),
                                 -CORRECTION_HISTORY_LIMIT / 4, CORRECTION_HISTORY_LIMIT / 4);
