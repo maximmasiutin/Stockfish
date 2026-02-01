@@ -273,13 +273,15 @@ void FullThreats::append_active_indices(Color perspective, const Position& pos, 
 
 // Get a list of indices for recently changed features
 
-void FullThreats::append_changed_indices(Color            perspective,
-                                         Square           ksq,
-                                         const DiffType&  diff,
-                                         IndexList&       removed,
-                                         IndexList&       added,
-                                         FusedUpdateData* fusedData,
-                                         bool             first) {
+void FullThreats::append_changed_indices(Color              perspective,
+                                         Square             ksq,
+                                         const DiffType&    diff,
+                                         IndexList&         removed,
+                                         IndexList&         added,
+                                         FusedUpdateData*   fusedData,
+                                         bool               first,
+                                         const std::int8_t* prefetchBase,
+                                         std::size_t        prefetchRowSize) {
 
     for (const auto& dirty : diff.list)
     {
@@ -324,7 +326,18 @@ void FullThreats::append_changed_indices(Color            perspective,
         const IndexType index  = make_index(perspective, attacker, from, to, attacked, ksq);
 
         if (index < Dimensions)
+        {
+            if (prefetchBase)
+            {
+                const auto* row =
+                  prefetchBase + prefetchRowSize * static_cast<std::ptrdiff_t>(index);
+                __builtin_prefetch(row, 0, 1);
+                __builtin_prefetch(row + 4 * CacheLineSize, 0, 1);
+                __builtin_prefetch(row + 8 * CacheLineSize, 0, 1);
+                __builtin_prefetch(row + 12 * CacheLineSize, 0, 1);
+            }
             insert.push_back(index);
+        }
     }
 }
 
