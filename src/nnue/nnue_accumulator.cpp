@@ -360,7 +360,17 @@ struct AccumulatorUpdateContext {
         vec_t      acc[Tiling::NumRegs];
         psqt_vec_t psqt[Tiling::NumPsqtRegs];
 
-        const auto* threatWeights = &featureTransformer.threatWeights[0];
+        const auto* threatWeights     = &featureTransformer.threatWeights[0];
+        const auto* threatWeightsBase = threatWeights;
+
+        constexpr int PF = 6;
+
+        for (int p = 0; p < std::min(PF, removed.ssize()); ++p)
+            __builtin_prefetch(&threatWeightsBase[Dimensions * static_cast<size_t>(removed[p])], 0,
+                               1);
+        for (int p = 0; p < std::min(PF - removed.ssize(), added.ssize()); ++p)
+            __builtin_prefetch(&threatWeightsBase[Dimensions * static_cast<size_t>(added[p])], 0,
+                               1);
 
         for (IndexType j = 0; j < Dimensions / Tiling::TileHeight; ++j)
         {
@@ -372,6 +382,16 @@ struct AccumulatorUpdateContext {
 
             for (int i = 0; i < removed.ssize(); ++i)
             {
+                int target = i + PF;
+                if (target < removed.ssize())
+                    __builtin_prefetch(
+                      &threatWeightsBase[Dimensions * static_cast<size_t>(removed[target])], 0, 1);
+                else if (target - removed.ssize() < added.ssize())
+                    __builtin_prefetch(
+                      &threatWeightsBase[Dimensions
+                                         * static_cast<size_t>(added[target - removed.ssize()])],
+                      0, 1);
+
                 size_t       index  = removed[i];
                 const size_t offset = Dimensions * index;
                 auto*        column = reinterpret_cast<const vec_i8_t*>(&threatWeights[offset]);
@@ -390,6 +410,13 @@ struct AccumulatorUpdateContext {
 
             for (int i = 0; i < added.ssize(); ++i)
             {
+                int target = removed.ssize() + i + PF;
+                if (target - removed.ssize() < added.ssize() && target - removed.ssize() > i)
+                    __builtin_prefetch(
+                      &threatWeightsBase[Dimensions
+                                         * static_cast<size_t>(added[target - removed.ssize()])],
+                      0, 1);
+
                 size_t       index  = added[i];
                 const size_t offset = Dimensions * index;
                 auto*        column = reinterpret_cast<const vec_i8_t*>(&threatWeights[offset]);
