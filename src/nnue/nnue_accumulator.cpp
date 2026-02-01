@@ -360,7 +360,10 @@ struct AccumulatorUpdateContext {
         vec_t      acc[Tiling::NumRegs];
         psqt_vec_t psqt[Tiling::NumPsqtRegs];
 
-        const auto* threatWeights = &featureTransformer.threatWeights[0];
+        const auto* threatWeightsBase = &featureTransformer.threatWeights[0];
+        const auto* threatWeights     = threatWeightsBase;
+
+        constexpr int PF = 6;
 
         for (IndexType j = 0; j < Dimensions / Tiling::TileHeight; ++j)
         {
@@ -372,6 +375,24 @@ struct AccumulatorUpdateContext {
 
             for (int i = 0; i < removed.ssize(); ++i)
             {
+                if (j == 0)
+                {
+                    int target = i + PF;
+                    if (target < removed.ssize())
+                    {
+                        const auto* row = threatWeightsBase + Dimensions * size_t(removed[target]);
+                        for (std::ptrdiff_t cl = 0; cl < Dimensions; cl += 64)
+                            __builtin_prefetch(row + cl, 0, 1);
+                    }
+                    else if (target - removed.ssize() < added.ssize())
+                    {
+                        const auto* row =
+                          threatWeightsBase + Dimensions * size_t(added[target - removed.ssize()]);
+                        for (std::ptrdiff_t cl = 0; cl < Dimensions; cl += 64)
+                            __builtin_prefetch(row + cl, 0, 1);
+                    }
+                }
+
                 size_t       index  = removed[i];
                 const size_t offset = Dimensions * index;
                 auto*        column = reinterpret_cast<const vec_i8_t*>(&threatWeights[offset]);
@@ -390,6 +411,18 @@ struct AccumulatorUpdateContext {
 
             for (int i = 0; i < added.ssize(); ++i)
             {
+                if (j == 0)
+                {
+                    int target = removed.ssize() + i + PF;
+                    if (target - removed.ssize() < added.ssize())
+                    {
+                        const auto* row =
+                          threatWeightsBase + Dimensions * size_t(added[target - removed.ssize()]);
+                        for (std::ptrdiff_t cl = 0; cl < Dimensions; cl += 64)
+                            __builtin_prefetch(row + cl, 0, 1);
+                    }
+                }
+
                 size_t       index  = added[i];
                 const size_t offset = Dimensions * index;
                 auto*        column = reinterpret_cast<const vec_i8_t*>(&threatWeights[offset]);
@@ -549,11 +582,14 @@ void double_inc_update(Color                                                   p
 
     fusedData.dp2removed = dp2.remove_sq;
 
+    const auto* pfBase   = reinterpret_cast<const int8_t*>(&featureTransformer.threatWeights[0]);
+    auto        pfStride = static_cast<IndexType>(TransformedFeatureDimensions);
+
     ThreatFeatureSet::IndexList removed, added;
     ThreatFeatureSet::append_changed_indices(perspective, ksq, middle_state.diff, removed, added,
-                                             &fusedData, true);
+                                             &fusedData, true, pfBase, pfStride, 6);
     ThreatFeatureSet::append_changed_indices(perspective, ksq, target_state.diff, removed, added,
-                                             &fusedData, false);
+                                             &fusedData, false, pfBase, pfStride, 6);
 
     auto updateContext =
       make_accumulator_update_context(perspective, featureTransformer, computed, target_state);
@@ -581,10 +617,24 @@ void update_accumulator_incremental(
     // In this case, the maximum size of both feature addition and removal
     // is 2, since we are incrementally updating one move at a time.
     typename FeatureSet::IndexList removed, added;
-    if constexpr (Forward)
-        FeatureSet::append_changed_indices(perspective, ksq, target_state.diff, removed, added);
+    if constexpr (std::is_same_v<FeatureSet, ThreatFeatureSet>)
+    {
+        const auto* pfBase = reinterpret_cast<const int8_t*>(&featureTransformer.threatWeights[0]);
+        auto        pfStride = static_cast<IndexType>(TransformedFeatureDimensions);
+        if constexpr (Forward)
+            FeatureSet::append_changed_indices(perspective, ksq, target_state.diff, removed, added,
+                                               nullptr, false, pfBase, pfStride, 6);
+        else
+            FeatureSet::append_changed_indices(perspective, ksq, computed.diff, added, removed,
+                                               nullptr, false, pfBase, pfStride, 6);
+    }
     else
-        FeatureSet::append_changed_indices(perspective, ksq, computed.diff, added, removed);
+    {
+        if constexpr (Forward)
+            FeatureSet::append_changed_indices(perspective, ksq, target_state.diff, removed, added);
+        else
+            FeatureSet::append_changed_indices(perspective, ksq, computed.diff, added, removed);
+    }
 
     auto updateContext =
       make_accumulator_update_context(perspective, featureTransformer, computed, target_state);
