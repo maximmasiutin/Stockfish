@@ -376,6 +376,17 @@ struct AccumulatorUpdateContext {
                 const size_t offset = Dimensions * index;
                 auto*        column = reinterpret_cast<const vec_i8_t*>(&threatWeights[offset]);
 
+    #if defined(USE_SSE2)
+                if (i + 1 < removed.ssize())
+                    _mm_prefetch(
+                      reinterpret_cast<const char*>(&threatWeights[Dimensions * removed[i + 1]]),
+                      _MM_HINT_T0);
+                else if (added.ssize() > 0)
+                    _mm_prefetch(
+                      reinterpret_cast<const char*>(&threatWeights[Dimensions * added[0]]),
+                      _MM_HINT_T0);
+    #endif
+
     #ifdef USE_NEON
                 for (IndexType k = 0; k < Tiling::NumRegs; k += 2)
                 {
@@ -393,6 +404,13 @@ struct AccumulatorUpdateContext {
                 size_t       index  = added[i];
                 const size_t offset = Dimensions * index;
                 auto*        column = reinterpret_cast<const vec_i8_t*>(&threatWeights[offset]);
+
+    #if defined(USE_SSE2)
+                if (i + 1 < added.ssize())
+                    _mm_prefetch(
+                      reinterpret_cast<const char*>(&threatWeights[Dimensions * added[i + 1]]),
+                      _MM_HINT_T0);
+    #endif
 
     #ifdef USE_NEON
                 for (IndexType k = 0; k < Tiling::NumRegs; k += 2)
