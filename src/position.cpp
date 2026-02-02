@@ -912,14 +912,7 @@ void Position::do_move(Move                      m,
     if (tt)
         prefetch(tt->first_entry(key()));
 
-    if (history)
-    {
-        prefetch(&history->pawn_entry(*this)[pc][to]);
-        prefetch(&history->pawn_correction_entry(*this));
-        prefetch(&history->minor_piece_correction_entry(*this));
-        prefetch(&history->nonpawn_correction_entry<WHITE>(*this));
-        prefetch(&history->nonpawn_correction_entry<BLACK>(*this));
-    }
+    (void) history;
 
     // Set capture piece
     st->capturedPiece = captured;
