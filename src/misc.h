@@ -50,6 +50,8 @@ std::string compiler_info();
 // function that doesn't stall the CPU waiting for data to be loaded from memory,
 // which can be quite slow.
 void prefetch(const void* addr);
+void prefetchL2(const void* addr);
+void prefetchNTA(const void* addr);
 
 void start_logger(const std::string& fname);
 
