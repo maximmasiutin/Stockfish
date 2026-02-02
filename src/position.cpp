@@ -910,15 +910,15 @@ void Position::do_move(Move                      m,
     // Update the key with the final value
     st->key = k;
     if (tt)
-        prefetch(tt->first_entry(key()));
+        prefetchL2(tt->first_entry(key()));
 
     if (history)
     {
-        prefetch(&history->pawn_entry(*this)[pc][to]);
-        prefetch(&history->pawn_correction_entry(*this));
-        prefetch(&history->minor_piece_correction_entry(*this));
-        prefetch(&history->nonpawn_correction_entry<WHITE>(*this));
-        prefetch(&history->nonpawn_correction_entry<BLACK>(*this));
+        prefetchL2(&history->pawn_entry(*this)[pc][to]);
+        prefetchL2(&history->pawn_correction_entry(*this));
+        prefetchL2(&history->minor_piece_correction_entry(*this));
+        prefetchL2(&history->nonpawn_correction_entry<WHITE>(*this));
+        prefetchL2(&history->nonpawn_correction_entry<BLACK>(*this));
     }
 
     // Set capture piece
@@ -1228,7 +1228,7 @@ void Position::do_null_move(StateInfo& newSt, const TranspositionTable& tt) {
     }
 
     st->key ^= Zobrist::side;
-    prefetch(tt.first_entry(key()));
+    prefetchL2(tt.first_entry(key()));
 
     st->pliesFromNull = 0;
 
