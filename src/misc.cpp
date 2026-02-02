@@ -435,6 +435,8 @@ void start_logger(const std::string& fname) { Logger::start(fname); }
 #ifdef NO_PREFETCH
 
 void prefetch(const void*) {}
+void prefetchL2(const void*) {}
+void prefetchT1(const void*) {}
 
 #else
 
@@ -444,6 +446,24 @@ void prefetch(const void* addr) {
     _mm_prefetch((char const*) addr, _MM_HINT_T0);
     #else
     __builtin_prefetch(addr);
+    #endif
+}
+
+void prefetchL2(const void* addr) {
+
+    #if defined(_MSC_VER)
+    _mm_prefetch((char const*) addr, _MM_HINT_T2);
+    #else
+    __builtin_prefetch(addr, 0, 1);
+    #endif
+}
+
+void prefetchT1(const void* addr) {
+
+    #if defined(_MSC_VER)
+    _mm_prefetch((char const*) addr, _MM_HINT_T1);
+    #else
+    __builtin_prefetch(addr, 0, 2);
     #endif
 }
 
