@@ -139,11 +139,13 @@ ExtMove* MovePicker::score(MoveList<Type>& ml) {
         threatByLesser[KING]  = pos.attacks_by<QUEEN>(~us) | threatByLesser[QUEEN];
     }
 
-    ExtMove* it = cur;
-    for (auto move : ml)
+    ExtMove*    it      = cur;
+    const Move* mlBegin = ml.begin();
+    const Move* mlEnd   = ml.end();
+    for (const Move* p = mlBegin; p < mlEnd; ++p)
     {
         ExtMove& m = *it++;
-        m          = move;
+        m          = *p;
 
         const Square    from          = m.from_sq();
         const Square    to            = m.to_sq();
@@ -157,6 +159,20 @@ ExtMove* MovePicker::score(MoveList<Type>& ml) {
 
         else if constexpr (Type == QUIETS)
         {
+            // Prefetch continuationHistory entries for move PF ahead
+            constexpr int PF = 4;
+            if (p + PF < mlEnd)
+            {
+                Move   next   = *(p + PF);
+                Piece  nextPc = pos.moved_piece(next);
+                Square nextTo = next.to_sq();
+                __builtin_prefetch(&(*continuationHistory[0])[nextPc][nextTo], 0, 1);
+                __builtin_prefetch(&(*continuationHistory[1])[nextPc][nextTo], 0, 1);
+                __builtin_prefetch(&(*continuationHistory[2])[nextPc][nextTo], 0, 1);
+                __builtin_prefetch(&(*continuationHistory[3])[nextPc][nextTo], 0, 1);
+                __builtin_prefetch(&(*continuationHistory[5])[nextPc][nextTo], 0, 1);
+            }
+
             // histories
             m.value = 2 * (*mainHistory)[us][m.raw()];
             m.value += 2 * sharedHistory->pawn_entry(pos)[pc][to];
