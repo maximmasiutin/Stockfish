@@ -1876,6 +1876,14 @@ void update_all_stats(const Position& pos,
 // at ply -1, -2, -3, -4, and -6 with current move.
 void update_continuation_histories(Stack* ss, Piece pc, Square to, int bonus) {
 
+    // Prefetch all continuationHistory entries to L1d
+    prefetch(&(*(ss - 1)->continuationHistory)[pc][to]);
+    prefetch(&(*(ss - 2)->continuationHistory)[pc][to]);
+    prefetch(&(*(ss - 3)->continuationHistory)[pc][to]);
+    prefetch(&(*(ss - 4)->continuationHistory)[pc][to]);
+    prefetch(&(*(ss - 5)->continuationHistory)[pc][to]);
+    prefetch(&(*(ss - 6)->continuationHistory)[pc][to]);
+
     const int notInCheck = !ss->inCheck;
 
     if (((ss - 1)->currentMove).is_ok())
