@@ -128,6 +128,23 @@ ExtMove* MovePicker::score(MoveList<Type>& ml) {
 
     Color us = pos.side_to_move();
 
+    // Prefetch continuation history entries for the first quiet move.
+    // Issued before threat computation so bitboard work overlaps with prefetch latency.
+    if constexpr (Type == QUIETS)
+    {
+        if (ml.begin() != ml.end())
+        {
+            const Move   firstMove = *ml.begin();
+            const Piece  firstPc   = pos.moved_piece(firstMove);
+            const Square firstTo   = firstMove.to_sq();
+            prefetch(&(*continuationHistory[0])[firstPc][firstTo]);
+            prefetch(&(*continuationHistory[1])[firstPc][firstTo]);
+            prefetch(&(*continuationHistory[2])[firstPc][firstTo]);
+            prefetch(&(*continuationHistory[3])[firstPc][firstTo]);
+            prefetch(&(*continuationHistory[5])[firstPc][firstTo]);
+        }
+    }
+
     [[maybe_unused]] Bitboard threatByLesser[KING + 1];
     if constexpr (Type == QUIETS)
     {
