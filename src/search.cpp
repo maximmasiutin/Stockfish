@@ -1873,18 +1873,30 @@ void update_all_stats(const Position& pos,
 // Updates histories of the move pairs formed by moves
 // at ply -1, -2, -3, -4, and -6 with current move.
 void update_continuation_histories(Stack* ss, Piece pc, Square to, int bonus) {
-    static std::array<ConthistBonus, 6> conthist_bonuses = {
-      {{1, 1133}, {2, 683}, {3, 312}, {4, 582}, {5, 149}, {6, 474}}};
 
-    for (const auto [i, weight] : conthist_bonuses)
-    {
-        // Only update the first 2 continuation histories if we are in check
-        if (ss->inCheck && i > 2)
-            break;
+    constexpr int conthist_bonus_mul_1 = 1133;
+    constexpr int conthist_bonus_mul_2 = 683;
+    constexpr int conthist_bonus_mul_3 = 312;
+    constexpr int conthist_bonus_mul_4 = 582;
+    constexpr int conthist_bonus_mul_5 = 149;
+    constexpr int conthist_bonus_mul_6 = 474;
+    constexpr int conthist_bonus_add_1 = 88;
 
-        if (((ss - i)->currentMove).is_ok())
-            (*(ss - i)->continuationHistory)[pc][to] << (bonus * weight / 1024) + 88 * (i < 2);
-    }
+    const int notInCheck = !ss->inCheck;
+
+    (*(ss - 1)->continuationHistory)[pc][to]
+      << ((bonus * conthist_bonus_mul_1 / 1024) + conthist_bonus_add_1)
+           * ((ss - 1)->currentMove).is_ok();
+    (*(ss - 2)->continuationHistory)[pc][to]
+      << (bonus * conthist_bonus_mul_2 / 1024) * ((ss - 2)->currentMove).is_ok();
+    (*(ss - 3)->continuationHistory)[pc][to]
+      << (bonus * conthist_bonus_mul_3 / 1024) * notInCheck * ((ss - 3)->currentMove).is_ok();
+    (*(ss - 4)->continuationHistory)[pc][to]
+      << (bonus * conthist_bonus_mul_4 / 1024) * notInCheck * ((ss - 4)->currentMove).is_ok();
+    (*(ss - 5)->continuationHistory)[pc][to]
+      << (bonus * conthist_bonus_mul_5 / 1024) * notInCheck * ((ss - 5)->currentMove).is_ok();
+    (*(ss - 6)->continuationHistory)[pc][to]
+      << (bonus * conthist_bonus_mul_6 / 1024) * notInCheck * ((ss - 6)->currentMove).is_ok();
 }
 
 // Updates move sorting heuristics
