@@ -370,11 +370,21 @@ struct AccumulatorUpdateContext {
             for (IndexType k = 0; k < Tiling::NumRegs; ++k)
                 acc[k] = fromTile[k];
 
+            // Prefetch first columns for both removed and added
+            if (removed.ssize() > 0)
+                __builtin_prefetch(&threatWeights[Dimensions * removed[0]], 0, 1);
+            if (added.ssize() > 0)
+                __builtin_prefetch(&threatWeights[Dimensions * added[0]], 0, 1);
+
             for (int i = 0; i < removed.ssize(); ++i)
             {
                 size_t       index  = removed[i];
                 const size_t offset = Dimensions * index;
                 auto*        column = reinterpret_cast<const vec_i8_t*>(&threatWeights[offset]);
+
+                // Prefetch next removed column
+                if (i + 1 < removed.ssize())
+                    __builtin_prefetch(&threatWeights[Dimensions * removed[i + 1]], 0, 1);
 
     #ifdef USE_NEON
                 for (IndexType k = 0; k < Tiling::NumRegs; k += 2)
@@ -393,6 +403,10 @@ struct AccumulatorUpdateContext {
                 size_t       index  = added[i];
                 const size_t offset = Dimensions * index;
                 auto*        column = reinterpret_cast<const vec_i8_t*>(&threatWeights[offset]);
+
+                // Prefetch next added column
+                if (i + 1 < added.ssize())
+                    __builtin_prefetch(&threatWeights[Dimensions * added[i + 1]], 0, 1);
 
     #ifdef USE_NEON
                 for (IndexType k = 0; k < Tiling::NumRegs; k += 2)
@@ -559,6 +573,13 @@ void double_inc_update(Color                                                   p
     ThreatFeatureSet::append_changed_indices(perspective, ksq, target_state.diff, removed, added,
                                              &fusedData, false);
 
+    // Prefetch threat weight rows early so data arrives in L2 before apply() needs it
+    constexpr IndexType Dims = TransformedFeatureDimensions;
+    for (int i = 0; i < removed.ssize(); ++i)
+        prefetchL2(&featureTransformer.threatWeights[Dims * removed[i]]);
+    for (int i = 0; i < added.ssize(); ++i)
+        prefetchL2(&featureTransformer.threatWeights[Dims * added[i]]);
+
     auto updateContext =
       make_accumulator_update_context(perspective, featureTransformer, computed, target_state);
 
@@ -589,6 +610,16 @@ void update_accumulator_incremental(
         FeatureSet::append_changed_indices(perspective, ksq, target_state.diff, removed, added);
     else
         FeatureSet::append_changed_indices(perspective, ksq, computed.diff, added, removed);
+
+    // Prefetch threat weight rows early so data arrives in L2 before apply() needs it
+    if constexpr (std::is_same_v<FeatureSet, ThreatFeatureSet>)
+    {
+        constexpr IndexType Dims = TransformedFeatureDimensions;
+        for (int i = 0; i < removed.ssize(); ++i)
+            prefetchL2(&featureTransformer.threatWeights[Dims * removed[i]]);
+        for (int i = 0; i < added.ssize(); ++i)
+            prefetchL2(&featureTransformer.threatWeights[Dims * added[i]]);
+    }
 
     auto updateContext =
       make_accumulator_update_context(perspective, featureTransformer, computed, target_state);
