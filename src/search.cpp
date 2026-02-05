@@ -1875,18 +1875,48 @@ void update_all_stats(const Position& pos,
 // Updates histories of the move pairs formed by moves
 // at ply -1, -2, -3, -4, and -6 with current move.
 void update_continuation_histories(Stack* ss, Piece pc, Square to, int bonus) {
-    static std::array<ConthistBonus, 6> conthist_bonuses = {
-      {{1, 1133}, {2, 683}, {3, 312}, {4, 582}, {5, 149}, {6, 474}}};
 
-    for (const auto [i, weight] : conthist_bonuses)
-    {
-        // Only update the first 2 continuation histories if we are in check
-        if (ss->inCheck && i > 2)
-            break;
+    const bool notInCheck = !ss->inCheck;
 
-        if (((ss - i)->currentMove).is_ok())
-            (*(ss - i)->continuationHistory)[pc][to] << (bonus * weight / 1024) + 88 * (i < 2);
-    }
+    const bool ok1 = ((ss - 1)->currentMove).is_ok();
+    const bool ok2 = ((ss - 2)->currentMove).is_ok();
+    const bool ok3 = notInCheck && ((ss - 3)->currentMove).is_ok();
+    const bool ok4 = notInCheck && ((ss - 4)->currentMove).is_ok();
+    const bool ok5 = notInCheck && ((ss - 5)->currentMove).is_ok();
+    const bool ok6 = notInCheck && ((ss - 6)->currentMove).is_ok();
+
+    auto& e1 = (*(ss - 1)->continuationHistory)[pc][to];
+    auto& e2 = (*(ss - 2)->continuationHistory)[pc][to];
+    auto& e3 = (*(ss - 3)->continuationHistory)[pc][to];
+    auto& e4 = (*(ss - 4)->continuationHistory)[pc][to];
+    auto& e5 = (*(ss - 5)->continuationHistory)[pc][to];
+    auto& e6 = (*(ss - 6)->continuationHistory)[pc][to];
+
+    if (ok1)
+        prefetch(&e1);
+    if (ok2)
+        prefetch(&e2);
+    if (ok3)
+        prefetch(&e3);
+    if (ok4)
+        prefetch(&e4);
+    if (ok5)
+        prefetch(&e5);
+    if (ok6)
+        prefetch(&e6);
+
+    if (ok1)
+        e1 << (bonus * 1133 / 1024) + 88;
+    if (ok2)
+        e2 << (bonus * 683 / 1024);
+    if (ok3)
+        e3 << (bonus * 312 / 1024);
+    if (ok4)
+        e4 << (bonus * 582 / 1024);
+    if (ok5)
+        e5 << (bonus * 149 / 1024);
+    if (ok6)
+        e6 << (bonus * 474 / 1024);
 }
 
 // Updates move sorting heuristics
