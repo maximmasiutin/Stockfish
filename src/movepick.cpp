@@ -197,7 +197,13 @@ Move MovePicker::select(Pred filter) {
 
     for (; cur < endCur; ++cur)
         if (*cur != ttMove && filter())
-            return *cur++;
+        {
+            Move m = *cur++;
+            // Prefetch pawn history for the next move candidate (~200 cycles ahead)
+            if (sharedHistory && cur < endCur)
+                prefetch(&sharedHistory->pawn_entry(pos)[pos.moved_piece(*cur)][cur->to_sq()]);
+            return m;
+        }
 
     return Move::none();
 }
