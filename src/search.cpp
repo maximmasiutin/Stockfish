@@ -1033,6 +1033,14 @@ moves_loop:  // When in check, search starts here
         movedPiece = pos.moved_piece(move);
         givesCheck = pos.gives_check(move);
 
+        // Prefetch pawn history entry into L2 for pruning (~30-50 cycles ahead)
+#if defined(_MSC_VER)
+        _mm_prefetch((const char*) &sharedHistory.pawn_entry(pos)[movedPiece][move.to_sq()],
+                     _MM_HINT_T2);
+#elif !defined(NO_PREFETCH)
+        __builtin_prefetch(&sharedHistory.pawn_entry(pos)[movedPiece][move.to_sq()], 0, 1);
+#endif
+
         // Calculate new depth for this move
         newDepth = depth - 1;
 
