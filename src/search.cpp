@@ -1033,6 +1033,14 @@ moves_loop:  // When in check, search starts here
         movedPiece = pos.moved_piece(move);
         givesCheck = pos.gives_check(move);
 
+        // Prefetch pawn history for current move into L1
+        prefetch(&sharedHistory.pawn_entry(pos)[movedPiece][move.to_sq()]);
+
+        // Pre-load next move's pawn history into L2 for promotion next iteration
+        if (auto* nxt = mp.peek_next(); nxt && nxt < mp.peek_end())
+            prefetch<PrefetchRw::READ, PrefetchLoc::LOW>(
+              &sharedHistory.pawn_entry(pos)[pos.moved_piece(*nxt)][nxt->to_sq()]);
+
         // Calculate new depth for this move
         newDepth = depth - 1;
 

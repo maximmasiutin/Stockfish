@@ -48,8 +48,10 @@ class MovePicker {
                const SharedHistories*,
                int);
     MovePicker(const Position&, Move, int, const CapturePieceToHistory*);
-    Move next_move();
-    void skip_quiet_moves();
+    Move           next_move();
+    void           skip_quiet_moves();
+    const ExtMove* peek_next() const { return cur; }
+    const ExtMove* peek_end() const { return endCur; }
 
    private:
     template<typename Pred>
@@ -66,13 +68,13 @@ class MovePicker {
     const PieceToHistory**       continuationHistory;
     const SharedHistories*       sharedHistory;
     Move                         ttMove;
-    ExtMove *                    cur, *endCur, *endBadCaptures, *endCaptures, *endGenerated;
-    int                          stage;
-    int                          threshold;
-    Depth                        depth;
-    int                          ply;
-    bool                         skipQuiets = false;
-    ExtMove                      moves[MAX_MOVES];
+    ExtMove *cur = nullptr, *endCur = nullptr, *endBadCaptures, *endCaptures, *endGenerated;
+    int      stage;
+    int      threshold;
+    Depth    depth;
+    int      ply;
+    bool     skipQuiets = false;
+    ExtMove  moves[MAX_MOVES];
 };
 
 }  // namespace Stockfish
