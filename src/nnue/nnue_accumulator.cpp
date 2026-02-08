@@ -372,6 +372,10 @@ struct AccumulatorUpdateContext {
 
             for (int i = 0; i < removed.ssize(); ++i)
             {
+                if (i + 2 < removed.ssize())
+                    prefetch<PrefetchRw::READ, PrefetchLoc::LOW>(
+                      &threatWeights[Dimensions * removed[i + 2]]);
+
                 size_t       index  = removed[i];
                 const size_t offset = Dimensions * index;
                 auto*        column = reinterpret_cast<const vec_i8_t*>(&threatWeights[offset]);
@@ -390,6 +394,10 @@ struct AccumulatorUpdateContext {
 
             for (int i = 0; i < added.ssize(); ++i)
             {
+                if (i + 2 < added.ssize())
+                    prefetch<PrefetchRw::READ, PrefetchLoc::LOW>(
+                      &threatWeights[Dimensions * added[i + 2]]);
+
                 size_t       index  = added[i];
                 const size_t offset = Dimensions * index;
                 auto*        column = reinterpret_cast<const vec_i8_t*>(&threatWeights[offset]);
