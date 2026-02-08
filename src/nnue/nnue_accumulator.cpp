@@ -371,6 +371,11 @@ struct AccumulatorUpdateContext {
                 acc[k] = fromTile[k];
 
             for (int i = 0; i < removed.ssize(); ++i)
+                prefetch(&threatWeights[Dimensions * removed[i]]);
+            for (int i = 0; i < added.ssize(); ++i)
+                prefetch(&threatWeights[Dimensions * added[i]]);
+
+            for (int i = 0; i < removed.ssize(); ++i)
             {
                 size_t       index  = removed[i];
                 const size_t offset = Dimensions * index;
