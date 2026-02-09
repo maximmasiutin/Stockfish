@@ -1032,6 +1032,7 @@ moves_loop:  // When in check, search starts here
         capture    = pos.capture_stage(move);
         movedPiece = pos.moved_piece(move);
         givesCheck = pos.gives_check(move);
+        prefetch(&sharedHistory.pawn_entry(pos)[movedPiece][move.to_sq()]);
 
         // Calculate new depth for this move
         newDepth = depth - 1;
@@ -1832,6 +1833,24 @@ void update_all_stats(const Position& pos,
     int bonus =
       std::min(116 * depth - 81, 1515) + 347 * (bestMove == ttMove) + (ss - 1)->statScore / 32;
     int malus = std::min(848 * depth - 207, 2446) - 17 * moveCount;
+
+    // Early L2 prefetch for the conthist update at the end of this function
+    if (prevSq != SQ_NONE)
+    {
+        Piece prevPc = pos.piece_on(prevSq);
+        prefetch<PrefetchRw::READ, PrefetchLoc::LOW>(
+          &(*(ss - 2)->continuationHistory)[prevPc][prevSq]);
+        prefetch<PrefetchRw::READ, PrefetchLoc::LOW>(
+          &(*(ss - 3)->continuationHistory)[prevPc][prevSq]);
+        prefetch<PrefetchRw::READ, PrefetchLoc::LOW>(
+          &(*(ss - 4)->continuationHistory)[prevPc][prevSq]);
+        prefetch<PrefetchRw::READ, PrefetchLoc::LOW>(
+          &(*(ss - 5)->continuationHistory)[prevPc][prevSq]);
+        prefetch<PrefetchRw::READ, PrefetchLoc::LOW>(
+          &(*(ss - 6)->continuationHistory)[prevPc][prevSq]);
+        prefetch<PrefetchRw::READ, PrefetchLoc::LOW>(
+          &(*(ss - 7)->continuationHistory)[prevPc][prevSq]);
+    }
 
     if (!pos.capture_stage(bestMove))
     {
