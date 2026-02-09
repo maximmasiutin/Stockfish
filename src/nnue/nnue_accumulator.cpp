@@ -349,6 +349,11 @@ struct AccumulatorUpdateContext {
 
     void apply(const typename FeatureSet::IndexList& added,
                const typename FeatureSet::IndexList& removed) {
+        // Prefetch first two removed columns early for maximum latency hiding
+        const auto* twBase = featureTransformer.threatWeights.data();
+        prefetch(twBase + Dimensions * removed[0]);
+        prefetch(twBase + Dimensions * removed[1]);
+
         const auto& fromAcc = from.template acc<Dimensions>().accumulation[perspective];
         auto&       toAcc   = to.template acc<Dimensions>().accumulation[perspective];
 
@@ -372,6 +377,9 @@ struct AccumulatorUpdateContext {
 
             for (int i = 0; i < removed.ssize(); ++i)
             {
+                prefetch(
+                  &threatWeights[Dimensions * removed[std::min(i + 2, removed.ssize() - 1)]]);
+
                 size_t       index  = removed[i];
                 const size_t offset = Dimensions * index;
                 auto*        column = reinterpret_cast<const vec_i8_t*>(&threatWeights[offset]);
@@ -388,8 +396,14 @@ struct AccumulatorUpdateContext {
     #endif
             }
 
+            // Prefetch first two added columns; removed loop provided latency hiding
+            prefetch(&threatWeights[Dimensions * added[0]]);
+            prefetch(&threatWeights[Dimensions * added[1]]);
+
             for (int i = 0; i < added.ssize(); ++i)
             {
+                prefetch(&threatWeights[Dimensions * added[std::min(i + 2, added.ssize() - 1)]]);
+
                 size_t       index  = added[i];
                 const size_t offset = Dimensions * index;
                 auto*        column = reinterpret_cast<const vec_i8_t*>(&threatWeights[offset]);
