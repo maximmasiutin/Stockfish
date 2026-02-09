@@ -719,6 +719,9 @@ void Position::do_move(Move                      m,
 
     Key k = st->key ^ Zobrist::side;
 
+    // Prefetch StateInfo source before memcpy
+    prefetch(st);
+
     // Copy some fields of the old state to our new StateInfo object except the
     // ones which are going to be recalculated from scratch anyway and then switch
     // our state pointer to point to the new (ready to be updated) state.
@@ -1215,6 +1218,9 @@ void Position::do_null_move(StateInfo& newSt) {
 
     assert(!checkers());
     assert(&newSt != st);
+
+    // Prefetch StateInfo source before memcpy
+    prefetch(st);
 
     std::memcpy(&newSt, st, sizeof(StateInfo));
 
