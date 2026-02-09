@@ -366,12 +366,6 @@ class Worker {
     friend class SearchManager;
 };
 
-struct ConthistBonus {
-    int index;
-    int weight;
-};
-
-
 }  // namespace Search
 
 }  // namespace Stockfish
