@@ -1833,6 +1833,18 @@ void update_all_stats(const Position& pos,
       std::min(116 * depth - 81, 1515) + 347 * (bestMove == ttMove) + (ss - 1)->statScore / 32;
     int malus = std::min(848 * depth - 207, 2446) - 17 * moveCount;
 
+    // Early L2 prefetch for the conthist update at the end of this function
+    if (prevSq != SQ_NONE)
+    {
+        Piece prevPc = pos.piece_on(prevSq);
+        prefetch_l2(&(*(ss - 2)->continuationHistory)[prevPc][prevSq]);
+        prefetch_l2(&(*(ss - 3)->continuationHistory)[prevPc][prevSq]);
+        prefetch_l2(&(*(ss - 4)->continuationHistory)[prevPc][prevSq]);
+        prefetch_l2(&(*(ss - 5)->continuationHistory)[prevPc][prevSq]);
+        prefetch_l2(&(*(ss - 6)->continuationHistory)[prevPc][prevSq]);
+        prefetch_l2(&(*(ss - 7)->continuationHistory)[prevPc][prevSq]);
+    }
+
     if (!pos.capture_stage(bestMove))
     {
         update_quiet_histories(pos, ss, workerThread, bestMove, bonus * 910 / 1024);
