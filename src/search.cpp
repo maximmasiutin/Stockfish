@@ -709,6 +709,10 @@ Value Search::Worker::search(
     ttCapture    = ttData.move && pos.capture_stage(ttData.move);
 
     // Step 6. Static evaluation of the position
+    prefetch(&sharedHistory.pawn_correction_entry(pos));
+    prefetch(&sharedHistory.minor_piece_correction_entry(pos));
+    prefetch(&sharedHistory.nonpawn_correction_entry<WHITE>(pos));
+    prefetch(&sharedHistory.nonpawn_correction_entry<BLACK>(pos));
     Value      unadjustedStaticEval = VALUE_NONE;
     const auto correctionValue      = correction_value(*this, pos, ss);
     // Skip early pruning when in check
@@ -1554,6 +1558,10 @@ Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta)
         return ttData.value;
 
     // Step 4. Static evaluation of the position
+    prefetch(&sharedHistory.pawn_correction_entry(pos));
+    prefetch(&sharedHistory.minor_piece_correction_entry(pos));
+    prefetch(&sharedHistory.nonpawn_correction_entry<WHITE>(pos));
+    prefetch(&sharedHistory.nonpawn_correction_entry<BLACK>(pos));
     Value unadjustedStaticEval = VALUE_NONE;
     if (ss->inCheck)
         bestValue = futilityBase = -VALUE_INFINITE;
@@ -1832,6 +1840,24 @@ void update_all_stats(const Position& pos,
     int bonus =
       std::min(116 * depth - 81, 1515) + 347 * (bestMove == ttMove) + (ss - 1)->statScore / 32;
     int malus = std::min(848 * depth - 207, 2446) - 17 * moveCount;
+
+    // Early L2 prefetch for the conthist update at the end of this function
+    if (prevSq != SQ_NONE)
+    {
+        Piece prevPc = pos.piece_on(prevSq);
+        prefetch<PrefetchRw::READ, PrefetchLoc::LOW>(
+          &(*(ss - 2)->continuationHistory)[prevPc][prevSq]);
+        prefetch<PrefetchRw::READ, PrefetchLoc::LOW>(
+          &(*(ss - 3)->continuationHistory)[prevPc][prevSq]);
+        prefetch<PrefetchRw::READ, PrefetchLoc::LOW>(
+          &(*(ss - 4)->continuationHistory)[prevPc][prevSq]);
+        prefetch<PrefetchRw::READ, PrefetchLoc::LOW>(
+          &(*(ss - 5)->continuationHistory)[prevPc][prevSq]);
+        prefetch<PrefetchRw::READ, PrefetchLoc::LOW>(
+          &(*(ss - 6)->continuationHistory)[prevPc][prevSq]);
+        prefetch<PrefetchRw::READ, PrefetchLoc::LOW>(
+          &(*(ss - 7)->continuationHistory)[prevPc][prevSq]);
+    }
 
     if (!pos.capture_stage(bestMove))
     {
