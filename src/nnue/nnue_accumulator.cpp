@@ -362,6 +362,15 @@ struct AccumulatorUpdateContext {
 
         const auto* threatWeights = &featureTransformer.threatWeights[0];
 
+        // Prefetch first two removed columns to T0 for immediate use
+        const auto* twBase = featureTransformer.threatWeights.data();
+        prefetch(twBase + Dimensions * removed[0]);
+        prefetch(twBase + Dimensions * removed[1]);
+
+        // Early warming: prefetch first two added columns to T0
+        prefetch(twBase + Dimensions * added[0]);
+        prefetch(twBase + Dimensions * added[1]);
+
         for (IndexType j = 0; j < Dimensions / Tiling::TileHeight; ++j)
         {
             auto* fromTile = reinterpret_cast<const vec_t*>(&fromAcc[j * Tiling::TileHeight]);
@@ -370,8 +379,14 @@ struct AccumulatorUpdateContext {
             for (IndexType k = 0; k < Tiling::NumRegs; ++k)
                 acc[k] = fromTile[k];
 
+            int addedPf = 0;
             for (int i = 0; i < removed.ssize(); ++i)
             {
+                if (i + 2 < removed.ssize())
+                    prefetch(&threatWeights[Dimensions * removed[i + 2]]);
+                else
+                    prefetch(&threatWeights[Dimensions * added[addedPf++]]);
+
                 size_t       index  = removed[i];
                 const size_t offset = Dimensions * index;
                 auto*        column = reinterpret_cast<const vec_i8_t*>(&threatWeights[offset]);
@@ -390,6 +405,9 @@ struct AccumulatorUpdateContext {
 
             for (int i = 0; i < added.ssize(); ++i)
             {
+                if (i + 2 < added.ssize())
+                    prefetch(&threatWeights[Dimensions * added[i + 2]]);
+
                 size_t       index  = added[i];
                 const size_t offset = Dimensions * index;
                 auto*        column = reinterpret_cast<const vec_i8_t*>(&threatWeights[offset]);
