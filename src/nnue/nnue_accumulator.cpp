@@ -400,10 +400,6 @@ struct AccumulatorUpdateContext {
     #endif
             }
 
-            // Prefetch remaining added if not done during removed loop
-            while (addedPf < 2 && addedPf < added.ssize())
-                prefetch(&threatWeights[Dimensions * added[addedPf++]]);
-
             for (int i = 0; i < added.ssize(); ++i)
             {
                 if (i + 2 < added.ssize())
