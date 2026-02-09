@@ -910,7 +910,7 @@ void Position::do_move(Move                      m,
     // Update the key with the final value
     st->key = k;
     if (tt)
-        prefetch(tt->first_entry(key()));
+        prefetch<PrefetchRw::READ, PrefetchLoc::LOW>(tt->first_entry(key()));
 
     if (history)
     {
