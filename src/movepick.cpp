@@ -139,7 +139,12 @@ ExtMove* MovePicker::score(MoveList<Type>& ml) {
         threatByLesser[KING]  = pos.attacks_by<QUEEN>(~us) | threatByLesser[QUEEN];
     }
 
-    ExtMove* it = cur;
+    ExtMove*      it    = cur;
+    constexpr int Ahead = 4;
+    const Move*   begin = ml.begin();
+    const Move*   end   = ml.end();
+    int           idx   = 0;
+
     for (auto move : ml)
     {
         ExtMove& m = *it++;
@@ -157,6 +162,15 @@ ExtMove* MovePicker::score(MoveList<Type>& ml) {
 
         else if constexpr (Type == QUIETS)
         {
+            // Prefetch LowPlyHistory for moves ahead
+            if (ply < LOW_PLY_HISTORY_SIZE && lowPlyHistory)
+            {
+                const Move* aheadPtr = begin + idx + Ahead;
+                if (aheadPtr < end)
+                    prefetch(&(*lowPlyHistory)[ply][aheadPtr->raw()]);
+            }
+            ++idx;
+
             // histories
             m.value = 2 * (*mainHistory)[us][m.raw()];
             m.value += 2 * sharedHistory->pawn_entry(pos)[pc][to];
