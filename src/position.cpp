@@ -702,6 +702,46 @@ bool Position::gives_check(Move m) const {
 
 
 // Makes a move, and saves all information necessary
+// Computes the Zobrist key after a move, without making it.
+// Used for speculative TT prefetch before the move is actually played.
+Key Position::key_after(Move m) const {
+
+    Key    k        = st->key ^ Zobrist::side;
+    Square from     = m.from_sq();
+    Square to       = m.to_sq();
+    Piece  pc       = piece_on(from);
+    Piece  captured = m.type_of() == EN_PASSANT ? make_piece(~sideToMove, PAWN) : piece_on(to);
+
+    if (captured)
+        k ^= Zobrist::psq[captured][m.type_of() == EN_PASSANT ? to - pawn_push(sideToMove) : to];
+
+    k ^= Zobrist::psq[pc][to] ^ Zobrist::psq[pc][from];
+
+    if (m.type_of() == CASTLING)
+    {
+        Square rfrom = to;
+        Square rto   = relative_square(sideToMove, rfrom > from ? SQ_F1 : SQ_D1);
+        rfrom        = relative_square(sideToMove, rfrom > from ? SQ_H1 : SQ_A1);
+        k ^= Zobrist::psq[make_piece(sideToMove, ROOK)][rfrom]
+           ^ Zobrist::psq[make_piece(sideToMove, ROOK)][rto];
+    }
+
+    if (m.type_of() == PROMOTION)
+        k ^= Zobrist::psq[pc][to] ^ Zobrist::psq[make_piece(sideToMove, m.promotion_type())][to];
+
+    if (type_of(pc) == PAWN && ((int(to) ^ int(from)) == 16))
+    {
+        Square epSq = to - pawn_push(sideToMove);
+        if (attacks_bb<PAWN>(epSq, sideToMove) & pieces(~sideToMove, PAWN))
+            k ^= Zobrist::enpassant[file_of(epSq)];
+    }
+
+    if (st->epSquare != SQ_NONE)
+        k ^= Zobrist::enpassant[file_of(st->epSquare)];
+
+    return k;
+}
+
 // to a StateInfo object. The move is assumed to be legal. Pseudo-legal
 // moves should be filtered out before this function is called.
 // If a pointer to the TT table is passed, the entry for the new position

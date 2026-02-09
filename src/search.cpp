@@ -1032,6 +1032,7 @@ moves_loop:  // When in check, search starts here
         capture    = pos.capture_stage(move);
         movedPiece = pos.moved_piece(move);
         givesCheck = pos.gives_check(move);
+        prefetch(tt.first_entry(pos.key_after(move)));
 
         // Calculate new depth for this move
         newDepth = depth - 1;
