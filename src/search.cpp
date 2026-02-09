@@ -709,6 +709,10 @@ Value Search::Worker::search(
     ttCapture    = ttData.move && pos.capture_stage(ttData.move);
 
     // Step 6. Static evaluation of the position
+    prefetch(&sharedHistory.pawn_correction_entry(pos));
+    prefetch(&sharedHistory.minor_piece_correction_entry(pos));
+    prefetch(&sharedHistory.nonpawn_correction_entry<WHITE>(pos));
+    prefetch(&sharedHistory.nonpawn_correction_entry<BLACK>(pos));
     Value      unadjustedStaticEval = VALUE_NONE;
     const auto correctionValue      = correction_value(*this, pos, ss);
     // Skip early pruning when in check
@@ -1554,6 +1558,10 @@ Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta)
         return ttData.value;
 
     // Step 4. Static evaluation of the position
+    prefetch(&sharedHistory.pawn_correction_entry(pos));
+    prefetch(&sharedHistory.minor_piece_correction_entry(pos));
+    prefetch(&sharedHistory.nonpawn_correction_entry<WHITE>(pos));
+    prefetch(&sharedHistory.nonpawn_correction_entry<BLACK>(pos));
     Value unadjustedStaticEval = VALUE_NONE;
     if (ss->inCheck)
         bestValue = futilityBase = -VALUE_INFINITE;
