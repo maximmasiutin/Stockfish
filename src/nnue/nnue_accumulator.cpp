@@ -553,11 +553,15 @@ void double_inc_update(Color                                                   p
 
     fusedData.dp2removed = dp2.remove_sq;
 
+    const auto* weights = reinterpret_cast<const int8_t*>(featureTransformer.threatWeights.data());
+
     ThreatFeatureSet::IndexList removed, added;
     ThreatFeatureSet::append_changed_indices(perspective, ksq, middle_state.diff, removed, added,
-                                             &fusedData, true);
+                                             &fusedData, true, weights,
+                                             TransformedFeatureDimensions);
     ThreatFeatureSet::append_changed_indices(perspective, ksq, target_state.diff, removed, added,
-                                             &fusedData, false);
+                                             &fusedData, false, weights,
+                                             TransformedFeatureDimensions);
 
     auto updateContext =
       make_accumulator_update_context(perspective, featureTransformer, computed, target_state);
@@ -586,9 +590,25 @@ void update_accumulator_incremental(
     // is 2, since we are incrementally updating one move at a time.
     typename FeatureSet::IndexList removed, added;
     if constexpr (Forward)
-        FeatureSet::append_changed_indices(perspective, ksq, target_state.diff, removed, added);
+    {
+        if constexpr (std::is_same_v<FeatureSet, ThreatFeatureSet>)
+            FeatureSet::append_changed_indices(
+              perspective, ksq, target_state.diff, removed, added, nullptr, false,
+              reinterpret_cast<const int8_t*>(featureTransformer.threatWeights.data()),
+              TransformedFeatureDimensions);
+        else
+            FeatureSet::append_changed_indices(perspective, ksq, target_state.diff, removed, added);
+    }
     else
-        FeatureSet::append_changed_indices(perspective, ksq, computed.diff, added, removed);
+    {
+        if constexpr (std::is_same_v<FeatureSet, ThreatFeatureSet>)
+            FeatureSet::append_changed_indices(
+              perspective, ksq, computed.diff, added, removed, nullptr, false,
+              reinterpret_cast<const int8_t*>(featureTransformer.threatWeights.data()),
+              TransformedFeatureDimensions);
+        else
+            FeatureSet::append_changed_indices(perspective, ksq, computed.diff, added, removed);
+    }
 
     auto updateContext =
       make_accumulator_update_context(perspective, featureTransformer, computed, target_state);

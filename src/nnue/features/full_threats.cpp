@@ -279,7 +279,9 @@ void FullThreats::append_changed_indices(Color            perspective,
                                          IndexList&       removed,
                                          IndexList&       added,
                                          FusedUpdateData* fusedData,
-                                         bool             first) {
+                                         bool             first,
+                                         const int8_t*    weights,
+                                         unsigned int     stride) {
 
     for (const auto& dirty : diff.list)
     {
@@ -324,7 +326,14 @@ void FullThreats::append_changed_indices(Color            perspective,
         const IndexType index  = make_index(perspective, attacker, from, to, attacked, ksq);
 
         if (index < Dimensions)
+        {
+            if (weights)
+            {
+                prefetch2(weights + index * stride);
+                prefetch2(weights + index * stride + stride / 2);
+            }
             insert.push_back(index);
+        }
     }
 }
 

@@ -51,6 +51,9 @@ std::string compiler_info();
 // which can be quite slow.
 void prefetch(const void* addr);
 
+// Preloads the given address in L2 cache only, skipping L1.
+void prefetch2(const void* addr);
+
 void start_logger(const std::string& fname);
 
 size_t str_to_size_t(const std::string& s);
