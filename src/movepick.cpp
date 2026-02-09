@@ -131,6 +131,9 @@ ExtMove* MovePicker::score(MoveList<Type>& ml) {
     [[maybe_unused]] Bitboard threatByLesser[KING + 1];
     if constexpr (Type == QUIETS)
     {
+        // Prefetch check_squares array for upcoming check bonus lookups
+        prefetch(pos.state()->checkSquares);
+
         threatByLesser[PAWN]   = 0;
         threatByLesser[KNIGHT] = threatByLesser[BISHOP] = pos.attacks_by<PAWN>(~us);
         threatByLesser[ROOK] =
