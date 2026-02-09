@@ -370,8 +370,16 @@ struct AccumulatorUpdateContext {
             for (IndexType k = 0; k < Tiling::NumRegs; ++k)
                 acc[k] = fromTile[k];
 
+            // Initial prefetch (no guards needed, lists always have elements)
+            prefetch(&threatWeights[Dimensions * removed[0]]);
+            prefetch(&threatWeights[Dimensions * removed[1]]);
+
+            // Branchless rolling prefetch using min to clamp index
+            const auto removedMax = removed.ssize() - 1;
             for (int i = 0; i < removed.ssize(); ++i)
             {
+                prefetch(&threatWeights[Dimensions * removed[std::min(i + 2, removedMax)]]);
+
                 size_t       index  = removed[i];
                 const size_t offset = Dimensions * index;
                 auto*        column = reinterpret_cast<const vec_i8_t*>(&threatWeights[offset]);
@@ -388,8 +396,16 @@ struct AccumulatorUpdateContext {
     #endif
             }
 
+            // Initial prefetch for added
+            prefetch(&threatWeights[Dimensions * added[0]]);
+            prefetch(&threatWeights[Dimensions * added[1]]);
+
+            // Branchless rolling prefetch using min to clamp index
+            const auto addedMax = added.ssize() - 1;
             for (int i = 0; i < added.ssize(); ++i)
             {
+                prefetch(&threatWeights[Dimensions * added[std::min(i + 2, addedMax)]]);
+
                 size_t       index  = added[i];
                 const size_t offset = Dimensions * index;
                 auto*        column = reinterpret_cast<const vec_i8_t*>(&threatWeights[offset]);
