@@ -370,8 +370,21 @@ struct AccumulatorUpdateContext {
             for (IndexType k = 0; k < Tiling::NumRegs; ++k)
                 acc[k] = fromTile[k];
 
+            // Prefetch first two removed (T0) and first two added (T2)
+            if (removed.ssize() > 0)
+                prefetch(&threatWeights[Dimensions * removed[0]]);
+            if (removed.ssize() > 1)
+                prefetch(&threatWeights[Dimensions * removed[1]]);
+            if (added.ssize() > 0)
+                prefetch<PrefetchRw::READ, PrefetchLoc::LOW>(&threatWeights[Dimensions * added[0]]);
+            if (added.ssize() > 1)
+                prefetch<PrefetchRw::READ, PrefetchLoc::LOW>(&threatWeights[Dimensions * added[1]]);
+
             for (int i = 0; i < removed.ssize(); ++i)
             {
+                if (i + 2 < removed.ssize())
+                    prefetch(&threatWeights[Dimensions * removed[i + 2]]);
+
                 size_t       index  = removed[i];
                 const size_t offset = Dimensions * index;
                 auto*        column = reinterpret_cast<const vec_i8_t*>(&threatWeights[offset]);
@@ -390,6 +403,9 @@ struct AccumulatorUpdateContext {
 
             for (int i = 0; i < added.ssize(); ++i)
             {
+                if (i + 2 < added.ssize())
+                    prefetch(&threatWeights[Dimensions * added[i + 2]]);
+
                 size_t       index  = added[i];
                 const size_t offset = Dimensions * index;
                 auto*        column = reinterpret_cast<const vec_i8_t*>(&threatWeights[offset]);
