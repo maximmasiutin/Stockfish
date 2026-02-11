@@ -1375,7 +1375,7 @@ moves_loop:  // When in check, search starts here
                 }
 
                 // Reduce other moves if we have found at least one score improvement
-                if (depth > 2 && depth < 14 && !is_decisive(value))
+                if (depth > 2 && !is_decisive(value))
                     depth -= 2;
 
                 assert(depth > 0);
