@@ -855,7 +855,9 @@ void update_threats_accumulator_full(Color                                 persp
     using Tiling [[maybe_unused]] = SIMDTiling<Dimensions, Dimensions, PSQTBuckets>;
 
     ThreatFeatureSet::IndexList active;
-    ThreatFeatureSet::append_active_indices(perspective, pos, active);
+    const auto*                 pfBase   = &featureTransformer.threatWeights[0];
+    auto                        pfStride = static_cast<IndexType>(Dimensions);
+    ThreatFeatureSet::append_active_indices(perspective, pos, active, pfBase, pfStride);
 
     auto& accumulator                 = accumulatorState.acc<Dimensions>();
     accumulator.computed[perspective] = true;

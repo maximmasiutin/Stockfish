@@ -206,7 +206,11 @@ inline sf_always_inline IndexType FullThreats::make_index(
 
 // Get a list of indices for active features in ascending order
 
-void FullThreats::append_active_indices(Color perspective, const Position& pos, IndexList& active) {
+void FullThreats::append_active_indices(Color                   perspective,
+                                        const Position&         pos,
+                                        IndexList&              active,
+                                        const ThreatWeightType* prefetchBase,
+                                        IndexType               prefetchStride) {
     Square   ksq      = pos.square<KING>(perspective);
     Bitboard occupied = pos.pieces();
 
@@ -235,7 +239,12 @@ void FullThreats::append_active_indices(Color perspective, const Position& pos, 
                     IndexType index    = make_index(perspective, attacker, from, to, attacked, ksq);
 
                     if (index < Dimensions)
+                    {
+                        if (prefetchBase)
+                            prefetch<PrefetchRw::READ, PrefetchLoc::LOW>(
+                              prefetchBase + static_cast<std::ptrdiff_t>(index) * prefetchStride);
                         active.push_back(index);
+                    }
                 }
 
                 while (attacks_right)
@@ -246,7 +255,12 @@ void FullThreats::append_active_indices(Color perspective, const Position& pos, 
                     IndexType index    = make_index(perspective, attacker, from, to, attacked, ksq);
 
                     if (index < Dimensions)
+                    {
+                        if (prefetchBase)
+                            prefetch<PrefetchRw::READ, PrefetchLoc::LOW>(
+                              prefetchBase + static_cast<std::ptrdiff_t>(index) * prefetchStride);
                         active.push_back(index);
+                    }
                 }
             }
             else
@@ -264,7 +278,13 @@ void FullThreats::append_active_indices(Color perspective, const Position& pos, 
                           make_index(perspective, attacker, from, to, attacked, ksq);
 
                         if (index < Dimensions)
+                        {
+                            if (prefetchBase)
+                                prefetch<PrefetchRw::READ, PrefetchLoc::LOW>(
+                                  prefetchBase
+                                  + static_cast<std::ptrdiff_t>(index) * prefetchStride);
                             active.push_back(index);
+                        }
                     }
                 }
             }
