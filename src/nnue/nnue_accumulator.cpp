@@ -874,24 +874,39 @@ void update_threats_accumulator_full(Color                                 persp
         for (IndexType k = 0; k < Tiling::NumRegs; ++k)
             acc[k] = vec_zero();
 
-        int i = 0;
+        constexpr int BlockSize = 8;
+        const int     n         = active.ssize();
+        int           i         = 0;
 
-        for (; i < active.ssize(); ++i)
+        // Prefetch first block
+        for (int b = 0; b < std::min(n, BlockSize); ++b)
+            prefetch(&threatWeights[Dimensions * active[b]]);
+
+        for (; i < n; i += BlockSize)
         {
-            size_t       index  = active[i];
-            const size_t offset = Dimensions * index;
-            auto*        column = reinterpret_cast<const vec_i8_t*>(&threatWeights[offset]);
+            const int blockEnd = std::min(i + BlockSize, n);
+
+            // Prefetch next block
+            for (int b = blockEnd; b < std::min(blockEnd + BlockSize, n); ++b)
+                prefetch(&threatWeights[Dimensions * active[b]]);
+
+            for (int bi = i; bi < blockEnd; ++bi)
+            {
+                size_t       index  = active[bi];
+                const size_t offset = Dimensions * index;
+                auto*        column = reinterpret_cast<const vec_i8_t*>(&threatWeights[offset]);
 
     #ifdef USE_NEON
-            for (IndexType k = 0; k < Tiling::NumRegs; k += 2)
-            {
-                acc[k]     = vec_add_16(acc[k], vmovl_s8(vget_low_s8(column[k / 2])));
-                acc[k + 1] = vec_add_16(acc[k + 1], vmovl_high_s8(column[k / 2]));
-            }
+                for (IndexType k = 0; k < Tiling::NumRegs; k += 2)
+                {
+                    acc[k]     = vec_add_16(acc[k], vmovl_s8(vget_low_s8(column[k / 2])));
+                    acc[k + 1] = vec_add_16(acc[k + 1], vmovl_high_s8(column[k / 2]));
+                }
     #else
-            for (IndexType k = 0; k < Tiling::NumRegs; ++k)
-                acc[k] = vec_add_16(acc[k], vec_convert_8_16(column[k]));
+                for (IndexType k = 0; k < Tiling::NumRegs; ++k)
+                    acc[k] = vec_add_16(acc[k], vec_convert_8_16(column[k]));
     #endif
+            }
         }
 
         for (IndexType k = 0; k < Tiling::NumRegs; k++)
