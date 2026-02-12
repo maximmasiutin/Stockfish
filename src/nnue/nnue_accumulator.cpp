@@ -857,6 +857,11 @@ void update_threats_accumulator_full(Color                                 persp
     ThreatFeatureSet::IndexList active;
     ThreatFeatureSet::append_active_indices(perspective, pos, active);
 
+    // Prefetch all weight columns as early as possible
+    for (int i = 0; i < active.ssize(); ++i)
+        prefetch<PrefetchRw::READ, PrefetchLoc::LOW>(
+          &featureTransformer.threatWeights[Dimensions * active[i]]);
+
     auto& accumulator                 = accumulatorState.acc<Dimensions>();
     accumulator.computed[perspective] = true;
 
