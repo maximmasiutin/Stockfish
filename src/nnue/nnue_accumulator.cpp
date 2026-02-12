@@ -878,6 +878,9 @@ void update_threats_accumulator_full(Color                                 persp
 
         for (; i < active.ssize(); ++i)
         {
+            prefetch<PrefetchRw::READ, PrefetchLoc::HIGH>(
+              &threatWeights[Dimensions * active[i + 2]]);
+
             size_t       index  = active[i];
             const size_t offset = Dimensions * index;
             auto*        column = reinterpret_cast<const vec_i8_t*>(&threatWeights[offset]);
