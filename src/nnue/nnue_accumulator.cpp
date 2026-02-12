@@ -866,6 +866,38 @@ void update_threats_accumulator_full(Color                                 persp
 
     const auto* threatWeights = &featureTransformer.threatWeights[0];
 
+    #if defined(USE_AVX512)
+    // Feature-first: process both tiles in one pass using 32 ZMM registers
+    vec_t acc_hi[Tiling::NumRegs];
+
+    auto* accTile0 = reinterpret_cast<vec_t*>(&accumulator.accumulation[perspective][0]);
+    auto* accTile1 =
+      reinterpret_cast<vec_t*>(&accumulator.accumulation[perspective][Tiling::TileHeight]);
+
+    for (IndexType k = 0; k < Tiling::NumRegs; ++k)
+        acc[k] = vec_zero();
+    for (IndexType k = 0; k < Tiling::NumRegs; ++k)
+        acc_hi[k] = vec_zero();
+
+    for (int i = 0; i < active.ssize(); ++i)
+    {
+        size_t       index    = active[i];
+        const size_t offset   = Dimensions * index;
+        auto*        columnLo = reinterpret_cast<const vec_i8_t*>(&threatWeights[offset]);
+        auto*        columnHi =
+          reinterpret_cast<const vec_i8_t*>(&threatWeights[offset + Tiling::TileHeight]);
+
+        for (IndexType k = 0; k < Tiling::NumRegs; ++k)
+            acc[k] = vec_add_16(acc[k], vec_convert_8_16(columnLo[k]));
+        for (IndexType k = 0; k < Tiling::NumRegs; ++k)
+            acc_hi[k] = vec_add_16(acc_hi[k], vec_convert_8_16(columnHi[k]));
+    }
+
+    for (IndexType k = 0; k < Tiling::NumRegs; ++k)
+        vec_store(&accTile0[k], acc[k]);
+    for (IndexType k = 0; k < Tiling::NumRegs; ++k)
+        vec_store(&accTile1[k], acc_hi[k]);
+    #else
     for (IndexType j = 0; j < Dimensions / Tiling::TileHeight; ++j)
     {
         auto* accTile =
@@ -882,16 +914,16 @@ void update_threats_accumulator_full(Color                                 persp
             const size_t offset = Dimensions * index;
             auto*        column = reinterpret_cast<const vec_i8_t*>(&threatWeights[offset]);
 
-    #ifdef USE_NEON
+        #ifdef USE_NEON
             for (IndexType k = 0; k < Tiling::NumRegs; k += 2)
             {
                 acc[k]     = vec_add_16(acc[k], vmovl_s8(vget_low_s8(column[k / 2])));
                 acc[k + 1] = vec_add_16(acc[k + 1], vmovl_high_s8(column[k / 2]));
             }
-    #else
+        #else
             for (IndexType k = 0; k < Tiling::NumRegs; ++k)
                 acc[k] = vec_add_16(acc[k], vec_convert_8_16(column[k]));
-    #endif
+        #endif
         }
 
         for (IndexType k = 0; k < Tiling::NumRegs; k++)
@@ -899,6 +931,7 @@ void update_threats_accumulator_full(Color                                 persp
 
         threatWeights += Tiling::TileHeight;
     }
+    #endif
 
     for (IndexType j = 0; j < PSQTBuckets / Tiling::PsqtTileHeight; ++j)
     {
