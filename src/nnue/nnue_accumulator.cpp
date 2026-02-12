@@ -370,12 +370,10 @@ struct AccumulatorUpdateContext {
             for (IndexType k = 0; k < Tiling::NumRegs; ++k)
                 acc[k] = fromTile[k];
 
-            for (int i = 0; i < removed.ssize(); ++i)
-            {
-                size_t       index  = removed[i];
-                const size_t offset = Dimensions * index;
+            // Lambda for SIMD subtract of one column.
+            auto subtractColumn = [&](int idx) {
+                const size_t offset = Dimensions * size_t(removed[idx]);
                 auto*        column = reinterpret_cast<const vec_i8_t*>(&threatWeights[offset]);
-
     #ifdef USE_NEON
                 for (IndexType k = 0; k < Tiling::NumRegs; k += 2)
                 {
@@ -386,14 +384,12 @@ struct AccumulatorUpdateContext {
                 for (IndexType k = 0; k < Tiling::NumRegs; ++k)
                     acc[k] = vec_sub_16(acc[k], vec_convert_8_16(column[k]));
     #endif
-            }
+            };
 
-            for (int i = 0; i < added.ssize(); ++i)
-            {
-                size_t       index  = added[i];
-                const size_t offset = Dimensions * index;
+            // Lambda for SIMD add of one column.
+            auto addColumn = [&](int idx) {
+                const size_t offset = Dimensions * size_t(added[idx]);
                 auto*        column = reinterpret_cast<const vec_i8_t*>(&threatWeights[offset]);
-
     #ifdef USE_NEON
                 for (IndexType k = 0; k < Tiling::NumRegs; k += 2)
                 {
@@ -404,6 +400,30 @@ struct AccumulatorUpdateContext {
                 for (IndexType k = 0; k < Tiling::NumRegs; ++k)
                     acc[k] = vec_add_16(acc[k], vec_convert_8_16(column[k]));
     #endif
+            };
+
+            // Split-loop subtract: main with rolling prefetch +3 (safe by bound).
+            {
+                int i = 0;
+                for (; i + 3 < removed.ssize(); ++i)
+                {
+                    prefetch(&threatWeights[Dimensions * removed[i + 3]]);
+                    subtractColumn(i);
+                }
+                for (; i < removed.ssize(); ++i)
+                    subtractColumn(i);
+            }
+
+            // Split-loop add: main with rolling prefetch +3 (safe by bound).
+            {
+                int i = 0;
+                for (; i + 3 < added.ssize(); ++i)
+                {
+                    prefetch(&threatWeights[Dimensions * added[i + 3]]);
+                    addColumn(i);
+                }
+                for (; i < added.ssize(); ++i)
+                    addColumn(i);
             }
 
             for (IndexType k = 0; k < Tiling::NumRegs; k++)
