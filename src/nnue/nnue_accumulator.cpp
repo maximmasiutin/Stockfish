@@ -347,6 +347,14 @@ struct AccumulatorUpdateContext {
           to_psqt_weight_vector(indices)...);
     }
 
+    // Prefetch N threat weight columns from list
+    template<int N>
+    static void prefetchThreatColumns(const ThreatWeightType*               weights,
+                                      const typename FeatureSet::IndexList& list) {
+        for (int i = 0; i < N; ++i)
+            prefetch<PrefetchRw::READ, PrefetchLoc::LOW>(&weights[Dimensions * list[i]]);
+    }
+
     void apply(const typename FeatureSet::IndexList& added,
                const typename FeatureSet::IndexList& removed) {
         const auto& fromAcc = from.template acc<Dimensions>().accumulation[perspective];
@@ -369,6 +377,36 @@ struct AccumulatorUpdateContext {
 
             for (IndexType k = 0; k < Tiling::NumRegs; ++k)
                 acc[k] = fromTile[k];
+
+            // Prefetch first up-to-3 weight columns for both lists before processing
+            switch (std::min(removed.ssize(), 3))
+            {
+            case 3 :
+                prefetchThreatColumns<3>(threatWeights, removed);
+                break;
+            case 2 :
+                prefetchThreatColumns<2>(threatWeights, removed);
+                break;
+            case 1 :
+                prefetchThreatColumns<1>(threatWeights, removed);
+                break;
+            default :
+                break;
+            }
+            switch (std::min(added.ssize(), 3))
+            {
+            case 3 :
+                prefetchThreatColumns<3>(threatWeights, added);
+                break;
+            case 2 :
+                prefetchThreatColumns<2>(threatWeights, added);
+                break;
+            case 1 :
+                prefetchThreatColumns<1>(threatWeights, added);
+                break;
+            default :
+                break;
+            }
 
             for (int i = 0; i < removed.ssize(); ++i)
             {
