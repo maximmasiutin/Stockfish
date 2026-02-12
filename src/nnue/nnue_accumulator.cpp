@@ -406,6 +406,9 @@ struct AccumulatorUpdateContext {
     #endif
             }
 
+            // Write-prefetch destination before store
+            prefetch<PrefetchRw::WRITE, PrefetchLoc::HIGH>(toTile);
+
             for (IndexType k = 0; k < Tiling::NumRegs; k++)
                 vec_store(&toTile[k], acc[k]);
 
