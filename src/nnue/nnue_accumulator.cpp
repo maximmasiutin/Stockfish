@@ -370,6 +370,9 @@ struct AccumulatorUpdateContext {
             for (IndexType k = 0; k < Tiling::NumRegs; ++k)
                 acc[k] = fromTile[k];
 
+            for (int i = 0; i < std::min(removed.ssize(), 3); ++i)
+                prefetch(&threatWeights[Dimensions * removed[i]]);
+
             for (int i = 0; i < removed.ssize(); ++i)
             {
                 size_t       index  = removed[i];
@@ -387,6 +390,9 @@ struct AccumulatorUpdateContext {
                     acc[k] = vec_sub_16(acc[k], vec_convert_8_16(column[k]));
     #endif
             }
+
+            for (int i = 0; i < std::min(added.ssize(), 3); ++i)
+                prefetch(&threatWeights[Dimensions * added[i]]);
 
             for (int i = 0; i < added.ssize(); ++i)
             {
@@ -878,6 +884,11 @@ void update_threats_accumulator_full(Color                                 persp
 
         for (; i < active.ssize(); ++i)
         {
+            prefetch<PrefetchRw::READ, PrefetchLoc::HIGH>(
+              &threatWeights[Dimensions * active[i + 2]]);
+            prefetch<PrefetchRw::READ, PrefetchLoc::LOW>(
+              &threatWeights[Dimensions * active[i + 5]]);
+
             size_t       index  = active[i];
             const size_t offset = Dimensions * index;
             auto*        column = reinterpret_cast<const vec_i8_t*>(&threatWeights[offset]);
