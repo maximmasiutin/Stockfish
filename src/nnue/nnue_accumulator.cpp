@@ -360,15 +360,26 @@ struct AccumulatorUpdateContext {
         vec_t      acc[Tiling::NumRegs];
         psqt_vec_t psqt[Tiling::NumPsqtRegs];
 
-        const auto* threatWeights = &featureTransformer.threatWeights[0];
+        const auto*         threatWeights = &featureTransformer.threatWeights[0];
+        constexpr IndexType tileCount     = Dimensions / Tiling::TileHeight;
 
-        for (IndexType j = 0; j < Dimensions / Tiling::TileHeight; ++j)
+        for (IndexType j = 0; j < tileCount; ++j)
         {
             auto* fromTile = reinterpret_cast<const vec_t*>(&fromAcc[j * Tiling::TileHeight]);
             auto* toTile   = reinterpret_cast<vec_t*>(&toAcc[j * Tiling::TileHeight]);
 
             for (IndexType k = 0; k < Tiling::NumRegs; ++k)
                 acc[k] = fromTile[k];
+
+            // Prefetch next tile's columns (safe: j + 1 < tileCount).
+            if (j + 1 < tileCount)
+            {
+                const auto* nextTile = threatWeights + Tiling::TileHeight;
+                for (int i = 0; i < removed.ssize(); ++i)
+                    prefetch(&nextTile[Dimensions * removed[i]]);
+                for (int i = 0; i < added.ssize(); ++i)
+                    prefetch(&nextTile[Dimensions * added[i]]);
+            }
 
             for (int i = 0; i < removed.ssize(); ++i)
             {
