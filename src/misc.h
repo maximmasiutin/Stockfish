@@ -37,6 +37,10 @@
 #include <type_traits>
 #include <vector>
 
+#if !defined(NO_PREFETCH) && (defined(_MSC_VER) || defined(__INTEL_COMPILER))
+    #include <immintrin.h>
+#endif
+
 #define stringify2(x) #x
 #define stringify(x) stringify2(x)
 
@@ -46,10 +50,30 @@ std::string engine_version_info();
 std::string engine_info(bool to_uci = false);
 std::string compiler_info();
 
-// Preloads the given address in L1/L2 cache. This is a non-blocking
-// function that doesn't stall the CPU waiting for data to be loaded from memory,
-// which can be quite slow.
-void prefetch(const void* addr);
+// Prefetch locality hints
+enum class PrefetchLoc {
+    LOW,   // T2: L2/L3 only (longer lead time)
+    HIGH   // T0: L1+L2+L3 (shorter lead time)
+};
+
+// Preloads the given address into cache. This is a non-blocking
+// function that doesn't stall the CPU waiting for data to be loaded from memory.
+#ifdef NO_PREFETCH
+template<PrefetchLoc LOC = PrefetchLoc::HIGH>
+inline void prefetch(const void*) {}
+#elif defined(_MSC_VER) || defined(__INTEL_COMPILER)
+template<PrefetchLoc LOC = PrefetchLoc::HIGH>
+inline void prefetch(const void* addr) {
+    constexpr int hint = (LOC == PrefetchLoc::LOW) ? _MM_HINT_T2 : _MM_HINT_T0;
+    _mm_prefetch(static_cast<const char*>(addr), hint);
+}
+#else
+template<PrefetchLoc LOC = PrefetchLoc::HIGH>
+inline void prefetch(const void* addr) {
+    constexpr int locality = (LOC == PrefetchLoc::LOW) ? 1 : 3;
+    __builtin_prefetch(addr, 0, locality);
+}
+#endif
 
 void start_logger(const std::string& fname);
 
