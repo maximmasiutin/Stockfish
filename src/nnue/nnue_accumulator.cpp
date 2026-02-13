@@ -370,8 +370,17 @@ struct AccumulatorUpdateContext {
             for (IndexType k = 0; k < Tiling::NumRegs; ++k)
                 acc[k] = fromTile[k];
 
+            // Prefetch weight columns 3-ahead for both lists
+            for (int p = 0; p < std::min(removed.ssize(), 3); ++p)
+                prefetch(&threatWeights[Dimensions * removed[p]]);
+            for (int p = 0; p < std::min(added.ssize(), 3); ++p)
+                prefetch(&threatWeights[Dimensions * added[p]]);
+
             for (int i = 0; i < removed.ssize(); ++i)
             {
+                if (i + 3 < removed.ssize())
+                    prefetch(&threatWeights[Dimensions * removed[i + 3]]);
+
                 size_t       index  = removed[i];
                 const size_t offset = Dimensions * index;
                 auto*        column = reinterpret_cast<const vec_i8_t*>(&threatWeights[offset]);
@@ -390,6 +399,9 @@ struct AccumulatorUpdateContext {
 
             for (int i = 0; i < added.ssize(); ++i)
             {
+                if (i + 3 < added.ssize())
+                    prefetch(&threatWeights[Dimensions * added[i + 3]]);
+
                 size_t       index  = added[i];
                 const size_t offset = Dimensions * index;
                 auto*        column = reinterpret_cast<const vec_i8_t*>(&threatWeights[offset]);
@@ -874,10 +886,15 @@ void update_threats_accumulator_full(Color                                 persp
         for (IndexType k = 0; k < Tiling::NumRegs; ++k)
             acc[k] = vec_zero();
 
-        int i = 0;
+        // Prefetch first 3 weight columns before processing
+        for (int p = 0; p < std::min(active.ssize(), 3); ++p)
+            prefetch(&threatWeights[Dimensions * active[p]]);
 
-        for (; i < active.ssize(); ++i)
+        for (int i = 0; i < active.ssize(); ++i)
         {
+            if (i + 3 < active.ssize())
+                prefetch(&threatWeights[Dimensions * active[i + 3]]);
+
             size_t       index  = active[i];
             const size_t offset = Dimensions * index;
             auto*        column = reinterpret_cast<const vec_i8_t*>(&threatWeights[offset]);
