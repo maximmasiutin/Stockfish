@@ -362,6 +362,16 @@ struct AccumulatorUpdateContext {
 
         const auto* threatWeights = &featureTransformer.threatWeights[0];
 
+        // Prefetch first weight columns before tile loop
+        {
+            const int nr = std::min(4, removed.ssize());
+            for (int i = 0; i < nr; ++i)
+                prefetch(&threatWeights[Dimensions * removed[i]]);
+            const int na = std::min(4, added.ssize());
+            for (int i = 0; i < na; ++i)
+                prefetch(&threatWeights[Dimensions * added[i]]);
+        }
+
         for (IndexType j = 0; j < Dimensions / Tiling::TileHeight; ++j)
         {
             auto* fromTile = reinterpret_cast<const vec_t*>(&fromAcc[j * Tiling::TileHeight]);
