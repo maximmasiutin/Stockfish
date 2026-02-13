@@ -139,7 +139,8 @@ void update_all_stats(const Position& pos,
                       SearchedList&   quietsSearched,
                       SearchedList&   capturesSearched,
                       Depth           depth,
-                      Move            ttMove);
+                      Move            TTMove,
+                      int             moveCount);
 
 bool is_shuffling(Move move, Stack* const ss, const Position& pos) {
     if (pos.capture_stage(move) || pos.rule50_count() < 10)
@@ -943,7 +944,7 @@ Value Search::Worker::search(
         assert(probCutBeta < VALUE_INFINITE && probCutBeta > beta);
 
         MovePicker mp(pos, ttData.move, probCutBeta - ss->staticEval, &captureHistory);
-        Depth      probCutDepth = depth - 5;
+        Depth      probCutDepth = std::clamp(depth - 5 - (ss->staticEval - beta) / 315, 0, depth);
 
         while ((move = mp.next_move()) != Move::none())
         {
@@ -1413,7 +1414,7 @@ moves_loop:  // When in check, search starts here
     else if (bestMove)
     {
         update_all_stats(pos, ss, *this, bestMove, prevSq, quietsSearched, capturesSearched, depth,
-                         ttData.move);
+                         ttData.move, moveCount);
         if (!PvNode)
             ttMoveHistory << (bestMove == ttData.move ? 809 : -865);
     }
@@ -1821,7 +1822,8 @@ void update_all_stats(const Position& pos,
                       SearchedList&   quietsSearched,
                       SearchedList&   capturesSearched,
                       Depth           depth,
-                      Move            ttMove) {
+                      Move            ttMove,
+                      int             moveCount) {
 
     CapturePieceToHistory& captureHistory = workerThread.captureHistory;
     Piece                  movedPiece     = pos.moved_piece(bestMove);
@@ -1829,17 +1831,20 @@ void update_all_stats(const Position& pos,
 
     int bonus =
       std::min(116 * depth - 81, 1515) + 347 * (bestMove == ttMove) + (ss - 1)->statScore / 32;
-    int malus = std::min(800 * depth - 207, 2200);
+    int malus = std::min(848 * depth - 207, 2446) - 17 * moveCount;
 
     if (!pos.capture_stage(bestMove))
     {
         update_quiet_histories(pos, ss, workerThread, bestMove, bonus * 910 / 1024);
 
-        int actualMalus = malus * 1100 / 1024;
+        int i = 0;
         // Decrease stats for all non-best quiet moves
         for (Move move : quietsSearched)
         {
-            actualMalus = actualMalus * 950 / 1024;
+            i++;
+            int actualMalus = malus * 1085 / 1024;
+            if (i > 5)
+                actualMalus -= actualMalus * (i - 5) / i;
             update_quiet_histories(pos, ss, workerThread, move, -actualMalus);
         }
     }
@@ -1868,18 +1873,22 @@ void update_all_stats(const Position& pos,
 // Updates histories of the move pairs formed by moves
 // at ply -1, -2, -3, -4, and -6 with current move.
 void update_continuation_histories(Stack* ss, Piece pc, Square to, int bonus) {
-    static constexpr std::array<ConthistBonus, 6> conthist_bonuses = {
-      {{1, 1133}, {2, 683}, {3, 312}, {4, 582}, {5, 149}, {6, 474}}};
 
-    for (const auto [i, weight] : conthist_bonuses)
-    {
-        // Only update the first 2 continuation histories if we are in check
-        if (ss->inCheck && i > 2)
-            break;
+    auto* addr1 = &(*(ss - 1)->continuationHistory)[pc][to];
+    auto* addr2 = &(*(ss - 2)->continuationHistory)[pc][to];
+    auto* addr3 = &(*(ss - 3)->continuationHistory)[pc][to];
+    auto* addr4 = &(*(ss - 4)->continuationHistory)[pc][to];
+    auto* addr5 = &(*(ss - 5)->continuationHistory)[pc][to];
+    auto* addr6 = &(*(ss - 6)->continuationHistory)[pc][to];
 
-        if (((ss - i)->currentMove).is_ok())
-            (*(ss - i)->continuationHistory)[pc][to] << (bonus * weight / 1024) + 88 * (i < 2);
-    }
+    const bool notInCheck = !ss->inCheck;
+
+    *addr1 << (((ss - 1)->currentMove).is_ok() ? bonus * 1133 / 1024 + 88 : 0);
+    *addr2 << (((ss - 2)->currentMove).is_ok() ? bonus * 683 / 1024 : 0);
+    *addr3 << (notInCheck && ((ss - 3)->currentMove).is_ok() ? bonus * 312 / 1024 : 0);
+    *addr4 << (notInCheck && ((ss - 4)->currentMove).is_ok() ? bonus * 582 / 1024 : 0);
+    *addr5 << (notInCheck && ((ss - 5)->currentMove).is_ok() ? bonus * 149 / 1024 : 0);
+    *addr6 << (notInCheck && ((ss - 6)->currentMove).is_ok() ? bonus * 474 / 1024 : 0);
 }
 
 // Updates move sorting heuristics
