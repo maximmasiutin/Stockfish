@@ -128,6 +128,7 @@ Value value_draw(size_t nodes) { return VALUE_DRAW - 1 + Value(nodes & 0x2); }
 Value value_to_tt(Value v, int ply);
 Value value_from_tt(Value v, int ply, int r50c);
 void  update_pv(Move* pv, Move move, const Move* childPv);
+void  prefetch_continuation_histories(Stack* ss, Piece pc, Square to);
 void  update_continuation_histories(Stack* ss, Piece pc, Square to, int bonus);
 void  update_quiet_histories(
    const Position& pos, Stack* ss, Search::Worker& workerThread, Move move, int bonus);
@@ -771,7 +772,10 @@ Value Search::Worker::search(
 
             // Extra penalty for early quiet moves of the previous ply
             if (prevSq != SQ_NONE && (ss - 1)->moveCount < 4 && !priorCapture)
+            {
+                prefetch_continuation_histories(ss - 1, pos.piece_on(prevSq), prevSq);
                 update_continuation_histories(ss - 1, pos.piece_on(prevSq), prevSq, -2060);
+            }
         }
 
         // Partial workaround for the graph history interaction problem
@@ -1255,6 +1259,7 @@ moves_loop:  // When in check, search starts here
                     value = -search<NonPV>(pos, ss + 1, -(alpha + 1), -alpha, newDepth, !cutNode);
 
                 // Post LMR continuation history updates
+                prefetch_continuation_histories(ss, movedPiece, move.to_sq());
                 update_continuation_histories(ss, movedPiece, move.to_sq(), 1365);
             }
         }
@@ -1434,6 +1439,7 @@ moves_loop:  // When in check, search starts here
         // scaledBonus ranges from 0 to roughly 2.3M, overflows happen for multipliers larger than 900
         const int scaledBonus = std::min(141 * depth - 87, 1351) * bonusScale;
 
+        prefetch_continuation_histories(ss - 1, pos.piece_on(prevSq), prevSq);
         update_continuation_histories(ss - 1, pos.piece_on(prevSq), prevSq,
                                       scaledBonus * 406 / 32768);
 
@@ -1858,7 +1864,10 @@ void update_all_stats(const Position& pos,
     // Extra penalty for a quiet early move that was not a TT move in
     // previous ply when it gets refuted.
     if (prevSq != SQ_NONE && ((ss - 1)->moveCount == 1 + (ss - 1)->ttHit) && !pos.captured_piece())
+    {
+        prefetch_continuation_histories(ss - 1, pos.piece_on(prevSq), prevSq);
         update_continuation_histories(ss - 1, pos.piece_on(prevSq), prevSq, -malus * 602 / 1024);
+    }
 
     // Decrease stats for all non-best capture moves
     for (Move move : capturesSearched)
@@ -1869,6 +1878,12 @@ void update_all_stats(const Position& pos,
     }
 }
 
+
+// Prefetch contHist entries at caller site for more lead time
+void prefetch_continuation_histories(Stack* ss, Piece pc, Square to) {
+    for (int i = 1; i <= 6; ++i)
+        prefetch(&(*(ss - i)->continuationHistory)[pc][to]);
+}
 
 // Updates histories of the move pairs formed by moves
 // at ply -1, -2, -3, -4, and -6 with current move.
@@ -1891,6 +1906,8 @@ void update_continuation_histories(Stack* ss, Piece pc, Square to, int bonus) {
 
 void update_quiet_histories(
   const Position& pos, Stack* ss, Search::Worker& workerThread, Move move, int bonus) {
+
+    prefetch_continuation_histories(ss, pos.moved_piece(move), move.to_sq());
 
     Color us = pos.side_to_move();
     workerThread.mainHistory[us][move.raw()] << bonus;  // Untuned to prevent duplicate effort
