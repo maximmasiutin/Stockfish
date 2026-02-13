@@ -370,6 +370,12 @@ struct AccumulatorUpdateContext {
             for (IndexType k = 0; k < Tiling::NumRegs; ++k)
                 acc[k] = fromTile[k];
 
+            // Prefetch first weight columns before processing
+            for (int i = 0; i < std::min(removed.ssize(), 3); ++i)
+                prefetch(&threatWeights[Dimensions * removed[i]]);
+            for (int i = 0; i < std::min(added.ssize(), 3); ++i)
+                prefetch(&threatWeights[Dimensions * added[i]]);
+
             for (int i = 0; i < removed.ssize(); ++i)
             {
                 size_t       index  = removed[i];
