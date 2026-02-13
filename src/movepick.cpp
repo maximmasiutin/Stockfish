@@ -139,11 +139,13 @@ ExtMove* MovePicker::score(MoveList<Type>& ml) {
         threatByLesser[KING]  = pos.attacks_by<QUEEN>(~us) | threatByLesser[QUEEN];
     }
 
-    ExtMove* it = cur;
-    for (auto move : ml)
+    ExtMove*    it    = cur;
+    const Move* mlIt  = ml.begin();
+    const Move* mlEnd = ml.end();
+    for (; mlIt != mlEnd; ++mlIt)
     {
         ExtMove& m = *it++;
-        m          = move;
+        m          = *mlIt;
 
         const Square    from          = m.from_sq();
         const Square    to            = m.to_sq();
@@ -157,6 +159,15 @@ ExtMove* MovePicker::score(MoveList<Type>& ml) {
 
         else if constexpr (Type == QUIETS)
         {
+            // Prefetch contHist entries for next move
+            if (mlIt + 1 < mlEnd)
+            {
+                Piece  nextPc = pos.moved_piece(*(mlIt + 1));
+                Square nextTo = (mlIt + 1)->to_sq();
+                prefetch(&(*continuationHistory[0])[nextPc][nextTo]);
+                prefetch(&(*continuationHistory[1])[nextPc][nextTo]);
+            }
+
             // histories
             m.value = 2 * (*mainHistory)[us][m.raw()];
             m.value += 2 * sharedHistory->pawn_entry(pos)[pc][to];
