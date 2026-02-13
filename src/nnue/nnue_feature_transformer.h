@@ -26,6 +26,7 @@
 #include <cstring>
 #include <iosfwd>
 #include <iterator>
+#include <memory>
 
 #include "../position.h"
 #include "../types.h"
@@ -151,6 +152,45 @@ class FeatureTransformer {
             b = read ? b * 2 : b / 2;
     }
 
+#ifdef VECTOR
+    // Reorder threatWeights from feature-major to tile-interleaved layout.
+    // Old: threatWeights[feature * HalfDimensions + dim]
+    // New: threatWeights[tile * F * TH + feature * TH + dim_within_tile]
+    void transpose_threat_weights() {
+        if constexpr (!UseThreats)
+            return;
+
+        using Tiling           = SIMD::SIMDTiling<HalfDimensions, HalfDimensions, PSQTBuckets>;
+        constexpr IndexType TH = Tiling::TileHeight;
+        constexpr IndexType NumTiles = HalfDimensions / TH;
+        constexpr IndexType F        = ThreatInputDimensions;
+
+        auto orig = std::make_unique<decltype(threatWeights)>(threatWeights);
+
+        for (IndexType f = 0; f < F; ++f)
+            for (IndexType t = 0; t < NumTiles; ++t)
+                std::memcpy(&threatWeights[t * F * TH + f * TH],
+                            &(*orig)[f * HalfDimensions + t * TH], TH * sizeof(ThreatWeightType));
+    }
+
+    void untranspose_threat_weights() {
+        if constexpr (!UseThreats)
+            return;
+
+        using Tiling           = SIMD::SIMDTiling<HalfDimensions, HalfDimensions, PSQTBuckets>;
+        constexpr IndexType TH = Tiling::TileHeight;
+        constexpr IndexType NumTiles = HalfDimensions / TH;
+        constexpr IndexType F        = ThreatInputDimensions;
+
+        auto tiled = std::make_unique<decltype(threatWeights)>(threatWeights);
+
+        for (IndexType f = 0; f < F; ++f)
+            for (IndexType t = 0; t < NumTiles; ++t)
+                std::memcpy(&threatWeights[f * HalfDimensions + t * TH],
+                            &(*tiled)[t * F * TH + f * TH], TH * sizeof(ThreatWeightType));
+    }
+#endif
+
     // Read network parameters
     bool read_parameters(std::istream& stream) {
         read_leb_128(stream, biases);
@@ -171,6 +211,10 @@ class FeatureTransformer {
 
         permute_weights();
 
+#ifdef VECTOR
+        transpose_threat_weights();
+#endif
+
         if constexpr (!UseThreats)
             scale_weights(true);
 
@@ -181,6 +225,9 @@ class FeatureTransformer {
     bool write_parameters(std::ostream& stream) const {
         std::unique_ptr<FeatureTransformer> copy = std::make_unique<FeatureTransformer>(*this);
 
+#ifdef VECTOR
+        copy->untranspose_threat_weights();
+#endif
         copy->unpermute_weights();
 
         if constexpr (!UseThreats)
