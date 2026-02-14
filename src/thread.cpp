@@ -141,8 +141,6 @@ Search::SearchManager* ThreadPool::main_manager() { return main_thread()->worker
 uint64_t ThreadPool::nodes_searched() const { return accumulate(&Search::Worker::nodes); }
 uint64_t ThreadPool::tb_hits() const { return accumulate(&Search::Worker::tbHits); }
 
-static size_t next_power_of_two(uint64_t count) { return count > 1 ? (2ULL << msb(count - 1)) : 1; }
-
 // Creates/destroys threads to match the requested number.
 // Created and launched threads will immediately go to sleep in idle_loop.
 // Upon resizing, threads are recreated to allow for binding if necessary.
@@ -198,10 +196,7 @@ void ThreadPool::set(const NumaConfig&                           numaConfig,
         for (auto pair : counts)
         {
             NumaIndex numaIndex = pair.first;
-            uint64_t  count     = pair.second;
-            auto      f         = [&]() {
-                sharedState.sharedHistories.try_emplace(numaIndex, next_power_of_two(count));
-            };
+            auto      f         = [&]() { sharedState.sharedHistories.try_emplace(numaIndex, 1); };
             if (doBindThreads)
                 numaConfig.execute_on_numa_node(numaIndex, f);
             else
