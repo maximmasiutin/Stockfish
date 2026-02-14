@@ -616,15 +616,15 @@ void Search::Worker::clear() {
     for (size_t i = 1; i < reductions.size(); ++i)
         reductions[i] = int(2747 / 128.0 * std::log(i));
 
+    pawnSyncCounter = 64;
+
     refreshTable.clear(networks[numaAccessToken]);
 }
 
 
-// Sync thread-local history with global shared copy for current position.
-// Copies correction and pawn history entries from global to local.
-void Search::Worker::sync_histories(const Position& pos) {
+// Sync correction entries: global -> local
+void Search::Worker::sync_correction(const Position& pos) {
 
-    // Sync correction entries: global -> local
     for (Color c : {WHITE, BLACK})
     {
         auto& lp        = localHistory.pawn_correction_entry(pos).at(c);
@@ -658,13 +658,16 @@ void Search::Worker::sync_histories(const Position& pos) {
         lb.nonPawnWhite = int16_t(gb.nonPawnWhite);
         lb.nonPawnBlack = int16_t(gb.nonPawnBlack);
     }
+}
 
-    // Sync pawn history entry: global -> local (1024 entries, ~2 KB)
+// Sync pawn history: global -> local, reset counter
+void Search::Worker::sync_pawn_history(const Position& pos) {
     auto& lph = localHistory.pawn_entry(pos);
     auto& gph = globalHistory.pawn_entry(pos);
     for (int pc = 0; pc < PIECE_NB; ++pc)
         for (Square sq = SQ_A1; sq <= SQ_H8; ++sq)
             lph[pc][sq] = int16_t(gph[pc][sq]);
+    pawnSyncCounter = 64;
 }
 
 
@@ -724,9 +727,11 @@ Value Search::Worker::search(
     if (is_mainthread())
         main_manager()->check_time(*this);
 
-    // Periodically sync thread-local history cache from global shared copy
-    if ((nodes.load(std::memory_order_relaxed) & 16383) == 0)
-        sync_histories(pos);
+    // Periodically sync thread-local correction from global
+    if ((nodes.load(std::memory_order_relaxed) & 4095) == 0)
+        sync_correction(pos);
+
+    // Pawn history synced by write counter (see pawn write sites below)
 
     // Used to send selDepth info to GUI (selDepth counts from 1, ply from 0)
     if (PvNode && selDepth < ss->ply + 1)
@@ -927,7 +932,8 @@ Value Search::Worker::search(
             && ((ss - 1)->currentMove).type_of() != PROMOTION)
         {
             globalHistory.pawn_entry(pos)[pos.piece_on(prevSq)][prevSq] << evalDiff * 13;
-            localHistory.pawn_entry(pos)[pos.piece_on(prevSq)][prevSq] << evalDiff * 13;
+            if (--pawnSyncCounter <= 0)
+                sync_pawn_history(pos);
         }
     }
 
@@ -1508,7 +1514,8 @@ moves_loop:  // When in check, search starts here
         if (type_of(pos.piece_on(prevSq)) != PAWN && ((ss - 1)->currentMove).type_of() != PROMOTION)
         {
             globalHistory.pawn_entry(pos)[pos.piece_on(prevSq)][prevSq] << scaledBonus * 290 / 8192;
-            localHistory.pawn_entry(pos)[pos.piece_on(prevSq)][prevSq] << scaledBonus * 290 / 8192;
+            if (--pawnSyncCounter <= 0)
+                sync_pawn_history(pos);
         }
     }
 
@@ -1967,8 +1974,8 @@ void update_quiet_histories(
 
     workerThread.globalHistory.pawn_entry(pos)[pos.moved_piece(move)][move.to_sq()]
       << bonus * (bonus > 0 ? 905 : 505) / 1024;
-    workerThread.localHistory.pawn_entry(pos)[pos.moved_piece(move)][move.to_sq()]
-      << bonus * (bonus > 0 ? 905 : 505) / 1024;
+    if (--workerThread.pawnSyncCounter <= 0)
+        workerThread.sync_pawn_history(pos);
 }
 
 }
