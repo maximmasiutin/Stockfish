@@ -244,13 +244,6 @@ struct SharedHistories {
         return correctionHistory[pos.pawn_key() & sizeMinus1];
     }
 
-    auto& minor_piece_correction_entry(const Position& pos) {
-        return correctionHistory[pos.minor_piece_key() & sizeMinus1];
-    }
-    const auto& minor_piece_correction_entry(const Position& pos) const {
-        return correctionHistory[pos.minor_piece_key() & sizeMinus1];
-    }
-
     template<Color c>
     auto& nonpawn_correction_entry(const Position& pos) {
         return correctionHistory[pos.non_pawn_key(c) & sizeMinus1];
