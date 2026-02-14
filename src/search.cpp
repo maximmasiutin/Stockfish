@@ -1896,7 +1896,7 @@ void update_quiet_histories(
     update_continuation_histories(ss, pos.moved_piece(move), move.to_sq(), bonus * 896 / 1024);
 
     workerThread.sharedHistory.pawn_entry(pos)[pos.moved_piece(move)][move.to_sq()]
-      << bonus * (bonus > 0 ? 905 : 505) / 1024;
+      << bonus * 705 / 1024;
 }
 
 }
