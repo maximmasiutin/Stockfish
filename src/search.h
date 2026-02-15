@@ -294,8 +294,12 @@ class Worker {
     ContinuationHistory             continuationHistory[2][2];
     CorrectionHistory<Continuation> continuationCorrectionHistory;
 
-    TTMoveHistory    ttMoveHistory;
-    SharedHistories& sharedHistory;
+    TTMoveHistory ttMoveHistory;
+
+    // Thread-local pawn history only; correction history stays shared.
+    std::unique_ptr<SharedHistories> ownedHistory;
+    SharedHistories&                 localHistory;
+    SharedHistories&                 globalHistory;
 
    private:
     void iterative_deepening();
@@ -306,6 +310,8 @@ class Worker {
     void do_null_move(Position& pos, StateInfo& st, Stack* const ss);
     void undo_move(Position& pos, const Move move);
     void undo_null_move(Position& pos);
+
+    void sync_pawn_history(const Position& pos);
 
     // This is the main search function, for both PV and non-PV nodes
     template<NodeType nodeType>
