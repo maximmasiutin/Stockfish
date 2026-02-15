@@ -79,7 +79,7 @@ using SearchedList                  = ValueList<Move, SEARCHEDLIST_CAPACITY>;
 int correction_value(const Worker& w, const Position& pos, const Stack* const ss) {
     const Color us     = pos.side_to_move();
     const auto  m      = (ss - 1)->currentMove;
-    const auto& shared = w.sharedHistory;
+    const auto& shared = w.localHistory;
     const int   pcv    = shared.pawn_correction_entry(pos).at(us).pawn;
     const int   micv   = shared.minor_piece_correction_entry(pos).at(us).minor;
     const int   wnpcv  = shared.nonpawn_correction_entry<WHITE>(pos).at(us).nonPawnWhite;
@@ -106,12 +106,12 @@ void update_correction_history(const Position& pos,
     const Color us = pos.side_to_move();
 
     constexpr int nonPawnWeight = 178;
-    auto&         shared        = workerThread.sharedHistory;
+    auto&         global        = workerThread.globalHistory;
 
-    shared.pawn_correction_entry(pos).at(us).pawn << bonus;
-    shared.minor_piece_correction_entry(pos).at(us).minor << bonus * 156 / 128;
-    shared.nonpawn_correction_entry<WHITE>(pos).at(us).nonPawnWhite << bonus * nonPawnWeight / 128;
-    shared.nonpawn_correction_entry<BLACK>(pos).at(us).nonPawnBlack << bonus * nonPawnWeight / 128;
+    global.pawn_correction_entry(pos).at(us).pawn << bonus;
+    global.minor_piece_correction_entry(pos).at(us).minor << bonus * 156 / 128;
+    global.nonpawn_correction_entry<WHITE>(pos).at(us).nonPawnWhite << bonus * nonPawnWeight / 128;
+    global.nonpawn_correction_entry<BLACK>(pos).at(us).nonPawnBlack << bonus * nonPawnWeight / 128;
 
     // Branchless: use mask to zero bonus when move is not ok
     const int    mask   = int(m.is_ok());
@@ -158,8 +158,10 @@ Search::Worker::Worker(SharedState&                    sharedState,
                        size_t                          numaThreadId,
                        size_t                          numaTotalThreads,
                        NumaReplicatedAccessToken       token) :
-    // Unpack the SharedState struct into member variables
-    sharedHistory(sharedState.sharedHistories.at(token.get_numa_index())),
+    // Thread-local history with larger local buffer (size 8)
+    ownedHistory(std::make_unique<SharedHistories>(8)),
+    localHistory(*ownedHistory),
+    globalHistory(sharedState.sharedHistories.at(token.get_numa_index())),
     threadIdx(threadId),
     numaThreadIdx(numaThreadId),
     numaTotal(numaTotalThreads),
@@ -553,7 +555,7 @@ void Search::Worker::do_move(
     nodes.store(nodes.load(std::memory_order_relaxed) + 1, std::memory_order_relaxed);
 
     auto [dirtyPiece, dirtyThreats] = accumulatorStack.push();
-    pos.do_move(move, st, givesCheck, dirtyPiece, dirtyThreats, &tt, &sharedHistory);
+    pos.do_move(move, st, givesCheck, dirtyPiece, dirtyThreats, &tt, &localHistory);
 
     if (ss != nullptr)
     {
@@ -585,9 +587,13 @@ void Search::Worker::clear() {
     mainHistory.fill(0);
     captureHistory.fill(-689);
 
-    // Each thread is responsible for clearing their part of shared history
-    sharedHistory.correctionHistory.clear_range(0, numaThreadIdx, numaTotal);
-    sharedHistory.pawnHistory.clear_range(-1238, numaThreadIdx, numaTotal);
+    // Clear thread-local history (sole owner, full range)
+    localHistory.correctionHistory.clear_range(0, 0, 1);
+    localHistory.pawnHistory.clear_range(-1238, 0, 1);
+
+    // Each thread clears its part of global history
+    globalHistory.correctionHistory.clear_range(0, numaThreadIdx, numaTotal);
+    globalHistory.pawnHistory.clear_range(-1238, numaThreadIdx, numaTotal);
 
     ttMoveHistory = 0;
 
@@ -605,6 +611,54 @@ void Search::Worker::clear() {
         reductions[i] = int(2747 / 128.0 * std::log(i));
 
     refreshTable.clear(networks[numaAccessToken]);
+}
+
+
+// Sync correction entries from global to local for current position.
+void Search::Worker::sync_correction(const Position& pos) {
+    for (Color c : {WHITE, BLACK})
+    {
+        auto& lp        = localHistory.pawn_correction_entry(pos).at(c);
+        auto& gp        = globalHistory.pawn_correction_entry(pos).at(c);
+        lp.pawn         = int16_t(gp.pawn);
+        lp.minor        = int16_t(gp.minor);
+        lp.nonPawnWhite = int16_t(gp.nonPawnWhite);
+        lp.nonPawnBlack = int16_t(gp.nonPawnBlack);
+
+        auto& lm        = localHistory.minor_piece_correction_entry(pos).at(c);
+        auto& gm        = globalHistory.minor_piece_correction_entry(pos).at(c);
+        lm.pawn         = int16_t(gm.pawn);
+        lm.minor        = int16_t(gm.minor);
+        lm.nonPawnWhite = int16_t(gm.nonPawnWhite);
+        lm.nonPawnBlack = int16_t(gm.nonPawnBlack);
+    }
+
+    for (Color c : {WHITE, BLACK})
+    {
+        auto& lw        = localHistory.nonpawn_correction_entry<WHITE>(pos).at(c);
+        auto& gw        = globalHistory.nonpawn_correction_entry<WHITE>(pos).at(c);
+        lw.pawn         = int16_t(gw.pawn);
+        lw.minor        = int16_t(gw.minor);
+        lw.nonPawnWhite = int16_t(gw.nonPawnWhite);
+        lw.nonPawnBlack = int16_t(gw.nonPawnBlack);
+
+        auto& lb        = localHistory.nonpawn_correction_entry<BLACK>(pos).at(c);
+        auto& gb        = globalHistory.nonpawn_correction_entry<BLACK>(pos).at(c);
+        lb.pawn         = int16_t(gb.pawn);
+        lb.minor        = int16_t(gb.minor);
+        lb.nonPawnWhite = int16_t(gb.nonPawnWhite);
+        lb.nonPawnBlack = int16_t(gb.nonPawnBlack);
+    }
+}
+
+
+// Sync pawn history entry from global to local for current position (~2 KB).
+void Search::Worker::sync_pawn_history(const Position& pos) {
+    auto& lph = localHistory.pawn_entry(pos);
+    auto& gph = globalHistory.pawn_entry(pos);
+    for (int pc = 0; pc < PIECE_NB; ++pc)
+        for (Square sq = SQ_A1; sq <= SQ_H8; ++sq)
+            lph[pc][sq] = int16_t(gph[pc][sq]);
 }
 
 
@@ -663,6 +717,15 @@ Value Search::Worker::search(
     // Check for the available remaining time
     if (is_mainthread())
         main_manager()->check_time(*this);
+
+    // Staggered sync: correction every 2048 nodes, pawn history every 16384
+    {
+        auto n = nodes.load(std::memory_order_relaxed);
+        if ((n & 2047) == 0)
+            sync_correction(pos);
+        if ((n & 16383) == 0)
+            sync_pawn_history(pos);
+    }
 
     // Used to send selDepth info to GUI (selDepth counts from 1, ply from 0)
     if (PvNode && selDepth < ss->ply + 1)
@@ -861,7 +924,7 @@ Value Search::Worker::search(
         mainHistory[~us][((ss - 1)->currentMove).raw()] << evalDiff * 9;
         if (!ttHit && type_of(pos.piece_on(prevSq)) != PAWN
             && ((ss - 1)->currentMove).type_of() != PROMOTION)
-            sharedHistory.pawn_entry(pos)[pos.piece_on(prevSq)][prevSq] << evalDiff * 13;
+            globalHistory.pawn_entry(pos)[pos.piece_on(prevSq)][prevSq] << evalDiff * 13;
     }
 
 
@@ -992,7 +1055,7 @@ moves_loop:  // When in check, search starts here
 
 
     MovePicker mp(pos, ttData.move, depth, &mainHistory, &lowPlyHistory, &captureHistory, contHist,
-                  &sharedHistory, ss->ply);
+                  &localHistory, ss->ply);
 
     value = bestValue;
 
@@ -1081,7 +1144,7 @@ moves_loop:  // When in check, search starts here
             {
                 int history = (*contHist[0])[movedPiece][move.to_sq()]
                             + (*contHist[1])[movedPiece][move.to_sq()]
-                            + sharedHistory.pawn_entry(pos)[movedPiece][move.to_sq()];
+                            + localHistory.pawn_entry(pos)[movedPiece][move.to_sq()];
 
                 // Continuation history based pruning
                 if (history < -4083 * depth)
@@ -1439,7 +1502,7 @@ moves_loop:  // When in check, search starts here
         mainHistory[~us][((ss - 1)->currentMove).raw()] << scaledBonus * 243 / 32768;
 
         if (type_of(pos.piece_on(prevSq)) != PAWN && ((ss - 1)->currentMove).type_of() != PROMOTION)
-            sharedHistory.pawn_entry(pos)[pos.piece_on(prevSq)][prevSq] << scaledBonus * 290 / 8192;
+            globalHistory.pawn_entry(pos)[pos.piece_on(prevSq)][prevSq] << scaledBonus * 290 / 8192;
     }
 
     // Bonus for prior capture countermove that caused the fail low
@@ -1610,7 +1673,7 @@ Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta)
     // the moves. We presently use two stages of move generator in quiescence search:
     // captures, or evasions only when in check.
     MovePicker mp(pos, ttData.move, DEPTH_QS, &mainHistory, &lowPlyHistory, &captureHistory,
-                  contHist, &sharedHistory, ss->ply);
+                  contHist, &localHistory, ss->ply);
 
     // Step 5. Loop through all pseudo-legal moves until no moves remain or a beta
     // cutoff occurs.
@@ -1895,7 +1958,7 @@ void update_quiet_histories(
 
     update_continuation_histories(ss, pos.moved_piece(move), move.to_sq(), bonus * 896 / 1024);
 
-    workerThread.sharedHistory.pawn_entry(pos)[pos.moved_piece(move)][move.to_sq()]
+    workerThread.globalHistory.pawn_entry(pos)[pos.moved_piece(move)][move.to_sq()]
       << bonus * (bonus > 0 ? 905 : 505) / 1024;
 }
 
