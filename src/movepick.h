@@ -33,6 +33,7 @@ class Position;
 // Move::none() is returned. In order to improve the efficiency of the alpha-beta
 // algorithm, MovePicker attempts to return the moves which are most likely to get
 // a cut-off first.
+template<typename HistT = SharedHistories>
 class MovePicker {
 
    public:
@@ -45,7 +46,7 @@ class MovePicker {
                const LowPlyHistory*,
                const CapturePieceToHistory*,
                const PieceToHistory**,
-               const SharedHistories*,
+               const HistT*,
                int);
     MovePicker(const Position&, Move, int, const CapturePieceToHistory*);
     Move next_move();
@@ -64,7 +65,7 @@ class MovePicker {
     const LowPlyHistory*         lowPlyHistory;
     const CapturePieceToHistory* captureHistory;
     const PieceToHistory**       continuationHistory;
-    const SharedHistories*       sharedHistory;
+    const HistT*                 sharedHistory;
     Move                         ttMove;
     ExtMove *                    cur, *endCur, *endBadCaptures, *endCaptures, *endGenerated;
     int                          stage;
@@ -74,6 +75,9 @@ class MovePicker {
     bool                         skipQuiets = false;
     ExtMove                      moves[MAX_MOVES];
 };
+
+// CTAD guide for ProbCut constructor (no history parameter)
+MovePicker(const Position&, Move, int, const CapturePieceToHistory*) -> MovePicker<SharedHistories>;
 
 }  // namespace Stockfish
 

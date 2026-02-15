@@ -80,15 +80,16 @@ void partial_insertion_sort(ExtMove* begin, ExtMove* end, int limit) {
 // good moves first, and how important move ordering is at the current node.
 
 // MovePicker constructor for the main search and for the quiescence search
-MovePicker::MovePicker(const Position&              p,
-                       Move                         ttm,
-                       Depth                        d,
-                       const ButterflyHistory*      mh,
-                       const LowPlyHistory*         lph,
-                       const CapturePieceToHistory* cph,
-                       const PieceToHistory**       ch,
-                       const SharedHistories*       sh,
-                       int                          pl) :
+template<typename HistT>
+MovePicker<HistT>::MovePicker(const Position&              p,
+                              Move                         ttm,
+                              Depth                        d,
+                              const ButterflyHistory*      mh,
+                              const LowPlyHistory*         lph,
+                              const CapturePieceToHistory* cph,
+                              const PieceToHistory**       ch,
+                              const HistT*                 sh,
+                              int                          pl) :
     pos(p),
     mainHistory(mh),
     lowPlyHistory(lph),
@@ -108,7 +109,11 @@ MovePicker::MovePicker(const Position&              p,
 
 // MovePicker constructor for ProbCut: we generate captures with Static Exchange
 // Evaluation (SEE) greater than or equal to the given threshold.
-MovePicker::MovePicker(const Position& p, Move ttm, int th, const CapturePieceToHistory* cph) :
+template<typename HistT>
+MovePicker<HistT>::MovePicker(const Position&              p,
+                              Move                         ttm,
+                              int                          th,
+                              const CapturePieceToHistory* cph) :
     pos(p),
     captureHistory(cph),
     ttMove(ttm),
@@ -121,8 +126,9 @@ MovePicker::MovePicker(const Position& p, Move ttm, int th, const CapturePieceTo
 // Assigns a numerical value to each move in a list, used for sorting.
 // Captures are ordered by Most Valuable Victim (MVV), preferring captures
 // with a good history. Quiets moves are ordered using the history tables.
+template<typename HistT>
 template<GenType Type>
-ExtMove* MovePicker::score(MoveList<Type>& ml) {
+ExtMove* MovePicker<HistT>::score(MoveList<Type>& ml) {
 
     static_assert(Type == CAPTURES || Type == QUIETS || Type == EVASIONS, "Wrong type");
 
@@ -192,8 +198,9 @@ ExtMove* MovePicker::score(MoveList<Type>& ml) {
 
 // Returns the next move satisfying a predicate function.
 // This never returns the TT move, as it was emitted before.
+template<typename HistT>
 template<typename Pred>
-Move MovePicker::select(Pred filter) {
+Move MovePicker<HistT>::select(Pred filter) {
 
     for (; cur < endCur; ++cur)
         if (*cur != ttMove && filter())
@@ -205,7 +212,8 @@ Move MovePicker::select(Pred filter) {
 // This is the most important method of the MovePicker class. We emit one
 // new pseudo-legal move on every call until there are no more moves left,
 // picking the move with the highest score from a list of generated moves.
-Move MovePicker::next_move() {
+template<typename HistT>
+Move MovePicker<HistT>::next_move() {
 
     constexpr int goodQuietThreshold = -14000;
 top:
@@ -308,6 +316,12 @@ top:
     return Move::none();  // Silence warning
 }
 
-void MovePicker::skip_quiet_moves() { skipQuiets = true; }
+template<typename HistT>
+void MovePicker<HistT>::skip_quiet_moves() {
+    skipQuiets = true;
+}
+
+template class MovePicker<SharedHistories>;
+template class MovePicker<LocalHistories>;
 
 }  // namespace Stockfish

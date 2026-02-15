@@ -706,13 +706,14 @@ bool Position::gives_check(Move m) const {
 // moves should be filtered out before this function is called.
 // If a pointer to the TT table is passed, the entry for the new position
 // will be prefetched, and likewise for shared history.
+template<typename HistT>
 void Position::do_move(Move                      m,
                        StateInfo&                newSt,
                        bool                      givesCheck,
                        DirtyPiece&               dp,
                        DirtyThreats&             dts,
-                       const TranspositionTable* tt      = nullptr,
-                       const SharedHistories*    history = nullptr) {
+                       const TranspositionTable* tt,
+                       const HistT*              history) {
 
     assert(m.is_ok());
     assert(&newSt != st);
@@ -917,8 +918,8 @@ void Position::do_move(Move                      m,
         prefetch(&history->pawn_entry(*this)[pc][to]);
         prefetch(&history->pawn_correction_entry(*this));
         prefetch(&history->minor_piece_correction_entry(*this));
-        prefetch(&history->nonpawn_correction_entry<WHITE>(*this));
-        prefetch(&history->nonpawn_correction_entry<BLACK>(*this));
+        prefetch(&history->template nonpawn_correction_entry<WHITE>(*this));
+        prefetch(&history->template nonpawn_correction_entry<BLACK>(*this));
     }
 
     // Set capture piece
@@ -960,6 +961,21 @@ void Position::do_move(Move                      m,
     assert(dp.from != SQ_NONE);
     assert(!(dp.add_sq != SQ_NONE) ^ (m.type_of() == PROMOTION || m.type_of() == CASTLING));
 }
+
+template void Position::do_move<SharedHistories>(Move,
+                                                 StateInfo&,
+                                                 bool,
+                                                 DirtyPiece&,
+                                                 DirtyThreats&,
+                                                 const TranspositionTable*,
+                                                 const SharedHistories*);
+template void Position::do_move<LocalHistories>(Move,
+                                                StateInfo&,
+                                                bool,
+                                                DirtyPiece&,
+                                                DirtyThreats&,
+                                                const TranspositionTable*,
+                                                const LocalHistories*);
 
 
 // Unmakes a move. When it returns, the position should

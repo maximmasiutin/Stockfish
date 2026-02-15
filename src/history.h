@@ -165,12 +165,12 @@ enum CorrHistType {
     Continuation,  // Combined history of move pairs
 };
 
-template<typename T, int D>
+template<typename T, int D, bool Atomic = true>
 struct CorrectionBundle {
-    StatsEntry<T, D, true> pawn;
-    StatsEntry<T, D, true> minor;
-    StatsEntry<T, D, true> nonPawnWhite;
-    StatsEntry<T, D, true> nonPawnBlack;
+    StatsEntry<T, D, Atomic> pawn;
+    StatsEntry<T, D, Atomic> minor;
+    StatsEntry<T, D, Atomic> nonPawnWhite;
+    StatsEntry<T, D, Atomic> nonPawnBlack;
 
     void operator=(T val) {
         pawn         = val;
@@ -210,6 +210,13 @@ using UnifiedCorrectionHistory =
   DynStats<MultiArray<CorrectionBundle<std::int16_t, CORRECTION_HISTORY_LIMIT>, COLOR_NB>,
            CORRHIST_BASE_SIZE>;
 
+using NonAtomicPawnHistory =
+  DynStats<Stats<std::int16_t, 8192, PIECE_NB, SQUARE_NB>, PAWN_HISTORY_BASE_SIZE>;
+
+using NonAtomicCorrectionHistory =
+  DynStats<MultiArray<CorrectionBundle<std::int16_t, CORRECTION_HISTORY_LIMIT, false>, COLOR_NB>,
+           CORRHIST_BASE_SIZE>;
+
 template<CorrHistType T>
 using CorrectionHistory = typename Detail::CorrHistTypedef<T>::type;
 
@@ -218,9 +225,15 @@ using TTMoveHistory = StatsEntry<std::int16_t, 8192>;
 // Set of histories shared between groups of threads. To avoid excessive
 // cross-node data transfer, histories are shared only between threads
 // on a given NUMA node. The passed size must be a power of two to make
-// the indexing more efficient.
-struct SharedHistories {
-    SharedHistories(size_t threadCount) :
+// the indexing more efficient. Templated on Atomic to allow non-atomic
+// thread-local copies.
+template<bool Atomic = true>
+struct SharedHistoriesT {
+    using CorrHistT =
+      std::conditional_t<Atomic, UnifiedCorrectionHistory, NonAtomicCorrectionHistory>;
+    using PawnHistT = std::conditional_t<Atomic, PawnHistory, NonAtomicPawnHistory>;
+
+    SharedHistoriesT(size_t threadCount) :
         correctionHistory(threadCount),
         pawnHistory(threadCount) {
         assert((threadCount & (threadCount - 1)) == 0 && threadCount != 0);
@@ -260,13 +273,16 @@ struct SharedHistories {
         return correctionHistory[pos.non_pawn_key(c) & sizeMinus1];
     }
 
-    UnifiedCorrectionHistory correctionHistory;
-    PawnHistory              pawnHistory;
+    CorrHistT correctionHistory;
+    PawnHistT pawnHistory;
 
 
    private:
     size_t sizeMinus1, pawnHistSizeMinus1;
 };
+
+using SharedHistories = SharedHistoriesT<true>;
+using LocalHistories  = SharedHistoriesT<false>;
 
 }  // namespace Stockfish
 
