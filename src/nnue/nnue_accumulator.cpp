@@ -874,10 +874,13 @@ void update_threats_accumulator_full(Color                                 persp
         for (IndexType k = 0; k < Tiling::NumRegs; ++k)
             acc[k] = vec_zero();
 
-        int i = 0;
+        int       i    = 0;
+        const int last = active.ssize() - 1;
 
-        for (; i < active.ssize(); ++i)
+        for (; i <= last; ++i)
         {
+            prefetch(&threatWeights[Dimensions * active[std::min(i + 2, last)]]);
+
             size_t       index  = active[i];
             const size_t offset = Dimensions * index;
             auto*        column = reinterpret_cast<const vec_i8_t*>(&threatWeights[offset]);
