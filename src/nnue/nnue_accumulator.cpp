@@ -347,6 +347,104 @@ struct AccumulatorUpdateContext {
           to_psqt_weight_vector(indices)...);
     }
 
+#ifdef VECTOR
+    // Template-specialized tile processing with compile-time known removed and
+    // added counts. NRemoved/NAdded < 0 means runtime (general fallback).
+    template<int NRemoved, int NAdded = -1>
+    sf_always_inline void apply_threat_tile(vec_t*                                acc,
+                                            const vec_t*                          fromTile,
+                                            const int8_t*                         threatWeights,
+                                            const typename FeatureSet::IndexList& added,
+                                            const typename FeatureSet::IndexList& removed) {
+        using Tiling = SIMDTiling<Dimensions, Dimensions, PSQTBuckets>;
+
+        // --- Removed: copy + subtract ---
+        if constexpr (NRemoved == 0)
+        {
+            for (IndexType k = 0; k < Tiling::NumRegs; ++k)
+                acc[k] = fromTile[k];
+        }
+        else if constexpr (NRemoved > 0)
+        {
+            // Fuse copy with first subtract
+            const size_t offset0 = Dimensions * size_t(removed[0]);
+            auto*        column0 = reinterpret_cast<const vec_i8_t*>(&threatWeights[offset0]);
+
+    #ifdef USE_NEON
+            for (IndexType k = 0; k < Tiling::NumRegs; k += 2)
+            {
+                acc[k]     = vec_sub_16(fromTile[k], vmovl_s8(vget_low_s8(column0[k / 2])));
+                acc[k + 1] = vec_sub_16(fromTile[k + 1], vmovl_high_s8(column0[k / 2]));
+            }
+    #else
+            for (IndexType k = 0; k < Tiling::NumRegs; ++k)
+                acc[k] = vec_sub_16(fromTile[k], vec_convert_8_16(column0[k]));
+    #endif
+
+            for (int i = 1; i < NRemoved; ++i)
+            {
+                const size_t offset = Dimensions * size_t(removed[i]);
+                auto*        column = reinterpret_cast<const vec_i8_t*>(&threatWeights[offset]);
+
+    #ifdef USE_NEON
+                for (IndexType k = 0; k < Tiling::NumRegs; k += 2)
+                {
+                    acc[k]     = vec_sub_16(acc[k], vmovl_s8(vget_low_s8(column[k / 2])));
+                    acc[k + 1] = vec_sub_16(acc[k + 1], vmovl_high_s8(column[k / 2]));
+                }
+    #else
+                for (IndexType k = 0; k < Tiling::NumRegs; ++k)
+                    acc[k] = vec_sub_16(acc[k], vec_convert_8_16(column[k]));
+    #endif
+            }
+        }
+        else
+        {
+            // General case: runtime removed count
+            for (IndexType k = 0; k < Tiling::NumRegs; ++k)
+                acc[k] = fromTile[k];
+
+            for (int i = 0; i < removed.ssize(); ++i)
+            {
+                const size_t offset = Dimensions * size_t(removed[i]);
+                auto*        column = reinterpret_cast<const vec_i8_t*>(&threatWeights[offset]);
+
+    #ifdef USE_NEON
+                for (IndexType k = 0; k < Tiling::NumRegs; k += 2)
+                {
+                    acc[k]     = vec_sub_16(acc[k], vmovl_s8(vget_low_s8(column[k / 2])));
+                    acc[k + 1] = vec_sub_16(acc[k + 1], vmovl_high_s8(column[k / 2]));
+                }
+    #else
+                for (IndexType k = 0; k < Tiling::NumRegs; ++k)
+                    acc[k] = vec_sub_16(acc[k], vec_convert_8_16(column[k]));
+    #endif
+            }
+        }
+
+        // --- Added ---
+        constexpr int addedCount = NAdded;
+        const int     addedLimit = addedCount > 0 ? addedCount : added.ssize();
+
+        for (int i = 0; i < addedLimit; ++i)
+        {
+            const size_t offset = Dimensions * size_t(added[i]);
+            auto*        column = reinterpret_cast<const vec_i8_t*>(&threatWeights[offset]);
+
+    #ifdef USE_NEON
+            for (IndexType k = 0; k < Tiling::NumRegs; k += 2)
+            {
+                acc[k]     = vec_add_16(acc[k], vmovl_s8(vget_low_s8(column[k / 2])));
+                acc[k + 1] = vec_add_16(acc[k + 1], vmovl_high_s8(column[k / 2]));
+            }
+    #else
+            for (IndexType k = 0; k < Tiling::NumRegs; ++k)
+                acc[k] = vec_add_16(acc[k], vec_convert_8_16(column[k]));
+    #endif
+        }
+    }
+#endif
+
     void apply(const typename FeatureSet::IndexList& added,
                const typename FeatureSet::IndexList& removed) {
         const auto& fromAcc = from.template acc<Dimensions>().accumulation[perspective];
@@ -367,44 +465,17 @@ struct AccumulatorUpdateContext {
             auto* fromTile = reinterpret_cast<const vec_t*>(&fromAcc[j * Tiling::TileHeight]);
             auto* toTile   = reinterpret_cast<vec_t*>(&toAcc[j * Tiling::TileHeight]);
 
-            for (IndexType k = 0; k < Tiling::NumRegs; ++k)
-                acc[k] = fromTile[k];
-
-            for (int i = 0; i < removed.ssize(); ++i)
-            {
-                size_t       index  = removed[i];
-                const size_t offset = Dimensions * index;
-                auto*        column = reinterpret_cast<const vec_i8_t*>(&threatWeights[offset]);
-
-    #ifdef USE_NEON
-                for (IndexType k = 0; k < Tiling::NumRegs; k += 2)
-                {
-                    acc[k]     = vec_sub_16(acc[k], vmovl_s8(vget_low_s8(column[k / 2])));
-                    acc[k + 1] = vec_sub_16(acc[k + 1], vmovl_high_s8(column[k / 2]));
-                }
-    #else
-                for (IndexType k = 0; k < Tiling::NumRegs; ++k)
-                    acc[k] = vec_sub_16(acc[k], vec_convert_8_16(column[k]));
-    #endif
-            }
-
-            for (int i = 0; i < added.ssize(); ++i)
-            {
-                size_t       index  = added[i];
-                const size_t offset = Dimensions * index;
-                auto*        column = reinterpret_cast<const vec_i8_t*>(&threatWeights[offset]);
-
-    #ifdef USE_NEON
-                for (IndexType k = 0; k < Tiling::NumRegs; k += 2)
-                {
-                    acc[k]     = vec_add_16(acc[k], vmovl_s8(vget_low_s8(column[k / 2])));
-                    acc[k + 1] = vec_add_16(acc[k + 1], vmovl_high_s8(column[k / 2]));
-                }
-    #else
-                for (IndexType k = 0; k < Tiling::NumRegs; ++k)
-                    acc[k] = vec_add_16(acc[k], vec_convert_8_16(column[k]));
-    #endif
-            }
+            // Dispatch on (removed, added) counts for compile-time specialization
+            if (removed.ssize() == 1 && added.ssize() == 1)
+                apply_threat_tile<1, 1>(acc, fromTile, threatWeights, added, removed);
+            else if (removed.ssize() == 0)
+                apply_threat_tile<0>(acc, fromTile, threatWeights, added, removed);
+            else if (removed.ssize() == 1)
+                apply_threat_tile<1>(acc, fromTile, threatWeights, added, removed);
+            else if (removed.ssize() == 2)
+                apply_threat_tile<2>(acc, fromTile, threatWeights, added, removed);
+            else
+                apply_threat_tile<-1>(acc, fromTile, threatWeights, added, removed);
 
             for (IndexType k = 0; k < Tiling::NumRegs; k++)
                 vec_store(&toTile[k], acc[k]);
