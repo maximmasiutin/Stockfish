@@ -610,7 +610,16 @@ void update_accumulator_incremental(
       make_accumulator_update_context(perspective, featureTransformer, computed, target_state);
 
     if constexpr (std::is_same_v<FeatureSet, ThreatFeatureSet>)
+    {
+        // Prefetch first weight columns in caller for maximum prefetch distance
+        constexpr IndexType Dims = TransformedFeatureDimensions;
+        const auto*         tw   = &featureTransformer.threatWeights[0];
+        if (removed.ssize() > 0)
+            prefetch<PrefetchRw::READ, PrefetchLoc::HIGH>(&tw[Dims * removed[0]]);
+        if (added.ssize() > 0)
+            prefetch<PrefetchRw::READ, PrefetchLoc::HIGH>(&tw[Dims * added[0]]);
         updateContext.apply(added, removed);
+    }
     else
     {
         [[maybe_unused]] const int addedSize   = added.ssize();
