@@ -406,8 +406,16 @@ struct AccumulatorUpdateContext {
     #endif
             }
 
+    #ifdef USE_AVX512
+            for (IndexType k = 0; k < Tiling::NumRegs; k++)
+                _mm512_stream_si512(reinterpret_cast<__m512i*>(&toTile[k]), acc[k]);
+    #elif USE_AVX2
+            for (IndexType k = 0; k < Tiling::NumRegs; k++)
+                _mm256_stream_si256(reinterpret_cast<__m256i*>(&toTile[k]), acc[k]);
+    #else
             for (IndexType k = 0; k < Tiling::NumRegs; k++)
                 vec_store(&toTile[k], acc[k]);
+    #endif
 
             threatWeights += Tiling::TileHeight;
         }
@@ -444,8 +452,13 @@ struct AccumulatorUpdateContext {
                     psqt[k] = vec_add_psqt_32(psqt[k], columnPsqt[k]);
             }
 
+    #ifdef USE_AVX2
+            for (IndexType k = 0; k < Tiling::NumPsqtRegs; ++k)
+                _mm256_stream_si256(reinterpret_cast<__m256i*>(&toTilePsqt[k]), psqt[k]);
+    #else
             for (IndexType k = 0; k < Tiling::NumPsqtRegs; ++k)
                 vec_store_psqt(&toTilePsqt[k], psqt[k]);
+    #endif
         }
 
 #else
