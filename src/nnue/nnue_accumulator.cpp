@@ -370,10 +370,34 @@ struct AccumulatorUpdateContext {
             for (IndexType k = 0; k < Tiling::NumRegs; ++k)
                 acc[k] = fromTile[k];
 
-            for (int i = 0; i < removed.ssize(); ++i)
+            // Interleave removed/added to overlap memory latency
+            const int common = std::min(removed.ssize(), added.ssize());
+            for (int i = 0; i < common; ++i)
             {
-                size_t       index  = removed[i];
-                const size_t offset = Dimensions * index;
+                const size_t remOffset = Dimensions * size_t(removed[i]);
+                auto*        remCol = reinterpret_cast<const vec_i8_t*>(&threatWeights[remOffset]);
+                const size_t addOffset = Dimensions * size_t(added[i]);
+                auto*        addCol = reinterpret_cast<const vec_i8_t*>(&threatWeights[addOffset]);
+
+    #ifdef USE_NEON
+                for (IndexType k = 0; k < Tiling::NumRegs; k += 2)
+                {
+                    acc[k]     = vec_sub_16(acc[k], vmovl_s8(vget_low_s8(remCol[k / 2])));
+                    acc[k + 1] = vec_sub_16(acc[k + 1], vmovl_high_s8(remCol[k / 2]));
+                    acc[k]     = vec_add_16(acc[k], vmovl_s8(vget_low_s8(addCol[k / 2])));
+                    acc[k + 1] = vec_add_16(acc[k + 1], vmovl_high_s8(addCol[k / 2]));
+                }
+    #else
+                for (IndexType k = 0; k < Tiling::NumRegs; ++k)
+                {
+                    acc[k] = vec_sub_16(acc[k], vec_convert_8_16(remCol[k]));
+                    acc[k] = vec_add_16(acc[k], vec_convert_8_16(addCol[k]));
+                }
+    #endif
+            }
+            for (int i = common; i < removed.ssize(); ++i)
+            {
+                const size_t offset = Dimensions * size_t(removed[i]);
                 auto*        column = reinterpret_cast<const vec_i8_t*>(&threatWeights[offset]);
 
     #ifdef USE_NEON
@@ -387,11 +411,9 @@ struct AccumulatorUpdateContext {
                     acc[k] = vec_sub_16(acc[k], vec_convert_8_16(column[k]));
     #endif
             }
-
-            for (int i = 0; i < added.ssize(); ++i)
+            for (int i = common; i < added.ssize(); ++i)
             {
-                size_t       index  = added[i];
-                const size_t offset = Dimensions * index;
+                const size_t offset = Dimensions * size_t(added[i]);
                 auto*        column = reinterpret_cast<const vec_i8_t*>(&threatWeights[offset]);
 
     #ifdef USE_NEON
@@ -422,21 +444,34 @@ struct AccumulatorUpdateContext {
             for (IndexType k = 0; k < Tiling::NumPsqtRegs; ++k)
                 psqt[k] = fromTilePsqt[k];
 
-            for (int i = 0; i < removed.ssize(); ++i)
+            const int commonPsqt = std::min(removed.ssize(), added.ssize());
+            for (int i = 0; i < commonPsqt; ++i)
             {
-                size_t       index      = removed[i];
-                const size_t offset     = PSQTBuckets * index + j * Tiling::PsqtTileHeight;
+                const size_t remOff = PSQTBuckets * size_t(removed[i]) + j * Tiling::PsqtTileHeight;
+                auto*        remPsqt = reinterpret_cast<const psqt_vec_t*>(
+                  &featureTransformer.threatPsqtWeights[remOff]);
+                const size_t addOff  = PSQTBuckets * size_t(added[i]) + j * Tiling::PsqtTileHeight;
+                auto*        addPsqt = reinterpret_cast<const psqt_vec_t*>(
+                  &featureTransformer.threatPsqtWeights[addOff]);
+
+                for (std::size_t k = 0; k < Tiling::NumPsqtRegs; ++k)
+                {
+                    psqt[k] = vec_sub_psqt_32(psqt[k], remPsqt[k]);
+                    psqt[k] = vec_add_psqt_32(psqt[k], addPsqt[k]);
+                }
+            }
+            for (int i = commonPsqt; i < removed.ssize(); ++i)
+            {
+                const size_t offset = PSQTBuckets * size_t(removed[i]) + j * Tiling::PsqtTileHeight;
                 auto*        columnPsqt = reinterpret_cast<const psqt_vec_t*>(
                   &featureTransformer.threatPsqtWeights[offset]);
 
                 for (std::size_t k = 0; k < Tiling::NumPsqtRegs; ++k)
                     psqt[k] = vec_sub_psqt_32(psqt[k], columnPsqt[k]);
             }
-
-            for (int i = 0; i < added.ssize(); ++i)
+            for (int i = commonPsqt; i < added.ssize(); ++i)
             {
-                size_t       index      = added[i];
-                const size_t offset     = PSQTBuckets * index + j * Tiling::PsqtTileHeight;
+                const size_t offset = PSQTBuckets * size_t(added[i]) + j * Tiling::PsqtTileHeight;
                 auto*        columnPsqt = reinterpret_cast<const psqt_vec_t*>(
                   &featureTransformer.threatPsqtWeights[offset]);
 
