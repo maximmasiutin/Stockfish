@@ -347,6 +347,38 @@ struct AccumulatorUpdateContext {
           to_psqt_weight_vector(indices)...);
     }
 
+    // Prefetch with static count for compiler unrolling.
+    template<int N, typename WeightType>
+    static void prefetch_static(const typename FeatureSet::IndexList& list,
+                                const WeightType*                     tw) {
+        for (int i = 0; i < N; ++i)
+            prefetch(&tw[Dimensions * list[i]]);
+    }
+
+    template<typename WeightType>
+    static void prefetch_all(const typename FeatureSet::IndexList& list,
+                             const WeightType*                     tw,
+                             int                                   count) {
+        switch (count)
+        {
+        case 0 :
+            break;
+        case 1 :
+            prefetch_static<1>(list, tw);
+            break;
+        case 2 :
+            prefetch_static<2>(list, tw);
+            break;
+        case 3 :
+            prefetch_static<3>(list, tw);
+            break;
+        default :
+            for (int i = 0; i < count; ++i)
+                prefetch(&tw[Dimensions * list[i]]);
+            break;
+        }
+    }
+
     void apply(const typename FeatureSet::IndexList& added,
                const typename FeatureSet::IndexList& removed) {
         const auto& fromAcc = from.template acc<Dimensions>().accumulation[perspective];
@@ -361,6 +393,10 @@ struct AccumulatorUpdateContext {
         psqt_vec_t psqt[Tiling::NumPsqtRegs];
 
         const auto* threatWeights = &featureTransformer.threatWeights[0];
+
+        // Prefetch all weight columns first (T0)
+        prefetch_all(removed, threatWeights, removed.ssize());
+        prefetch_all(added, threatWeights, added.ssize());
 
         for (IndexType j = 0; j < Dimensions / Tiling::TileHeight; ++j)
         {
