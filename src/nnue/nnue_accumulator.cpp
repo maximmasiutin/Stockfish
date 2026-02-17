@@ -367,6 +367,10 @@ struct AccumulatorUpdateContext {
             auto* fromTile = reinterpret_cast<const vec_t*>(&fromAcc[j * Tiling::TileHeight]);
             auto* toTile   = reinterpret_cast<vec_t*>(&toAcc[j * Tiling::TileHeight]);
 
+            if (removed.ssize() > 0)
+                prefetch<PrefetchRw::READ, PrefetchLoc::HIGH>(
+                  &threatWeights[Dimensions * removed[0]]);
+
             for (IndexType k = 0; k < Tiling::NumRegs; ++k)
                 acc[k] = fromTile[k];
 
