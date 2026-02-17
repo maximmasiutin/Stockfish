@@ -20,6 +20,7 @@
 
 #include <cassert>
 #include <cstdint>
+#include <cstring>
 #include <new>
 #include <type_traits>
 
@@ -367,8 +368,7 @@ struct AccumulatorUpdateContext {
             auto* fromTile = reinterpret_cast<const vec_t*>(&fromAcc[j * Tiling::TileHeight]);
             auto* toTile   = reinterpret_cast<vec_t*>(&toAcc[j * Tiling::TileHeight]);
 
-            for (IndexType k = 0; k < Tiling::NumRegs; ++k)
-                acc[k] = fromTile[k];
+            std::memcpy(acc, fromTile, Tiling::TileHeight * sizeof(int16_t));
 
             for (int i = 0; i < removed.ssize(); ++i)
             {
