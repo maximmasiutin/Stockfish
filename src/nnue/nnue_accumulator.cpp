@@ -367,25 +367,45 @@ struct AccumulatorUpdateContext {
             auto* fromTile = reinterpret_cast<const vec_t*>(&fromAcc[j * Tiling::TileHeight]);
             auto* toTile   = reinterpret_cast<vec_t*>(&toAcc[j * Tiling::TileHeight]);
 
-            for (IndexType k = 0; k < Tiling::NumRegs; ++k)
-                acc[k] = fromTile[k];
-
-            for (int i = 0; i < removed.ssize(); ++i)
+            if (removed.ssize() > 0)
             {
-                size_t       index  = removed[i];
-                const size_t offset = Dimensions * index;
-                auto*        column = reinterpret_cast<const vec_i8_t*>(&threatWeights[offset]);
+                // Fuse copy with first subtract: one fewer pass over acc[]
+                const size_t offset0 = Dimensions * size_t(removed[0]);
+                auto*        column0 = reinterpret_cast<const vec_i8_t*>(&threatWeights[offset0]);
 
     #ifdef USE_NEON
                 for (IndexType k = 0; k < Tiling::NumRegs; k += 2)
                 {
-                    acc[k]     = vec_sub_16(acc[k], vmovl_s8(vget_low_s8(column[k / 2])));
-                    acc[k + 1] = vec_sub_16(acc[k + 1], vmovl_high_s8(column[k / 2]));
+                    acc[k]     = vec_sub_16(fromTile[k], vmovl_s8(vget_low_s8(column0[k / 2])));
+                    acc[k + 1] = vec_sub_16(fromTile[k + 1], vmovl_high_s8(column0[k / 2]));
                 }
     #else
                 for (IndexType k = 0; k < Tiling::NumRegs; ++k)
-                    acc[k] = vec_sub_16(acc[k], vec_convert_8_16(column[k]));
+                    acc[k] = vec_sub_16(fromTile[k], vec_convert_8_16(column0[k]));
     #endif
+
+                for (int i = 1; i < removed.ssize(); ++i)
+                {
+                    size_t       index  = removed[i];
+                    const size_t offset = Dimensions * index;
+                    auto*        column = reinterpret_cast<const vec_i8_t*>(&threatWeights[offset]);
+
+    #ifdef USE_NEON
+                    for (IndexType k = 0; k < Tiling::NumRegs; k += 2)
+                    {
+                        acc[k]     = vec_sub_16(acc[k], vmovl_s8(vget_low_s8(column[k / 2])));
+                        acc[k + 1] = vec_sub_16(acc[k + 1], vmovl_high_s8(column[k / 2]));
+                    }
+    #else
+                    for (IndexType k = 0; k < Tiling::NumRegs; ++k)
+                        acc[k] = vec_sub_16(acc[k], vec_convert_8_16(column[k]));
+    #endif
+                }
+            }
+            else
+            {
+                for (IndexType k = 0; k < Tiling::NumRegs; ++k)
+                    acc[k] = fromTile[k];
             }
 
             for (int i = 0; i < added.ssize(); ++i)
