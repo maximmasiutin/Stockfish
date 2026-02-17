@@ -412,6 +412,12 @@ struct AccumulatorUpdateContext {
             threatWeights += Tiling::TileHeight;
         }
 
+        // Prefetch PSQT weight columns for all features
+        for (int i = 0; i < removed.ssize(); ++i)
+            prefetch(&featureTransformer.threatPsqtWeights[PSQTBuckets * removed[i]]);
+        for (int i = 0; i < added.ssize(); ++i)
+            prefetch(&featureTransformer.threatPsqtWeights[PSQTBuckets * added[i]]);
+
         for (IndexType j = 0; j < PSQTBuckets / Tiling::PsqtTileHeight; ++j)
         {
             auto* fromTilePsqt =
