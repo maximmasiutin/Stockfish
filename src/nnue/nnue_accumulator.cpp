@@ -367,11 +367,18 @@ struct AccumulatorUpdateContext {
             auto* fromTile = reinterpret_cast<const vec_t*>(&fromAcc[j * Tiling::TileHeight]);
             auto* toTile   = reinterpret_cast<vec_t*>(&toAcc[j * Tiling::TileHeight]);
 
+            if (removed.ssize() > 0)
+                prefetch<PrefetchRw::READ, PrefetchLoc::HIGH>(
+                  &threatWeights[Dimensions * removed[0]]);
+
             for (IndexType k = 0; k < Tiling::NumRegs; ++k)
                 acc[k] = fromTile[k];
 
             for (int i = 0; i < removed.ssize(); ++i)
             {
+                prefetch<PrefetchRw::READ, PrefetchLoc::HIGH>(
+                  &threatWeights[Dimensions * removed[std::min(i + 1, removed.ssize() - 1)]]);
+
                 size_t       index  = removed[i];
                 const size_t offset = Dimensions * index;
                 auto*        column = reinterpret_cast<const vec_i8_t*>(&threatWeights[offset]);
@@ -388,8 +395,15 @@ struct AccumulatorUpdateContext {
     #endif
             }
 
+            if (added.ssize() > 0)
+                prefetch<PrefetchRw::READ, PrefetchLoc::HIGH>(
+                  &threatWeights[Dimensions * added[0]]);
+
             for (int i = 0; i < added.ssize(); ++i)
             {
+                prefetch<PrefetchRw::READ, PrefetchLoc::HIGH>(
+                  &threatWeights[Dimensions * added[std::min(i + 1, added.ssize() - 1)]]);
+
                 size_t       index  = added[i];
                 const size_t offset = Dimensions * index;
                 auto*        column = reinterpret_cast<const vec_i8_t*>(&threatWeights[offset]);
