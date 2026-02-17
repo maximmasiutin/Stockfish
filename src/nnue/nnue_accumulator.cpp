@@ -357,59 +357,70 @@ struct AccumulatorUpdateContext {
 
 #ifdef VECTOR
         using Tiling = SIMDTiling<Dimensions, Dimensions, PSQTBuckets>;
-        vec_t      acc[Tiling::NumRegs];
         psqt_vec_t psqt[Tiling::NumPsqtRegs];
 
         const auto* threatWeights = &featureTransformer.threatWeights[0];
 
-        for (IndexType j = 0; j < Dimensions / Tiling::TileHeight; ++j)
+        // Process both tiles together per feature (outer=features, inner=tiles).
+        // Each column's data spans both tiles contiguously in memory, so
+        // processing both tiles per feature improves cache line utilization.
+        static constexpr IndexType NumTiles = Dimensions / Tiling::TileHeight;
+        vec_t                      acc[NumTiles][Tiling::NumRegs];
+
+        for (IndexType j = 0; j < NumTiles; ++j)
         {
             auto* fromTile = reinterpret_cast<const vec_t*>(&fromAcc[j * Tiling::TileHeight]);
-            auto* toTile   = reinterpret_cast<vec_t*>(&toAcc[j * Tiling::TileHeight]);
-
             for (IndexType k = 0; k < Tiling::NumRegs; ++k)
-                acc[k] = fromTile[k];
+                acc[j][k] = fromTile[k];
+        }
 
-            for (int i = 0; i < removed.ssize(); ++i)
+        for (int i = 0; i < removed.ssize(); ++i)
+        {
+            size_t index = removed[i];
+            for (IndexType j = 0; j < NumTiles; ++j)
             {
-                size_t       index  = removed[i];
-                const size_t offset = Dimensions * index;
+                const size_t offset = Dimensions * index + j * Tiling::TileHeight;
                 auto*        column = reinterpret_cast<const vec_i8_t*>(&threatWeights[offset]);
 
     #ifdef USE_NEON
                 for (IndexType k = 0; k < Tiling::NumRegs; k += 2)
                 {
-                    acc[k]     = vec_sub_16(acc[k], vmovl_s8(vget_low_s8(column[k / 2])));
-                    acc[k + 1] = vec_sub_16(acc[k + 1], vmovl_high_s8(column[k / 2]));
+                    acc[j][k]     = vec_sub_16(acc[j][k], vmovl_s8(vget_low_s8(column[k / 2])));
+                    acc[j][k + 1] = vec_sub_16(acc[j][k + 1], vmovl_high_s8(column[k / 2]));
                 }
     #else
                 for (IndexType k = 0; k < Tiling::NumRegs; ++k)
-                    acc[k] = vec_sub_16(acc[k], vec_convert_8_16(column[k]));
+                    acc[j][k] = vec_sub_16(acc[j][k], vec_convert_8_16(column[k]));
     #endif
             }
+        }
 
-            for (int i = 0; i < added.ssize(); ++i)
+        for (int i = 0; i < added.ssize(); ++i)
+        {
+            size_t index = added[i];
+            for (IndexType j = 0; j < NumTiles; ++j)
             {
-                size_t       index  = added[i];
-                const size_t offset = Dimensions * index;
+                const size_t offset = Dimensions * index + j * Tiling::TileHeight;
                 auto*        column = reinterpret_cast<const vec_i8_t*>(&threatWeights[offset]);
 
     #ifdef USE_NEON
                 for (IndexType k = 0; k < Tiling::NumRegs; k += 2)
                 {
-                    acc[k]     = vec_add_16(acc[k], vmovl_s8(vget_low_s8(column[k / 2])));
-                    acc[k + 1] = vec_add_16(acc[k + 1], vmovl_high_s8(column[k / 2]));
+                    acc[j][k]     = vec_add_16(acc[j][k], vmovl_s8(vget_low_s8(column[k / 2])));
+                    acc[j][k + 1] = vec_add_16(acc[j][k + 1], vmovl_high_s8(column[k / 2]));
                 }
     #else
                 for (IndexType k = 0; k < Tiling::NumRegs; ++k)
-                    acc[k] = vec_add_16(acc[k], vec_convert_8_16(column[k]));
+                    acc[j][k] = vec_add_16(acc[j][k], vec_convert_8_16(column[k]));
     #endif
             }
+        }
 
+        for (IndexType j = 0; j < NumTiles; ++j)
+        {
+            auto* toTile = reinterpret_cast<vec_t*>(&toAcc[j * Tiling::TileHeight]);
             for (IndexType k = 0; k < Tiling::NumRegs; k++)
-                vec_store(&toTile[k], acc[k]);
-
-            threatWeights += Tiling::TileHeight;
+                vec_store(&toTile[k], acc[j][k]);
         }
 
         for (IndexType j = 0; j < PSQTBuckets / Tiling::PsqtTileHeight; ++j)
