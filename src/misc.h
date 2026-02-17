@@ -56,11 +56,6 @@ enum class PrefetchRw {
     WRITE
 };
 
-// NOTE: PrefetchLoc controls locality / cache level, not whether a prefetch
-//       is issued. In particular, PrefetchLoc::NONE maps to a non-temporal /
-//       lowest-locality prefetch (Intel: _MM_HINT_NTA, GCC/Clang: locality = 0)
-//       and therefore still performs a prefetch. To completely disable
-//       prefetching, define NO_PREFETCH so that prefetch() becomes a no-op.
 enum class PrefetchLoc {
     NONE,      // Non-temporal / no cache locality (still issues a prefetch)
     LOW,       // Low locality (e.g. T2 / L2)
@@ -82,7 +77,6 @@ constexpr int get_intel_hint(PrefetchRw rw, PrefetchLoc loc) {
     #ifdef _MM_HINT_ET0
         return _MM_HINT_ET0;
     #else
-        // Fallback when write-prefetch hint is not available: use T0
         return _MM_HINT_T0;
     #endif
     }

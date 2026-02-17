@@ -470,7 +470,6 @@ uint64_t hash_bytes(const char* data, size_t size) {
 // Trampoline helper to avoid moving Logger to misc.h
 void start_logger(const std::string& fname) { Logger::start(fname); }
 
-
 #ifdef _WIN32
     #include <direct.h>
     #define GETCWD _getcwd
