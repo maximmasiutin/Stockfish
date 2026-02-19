@@ -80,15 +80,15 @@ void partial_insertion_sort(ExtMove* begin, ExtMove* end, int limit) {
 // good moves first, and how important move ordering is at the current node.
 
 // MovePicker constructor for the main search and for the quiescence search
-MovePicker::MovePicker(const Position&              p,
-                       Move                         ttm,
-                       Depth                        d,
-                       const ButterflyHistory*      mh,
-                       const LowPlyHistory*         lph,
-                       const CapturePieceToHistory* cph,
-                       const PieceToHistory**       ch,
-                       const SharedHistories*       sh,
-                       int                          pl) :
+MovePicker::MovePicker(const Position&               p,
+                       Move                          ttm,
+                       Depth                         d,
+                       const ButterflyHistory*       mh,
+                       const LowPlyHistory*          lph,
+                       const CapturePieceToHistory*  cph,
+                       const CompactPieceToHistory** ch,
+                       const SharedHistories*        sh,
+                       int                           pl) :
     pos(p),
     mainHistory(mh),
     lowPlyHistory(lph),
@@ -160,11 +160,11 @@ ExtMove* MovePicker::score(MoveList<Type>& ml) {
             // histories
             m.value = 2 * (*mainHistory)[us][m.raw()];
             m.value += 2 * sharedHistory->pawn_entry(pos)[pc][to];
-            m.value += (*continuationHistory[0])[pc][to];
-            m.value += (*continuationHistory[1])[pc][to];
-            m.value += (*continuationHistory[2])[pc][to];
-            m.value += (*continuationHistory[3])[pc][to];
-            m.value += (*continuationHistory[5])[pc][to];
+            m.value += int((*continuationHistory[0])[pc][to]) * CONTHIST_SCALE;
+            m.value += int((*continuationHistory[1])[pc][to]) * CONTHIST_SCALE;
+            m.value += int((*continuationHistory[2])[pc][to]) * CONTHIST_SCALE;
+            m.value += int((*continuationHistory[3])[pc][to]) * CONTHIST_SCALE;
+            m.value += int((*continuationHistory[5])[pc][to]) * CONTHIST_SCALE;
 
             // bonus for checks
             m.value += (bool(pos.check_squares(pt) & to) && pos.see_ge(m, -75)) * 16384;
@@ -184,7 +184,8 @@ ExtMove* MovePicker::score(MoveList<Type>& ml) {
             if (pos.capture_stage(m))
                 m.value = PieceValue[capturedPiece] + (1 << 28);
             else
-                m.value = (*mainHistory)[us][m.raw()] + (*continuationHistory[0])[pc][to];
+                m.value = (*mainHistory)[us][m.raw()]
+                        + int((*continuationHistory[0])[pc][to]) * CONTHIST_SCALE;
         }
     }
     return it;

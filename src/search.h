@@ -63,7 +63,7 @@ namespace Search {
 // its own array of Stack objects, indexed by the current ply.
 struct Stack {
     Move*                       pv;
-    PieceToHistory*             continuationHistory;
+    CompactPieceToHistory*      continuationHistory;
     CorrectionHistory<PieceTo>* continuationCorrectionHistory;
     int                         ply;
     Move                        currentMove;
