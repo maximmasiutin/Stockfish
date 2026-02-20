@@ -279,8 +279,7 @@ void Search::Worker::iterative_deepening() {
 
     for (int i = 7; i > 0; --i)
     {
-        (ss - i)->continuationHistory =
-          &continuationHistory[0][0][NO_PIECE][0];  // Use as a sentinel
+        (ss - i)->continuationHistory = &sharedHistory.conthist_sentinel();  // Use as a sentinel
         (ss - i)->continuationCorrectionHistory = &continuationCorrectionHistory[NO_PIECE][0];
         (ss - i)->staticEval                    = VALUE_NONE;
     }
@@ -557,9 +556,9 @@ void Search::Worker::do_move(
 
     if (ss != nullptr)
     {
-        ss->currentMove = move;
-        ss->continuationHistory =
-          &continuationHistory[ss->inCheck][capture][dirtyPiece.pc][move.to_sq()];
+        ss->currentMove         = move;
+        ss->continuationHistory = &sharedHistory.conthist_entry(
+          pos.pawn_key(), ss->inCheck, capture, dirtyPiece.pc, move.to_sq());
         ss->continuationCorrectionHistory =
           &continuationCorrectionHistory[dirtyPiece.pc][move.to_sq()];
     }
@@ -568,7 +567,7 @@ void Search::Worker::do_move(
 void Search::Worker::do_null_move(Position& pos, StateInfo& st, Stack* const ss) {
     pos.do_null_move(st);
     ss->currentMove                   = Move::null();
-    ss->continuationHistory           = &continuationHistory[0][0][NO_PIECE][0];
+    ss->continuationHistory           = &sharedHistory.conthist_sentinel();
     ss->continuationCorrectionHistory = &continuationCorrectionHistory[NO_PIECE][0];
 }
 
@@ -595,11 +594,8 @@ void Search::Worker::clear() {
         for (auto& h : to)
             h.fill(7);
 
-    for (bool inCheck : {false, true})
-        for (StatsType c : {NoCaptures, Captures})
-            for (auto& to : continuationHistory[inCheck][c])
-                for (auto& h : to)
-                    h.fill(-541);
+    sharedHistory.contHistTable.clear_range(-541, numaThreadIdx, numaTotal);
+    sharedHistory.conthist_sentinel().fill(-541);
 
     for (size_t i = 1; i < reductions.size(); ++i)
         reductions[i] = int(2809 / 128.0 * std::log(i));
@@ -986,7 +982,7 @@ moves_loop:  // When in check, search starts here
         && !is_decisive(beta) && is_valid(ttData.value) && !is_decisive(ttData.value))
         return probCutBeta;
 
-    const PieceToHistory* contHist[] = {
+    const AtomicPieceToHistory* contHist[] = {
       (ss - 1)->continuationHistory, (ss - 2)->continuationHistory, (ss - 3)->continuationHistory,
       (ss - 4)->continuationHistory, (ss - 5)->continuationHistory, (ss - 6)->continuationHistory};
 
@@ -1602,7 +1598,7 @@ Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta)
         futilityBase = ss->staticEval + 351;
     }
 
-    const PieceToHistory* contHist[] = {(ss - 1)->continuationHistory};
+    const AtomicPieceToHistory* contHist[] = {(ss - 1)->continuationHistory};
 
     Square prevSq = ((ss - 1)->currentMove).is_ok() ? ((ss - 1)->currentMove).to_sq() : SQ_NONE;
 
