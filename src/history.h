@@ -62,9 +62,15 @@ struct StatsEntry {
    public:
     void operator=(const T& v) {
         if constexpr (Atomic)
-            entry.store(v, std::memory_order_relaxed);
+        {
+            if (entry.load(std::memory_order_relaxed) != v)
+                entry.store(v, std::memory_order_relaxed);
+        }
         else
-            entry = v;
+        {
+            if (entry != v)
+                entry = v;
+        }
     }
 
     operator T() const {
