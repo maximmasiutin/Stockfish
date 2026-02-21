@@ -52,6 +52,18 @@
 
 namespace Stockfish {
 
+int ContinuationHistory::value(const PieceToHistory& h, Piece pc, Square to) {
+    return int(h[pc][to]) * CONTINUATION_HISTORY_SCALE;
+}
+
+void ContinuationHistory::update(PieceToHistory& h, Piece pc, Square to, int bonus) {
+    // Round to nearest when scaling down to the stored unit.
+    const int scaled = (bonus + (bonus >= 0 ? CONTINUATION_HISTORY_SCALE / 2
+                                            : -CONTINUATION_HISTORY_SCALE / 2))
+                     / CONTINUATION_HISTORY_SCALE;
+    h[pc][to] << scaled;
+}
+
 namespace TB = Tablebases;
 
 void syzygy_extend_pv(const OptionsMap&            options,
@@ -599,7 +611,7 @@ void Search::Worker::clear() {
         for (StatsType c : {NoCaptures, Captures})
             for (auto& to : continuationHistory[inCheck][c])
                 for (auto& h : to)
-                    h.fill(-541);
+                    h.fill(CONTINUATION_HISTORY_INIT);
 
     for (size_t i = 1; i < reductions.size(); ++i)
         reductions[i] = int(2809 / 128.0 * std::log(i));
@@ -1079,8 +1091,8 @@ moves_loop:  // When in check, search starts here
             }
             else
             {
-                int history = (*contHist[0])[movedPiece][move.to_sq()]
-                            + (*contHist[1])[movedPiece][move.to_sq()]
+                int history = ContinuationHistory::value(*contHist[0], movedPiece, move.to_sq())
+                            + ContinuationHistory::value(*contHist[1], movedPiece, move.to_sq())
                             + sharedHistory.pawn_entry(pos)[movedPiece][move.to_sq()];
 
                 // Continuation history based pruning
@@ -1215,8 +1227,8 @@ moves_loop:  // When in check, search starts here
                           + captureHistory[movedPiece][move.to_sq()][type_of(pos.captured_piece())];
         else
             ss->statScore = 2 * mainHistory[us][move.raw()]
-                          + (*contHist[0])[movedPiece][move.to_sq()]
-                          + (*contHist[1])[movedPiece][move.to_sq()];
+                          + ContinuationHistory::value(*contHist[0], movedPiece, move.to_sq())
+                          + ContinuationHistory::value(*contHist[1], movedPiece, move.to_sq());
 
         // Decrease/increase reduction for moves with a good/bad history
         r -= ss->statScore * 454 / 4096;
@@ -1878,7 +1890,8 @@ void update_continuation_histories(Stack* ss, Piece pc, Square to, int bonus) {
             break;
 
         if (((ss - i)->currentMove).is_ok())
-            (*(ss - i)->continuationHistory)[pc][to] << (bonus * weight / 1024) + 82 * (i < 2);
+            ContinuationHistory::update(*(ss - i)->continuationHistory, pc, to,
+                                        (bonus * weight / 1024) + 82 * (i < 2));
     }
 }
 

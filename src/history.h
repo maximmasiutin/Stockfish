@@ -142,12 +142,46 @@ using LowPlyHistory = Stats<std::int16_t, 7183, LOW_PLY_HISTORY_SIZE, UINT_16_HI
 using CapturePieceToHistory = Stats<std::int16_t, 10692, PIECE_NB, SQUARE_NB, PIECE_TYPE_NB>;
 
 // PieceToHistory is like ButterflyHistory but is addressed by a move's [piece][to]
-using PieceToHistory = Stats<std::int16_t, 30000, PIECE_NB, SQUARE_NB>;
+using PieceToHistory = Stats<std::int8_t, 127, PIECE_NB, SQUARE_NB>;
+
+// PieceToHistory used to be stored as a wide type. We keep the same conceptual
+// data but store it quantized to int8 to reduce cache pressure.
+//
+// All reads should be scaled back by CONTINUATION_HISTORY_SCALE to retain
+// roughly the previous magnitude in heuristics.
+constexpr int CONTINUATION_HISTORY_SCALE = 256;
+constexpr int CONTINUATION_HISTORY_INIT  = -2;  // approx. -541 / 256
 
 // ContinuationHistory is the combined history of a given pair of moves, usually
 // the current one given a previous one. The nested history table is based on
 // PieceToHistory instead of ButterflyBoards.
-using ContinuationHistory = MultiArray<PieceToHistory, PIECE_NB, SQUARE_NB>;
+struct ContinuationHistory {
+    static int  value(const PieceToHistory& h, Piece pc, Square to);
+    static void update(PieceToHistory& h, Piece pc, Square to, int bonus);
+
+    PieceToHistory* operator[](Piece prevPc) { return &table[piece_index(prevPc) * 64]; }
+    const PieceToHistory* operator[](Piece prevPc) const { return &table[piece_index(prevPc) * 64]; }
+
+    void fill(int v) {
+        for (auto& t : table)
+           t.fill(v);
+    }
+
+    // Helper to remap piece to 0..12
+    // NO_PIECE(0)->0, W_PAWN(1)..W_KING(6)->1..6, B_PAWN(9)..B_KING(14)->7..12
+    static int piece_index(Piece p) {
+        assert(p == NO_PIECE || (p >= W_PAWN && p <= W_KING) || (p >= B_PAWN && p <= B_KING));
+        return (p < 8 ? p : p - 2);
+    }
+
+    auto begin() { return table.begin(); }
+    auto end() { return table.end(); }
+    auto begin() const { return table.begin(); }
+    auto end() const { return table.end(); }
+
+   private:
+    std::array<PieceToHistory, 13 * 64> table;
+};
 
 // PawnHistory is addressed by the pawn structure and a move's [piece][to]
 using PawnHistory =
