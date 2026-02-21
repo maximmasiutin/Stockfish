@@ -237,6 +237,15 @@ template<typename To, typename From>
 constexpr bool is_strictly_assignable_v =
   std::is_assignable_v<To&, From> && (std::is_same_v<To, From> || !std::is_convertible_v<From, To>);
 
+template<typename A, typename B, typename = void>
+struct is_neq_comparable: std::false_type {};
+
+template<typename A, typename B>
+struct is_neq_comparable<
+  A,
+  B,
+  std::void_t<decltype(std::declval<const A&>() != std::declval<const B&>())>>: std::true_type {};
+
 }
 
 // MultiArray is a generic N-dimensional array.
@@ -299,7 +308,15 @@ class MultiArray {
         for (auto& ele : data_)
         {
             if constexpr (sizeof...(Sizes) == 0)
-                ele = v;
+            {
+                if constexpr (Detail::is_neq_comparable<decltype(ele), U>::value)
+                {
+                    if (ele != v)
+                        ele = v;
+                }
+                else
+                    ele = v;
+            }
             else
                 ele.fill(v);
         }
