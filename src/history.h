@@ -35,14 +35,18 @@
 
 namespace Stockfish {
 
-constexpr int PAWN_HISTORY_BASE_SIZE   = 8192;  // has to be a power of 2
-constexpr int UINT_16_HISTORY_SIZE     = std::numeric_limits<uint16_t>::max() + 1;
-constexpr int CORRHIST_BASE_SIZE       = UINT_16_HISTORY_SIZE;
-constexpr int CORRECTION_HISTORY_LIMIT = 1024;
-constexpr int LOW_PLY_HISTORY_SIZE     = 5;
+constexpr int PAWN_HISTORY_BASE_SIZE     = 8192;  // has to be a power of 2
+constexpr int MATERIAL_HISTORY_BASE_SIZE = 8192;  // has to be a power of 2
+constexpr int UINT_16_HISTORY_SIZE       = std::numeric_limits<uint16_t>::max() + 1;
+constexpr int CORRHIST_BASE_SIZE         = UINT_16_HISTORY_SIZE;
+constexpr int CORRECTION_HISTORY_LIMIT   = 1024;
+constexpr int LOW_PLY_HISTORY_SIZE       = 5;
 
 static_assert((PAWN_HISTORY_BASE_SIZE & (PAWN_HISTORY_BASE_SIZE - 1)) == 0,
               "PAWN_HISTORY_BASE_SIZE has to be a power of 2");
+
+static_assert((MATERIAL_HISTORY_BASE_SIZE & (MATERIAL_HISTORY_BASE_SIZE - 1)) == 0,
+              "MATERIAL_HISTORY_BASE_SIZE has to be a power of 2");
 
 static_assert((CORRHIST_BASE_SIZE & (CORRHIST_BASE_SIZE - 1)) == 0,
               "CORRHIST_BASE_SIZE has to be a power of 2");
@@ -153,6 +157,10 @@ using ContinuationHistory = MultiArray<PieceToHistory, PIECE_NB, SQUARE_NB>;
 using PawnHistory =
   DynStats<AtomicStats<std::int16_t, 8192, PIECE_NB, SQUARE_NB>, PAWN_HISTORY_BASE_SIZE>;
 
+// MaterialHistory is addressed by the material configuration and a move's [piece][to]
+using MaterialHistory =
+  DynStats<AtomicStats<std::int16_t, 8192, PIECE_NB, SQUARE_NB>, MATERIAL_HISTORY_BASE_SIZE>;
+
 // Correction histories record differences between the static evaluation of
 // positions and their search score. It is used to improve the static evaluation
 // used by some search heuristics.
@@ -222,10 +230,12 @@ using TTMoveHistory = StatsEntry<std::int16_t, 8192>;
 struct SharedHistories {
     SharedHistories(size_t threadCount) :
         correctionHistory(threadCount),
-        pawnHistory(threadCount) {
+        pawnHistory(threadCount),
+        materialHistory(threadCount) {
         assert((threadCount & (threadCount - 1)) == 0 && threadCount != 0);
-        sizeMinus1         = correctionHistory.get_size() - 1;
-        pawnHistSizeMinus1 = pawnHistory.get_size() - 1;
+        sizeMinus1             = correctionHistory.get_size() - 1;
+        pawnHistSizeMinus1     = pawnHistory.get_size() - 1;
+        materialHistSizeMinus1 = materialHistory.get_size() - 1;
     }
 
     size_t get_size() const { return sizeMinus1 + 1; }
@@ -235,6 +245,13 @@ struct SharedHistories {
     }
     const auto& pawn_entry(const Position& pos) const {
         return pawnHistory[pos.pawn_key() & pawnHistSizeMinus1];
+    }
+
+    auto& material_entry(const Position& pos) {
+        return materialHistory[pos.material_key() & materialHistSizeMinus1];
+    }
+    const auto& material_entry(const Position& pos) const {
+        return materialHistory[pos.material_key() & materialHistSizeMinus1];
     }
 
     auto& pawn_correction_entry(const Position& pos) {
@@ -262,10 +279,10 @@ struct SharedHistories {
 
     UnifiedCorrectionHistory correctionHistory;
     PawnHistory              pawnHistory;
-
+    MaterialHistory          materialHistory;
 
    private:
-    size_t sizeMinus1, pawnHistSizeMinus1;
+    size_t sizeMinus1, pawnHistSizeMinus1, materialHistSizeMinus1;
 };
 
 }  // namespace Stockfish
