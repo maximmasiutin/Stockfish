@@ -260,6 +260,13 @@ struct SharedHistories {
         return correctionHistory[pos.non_pawn_key(c) & sizeMinus1];
     }
 
+    auto& combined_nonpawn_correction_entry(const Position& pos) {
+        return correctionHistory[(pos.non_pawn_key(WHITE) ^ pos.non_pawn_key(BLACK)) & sizeMinus1];
+    }
+    const auto& combined_nonpawn_correction_entry(const Position& pos) const {
+        return correctionHistory[(pos.non_pawn_key(WHITE) ^ pos.non_pawn_key(BLACK)) & sizeMinus1];
+    }
+
     UnifiedCorrectionHistory correctionHistory;
     PawnHistory              pawnHistory;
 

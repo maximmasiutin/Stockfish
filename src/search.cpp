@@ -77,13 +77,14 @@ using SearchedList                  = ValueList<Move, SEARCHEDLIST_CAPACITY>;
 // optimized for require verifications at longer time controls
 
 int correction_value(const Worker& w, const Position& pos, const Stack* const ss) {
-    const Color us     = pos.side_to_move();
-    const auto  m      = (ss - 1)->currentMove;
-    const auto& shared = w.sharedHistory;
-    const int   pcv    = shared.pawn_correction_entry(pos).at(us).pawn;
-    const int   micv   = shared.minor_piece_correction_entry(pos).at(us).minor;
-    const int   wnpcv  = shared.nonpawn_correction_entry<WHITE>(pos).at(us).nonPawnWhite;
-    const int   bnpcv  = shared.nonpawn_correction_entry<BLACK>(pos).at(us).nonPawnBlack;
+    const Color us      = pos.side_to_move();
+    const auto  m       = (ss - 1)->currentMove;
+    const auto& shared  = w.sharedHistory;
+    const int   pcv     = shared.pawn_correction_entry(pos).at(us).pawn;
+    const int   micv    = shared.minor_piece_correction_entry(pos).at(us).minor;
+    const auto& npEntry = shared.combined_nonpawn_correction_entry(pos).at(us);
+    const int   wnpcv   = npEntry.nonPawnWhite;
+    const int   bnpcv   = npEntry.nonPawnBlack;
     const int   cntcv =
       m.is_ok() ? (*(ss - 2)->continuationCorrectionHistory)[pos.piece_on(m.to_sq())][m.to_sq()]
                     + (*(ss - 4)->continuationCorrectionHistory)[pos.piece_on(m.to_sq())][m.to_sq()]
@@ -110,8 +111,9 @@ void update_correction_history(const Position& pos,
 
     shared.pawn_correction_entry(pos).at(us).pawn << bonus;
     shared.minor_piece_correction_entry(pos).at(us).minor << bonus * 155 / 128;
-    shared.nonpawn_correction_entry<WHITE>(pos).at(us).nonPawnWhite << bonus * nonPawnWeight / 128;
-    shared.nonpawn_correction_entry<BLACK>(pos).at(us).nonPawnBlack << bonus * nonPawnWeight / 128;
+    auto& npEntry = shared.combined_nonpawn_correction_entry(pos).at(us);
+    npEntry.nonPawnWhite << bonus * nonPawnWeight / 128;
+    npEntry.nonPawnBlack << bonus * nonPawnWeight / 128;
 
     // Branchless: use mask to zero bonus when move is not ok
     const int    mask   = int(m.is_ok());
