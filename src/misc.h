@@ -296,6 +296,11 @@ class MultiArray {
     void fill(const U& v) {
         static_assert(Detail::is_strictly_assignable_v<T, U>,
                       "Cannot assign fill value to entry type");
+        if (v == U{})
+        {
+            std::memset(static_cast<void*>(&data_), 0, sizeof(data_));
+            return;
+        }
         for (auto& ele : data_)
         {
             if constexpr (sizeof...(Sizes) == 0)
