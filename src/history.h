@@ -78,7 +78,9 @@ struct StatsEntry {
         // Make sure that bonus is in range [-D, D]
         int clampedBonus = std::clamp(bonus, -D, D);
         T   val          = *this;
-        *this            = val + clampedBonus - val * std::abs(clampedBonus) / D;
+        T   newval       = val + clampedBonus - val * std::abs(clampedBonus) / D;
+        if (val != newval)
+            *this = newval;
 
         assert(std::abs(T(*this)) <= D);
     }
