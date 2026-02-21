@@ -588,6 +588,7 @@ void Search::Worker::clear() {
     // Each thread is responsible for clearing their part of shared history
     sharedHistory.correctionHistory.clear_range(0, numaThreadIdx, numaTotal);
     sharedHistory.pawnHistory.clear_range(-1238, numaThreadIdx, numaTotal);
+    sharedHistory.sharedCaptureHistory.clear_range(-689, numaThreadIdx, numaTotal);
 
     ttMoveHistory = 0;
 
@@ -1448,6 +1449,9 @@ moves_loop:  // When in check, search starts here
         Piece capturedPiece = pos.captured_piece();
         assert(capturedPiece != NO_PIECE);
         captureHistory[pos.piece_on(prevSq)][prevSq][type_of(capturedPiece)] << 993;
+        sharedHistory.capture_history_entry(
+          pos)[pos.piece_on(prevSq)][prevSq][type_of(capturedPiece)]
+          << 993;
     }
 
     if (PvNode)
@@ -1824,8 +1828,9 @@ void update_all_stats(const Position& pos,
                       Move            ttMove) {
 
     CapturePieceToHistory& captureHistory = workerThread.captureHistory;
-    Piece                  movedPiece     = pos.moved_piece(bestMove);
-    PieceType              capturedPiece;
+    auto&     sharedCaptureHistory        = workerThread.sharedHistory.capture_history_entry(pos);
+    Piece     movedPiece                  = pos.moved_piece(bestMove);
+    PieceType capturedPiece;
 
     int bonus =
       std::min(124 * depth - 84, 1376) + 349 * (bestMove == ttMove) + (ss - 1)->statScore / 32;
@@ -1848,6 +1853,7 @@ void update_all_stats(const Position& pos,
         // Increase stats for the best move in case it was a capture move
         capturedPiece = type_of(pos.piece_on(bestMove.to_sq()));
         captureHistory[movedPiece][bestMove.to_sq()][capturedPiece] << bonus * 1290 / 1024;
+        sharedCaptureHistory[movedPiece][bestMove.to_sq()][capturedPiece] << bonus * 1290 / 1024;
     }
 
     // Extra penalty for a quiet early move that was not a TT move in
@@ -1861,6 +1867,7 @@ void update_all_stats(const Position& pos,
         movedPiece    = pos.moved_piece(move);
         capturedPiece = type_of(pos.piece_on(move.to_sq()));
         captureHistory[movedPiece][move.to_sq()][capturedPiece] << -malus * 1561 / 1024;
+        sharedCaptureHistory[movedPiece][move.to_sq()][capturedPiece] << -malus * 1561 / 1024;
     }
 }
 
