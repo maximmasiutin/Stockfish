@@ -144,10 +144,15 @@ using CapturePieceToHistory = Stats<std::int16_t, 10692, PIECE_NB, SQUARE_NB, PI
 // PieceToHistory is like ButterflyHistory but is addressed by a move's [piece][to]
 using PieceToHistory = Stats<std::int16_t, 30000, PIECE_NB, SQUARE_NB>;
 
-// ContinuationHistory is the combined history of a given pair of moves, usually
-// the current one given a previous one. The nested history table is based on
-// PieceToHistory instead of ButterflyBoards.
-using ContinuationHistory = MultiArray<PieceToHistory, PIECE_NB, SQUARE_NB>;
+// int8 D=127 continuation history; byte access is naturally atomic
+constexpr int CONTHIST_SCALE          = 64;
+constexpr int CONTHIST_HASH_BASE_SIZE = 4096;
+using CompactPieceToHistory           = Stats<std::int8_t, 127, PIECE_NB, SQUARE_NB>;
+using SharedContHist                  = DynStats<CompactPieceToHistory, CONTHIST_HASH_BASE_SIZE>;
+
+inline int conthist_val(const CompactPieceToHistory& h, Piece pc, Square to) {
+    return int(h[pc][to]) * CONTHIST_SCALE;
+}
 
 // PawnHistory is addressed by the pawn structure and a move's [piece][to]
 using PawnHistory =
@@ -222,13 +227,25 @@ using TTMoveHistory = StatsEntry<std::int16_t, 8192>;
 struct SharedHistories {
     SharedHistories(size_t threadCount) :
         correctionHistory(threadCount),
-        pawnHistory(threadCount) {
+        pawnHistory(threadCount),
+        contHistTable(threadCount) {
         assert((threadCount & (threadCount - 1)) == 0 && threadCount != 0);
         sizeMinus1         = correctionHistory.get_size() - 1;
         pawnHistSizeMinus1 = pawnHistory.get_size() - 1;
+        contHistSizeMinus1 = contHistTable.get_size() - 1;
+        contHistSentinel.fill(-541 / CONTHIST_SCALE);
     }
 
     size_t get_size() const { return sizeMinus1 + 1; }
+
+    CompactPieceToHistory&
+    conthist_entry(Key pawnKey, bool inCheck, bool capture, Piece pc, Square to) {
+        Key k = pawnKey ^ Key(pc) * 6364136223846793005ULL ^ Key(to) * 1442695040888963407ULL;
+        k ^= Key(inCheck) << 62 | Key(capture) << 63;
+        return contHistTable[k & contHistSizeMinus1];
+    }
+
+    CompactPieceToHistory& conthist_sentinel() { return contHistSentinel; }
 
     auto& pawn_entry(const Position& pos) {
         return pawnHistory[pos.pawn_key() & pawnHistSizeMinus1];
@@ -262,10 +279,11 @@ struct SharedHistories {
 
     UnifiedCorrectionHistory correctionHistory;
     PawnHistory              pawnHistory;
-
+    SharedContHist           contHistTable;
+    CompactPieceToHistory    contHistSentinel;
 
    private:
-    size_t sizeMinus1, pawnHistSizeMinus1;
+    size_t sizeMinus1, pawnHistSizeMinus1, contHistSizeMinus1;
 };
 
 }  // namespace Stockfish
