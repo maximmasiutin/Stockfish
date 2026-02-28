@@ -149,6 +149,12 @@ using PieceToHistory = Stats<std::int16_t, 30000, PIECE_NB, SQUARE_NB>;
 // PieceToHistory instead of ButterflyBoards.
 using ContinuationHistory = MultiArray<PieceToHistory, PIECE_NB, SQUARE_NB>;
 
+// Wider-clamp continuation correction history with D=4096.
+constexpr int WIDE_CONTCORR_LIMIT = 4096;
+constexpr int WIDE_CONTCORR_FILL  = 7;
+using WideContCorrEntry           = Stats<std::int16_t, WIDE_CONTCORR_LIMIT, PIECE_NB, SQUARE_NB>;
+using WideContCorrHist            = MultiArray<WideContCorrEntry, PIECE_NB, SQUARE_NB>;
+
 // PawnHistory is addressed by the pawn structure and a move's [piece][to]
 using PawnHistory =
   DynStats<AtomicStats<std::int16_t, 8192, PIECE_NB, SQUARE_NB>, PAWN_HISTORY_BASE_SIZE>;
@@ -263,6 +269,16 @@ struct SharedHistories {
     UnifiedCorrectionHistory correctionHistory;
     PawnHistory              pawnHistory;
 
+    WideContCorrHist continuationCorrectionHistory;
+
+    void clear_contcorr_range(size_t threadIdx, size_t numaTotal) {
+        constexpr size_t total = PIECE_NB * SQUARE_NB;
+        size_t           start = uint64_t(threadIdx) * total / numaTotal;
+        size_t           end =
+          threadIdx + 1 == numaTotal ? total : uint64_t(threadIdx + 1) * total / numaTotal;
+        for (size_t i = start; i < end; i++)
+            continuationCorrectionHistory[i / SQUARE_NB][i % SQUARE_NB].fill(WIDE_CONTCORR_FILL);
+    }
 
    private:
     size_t sizeMinus1, pawnHistSizeMinus1;
