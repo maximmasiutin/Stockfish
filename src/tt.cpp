@@ -227,9 +227,11 @@ std::tuple<bool, TTData, TTWriter> TranspositionTable::probe(const Key key) cons
 
     for (int i = 0; i < ClusterSize; ++i)
         if (tte[i].key16 == key16)
-            // This gap is the main place for read races.
-            // After `read()` completes that copy is final, but may be self-inconsistent.
+        {
+            // Refresh generation to prevent aging out frequently-accessed entries
+            tte[i].genBound8 = uint8_t(generation8 | (tte[i].genBound8 & (GENERATION_DELTA - 1)));
             return {tte[i].is_occupied(), tte[i].read(), TTWriter(&tte[i])};
+        }
 
     // Find an entry to be replaced according to the replacement strategy
     TTEntry* replace = tte;
