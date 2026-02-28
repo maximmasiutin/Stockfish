@@ -111,6 +111,7 @@ MovePicker::MovePicker(const Position&              p,
 MovePicker::MovePicker(const Position& p, Move ttm, int th, const CapturePieceToHistory* cph) :
     pos(p),
     captureHistory(cph),
+    sharedHistory(nullptr),
     ttMove(ttm),
     threshold(th) {
     assert(!pos.checkers());
@@ -152,8 +153,13 @@ ExtMove* MovePicker::score(MoveList<Type>& ml) {
         const Piece     capturedPiece = pos.piece_on(to);
 
         if constexpr (Type == CAPTURES)
+        {
             m.value = (*captureHistory)[pc][to][type_of(capturedPiece)]
                     + 7 * int(PieceValue[capturedPiece]);
+            if (sharedHistory)
+                m.value +=
+                  sharedHistory->capture_history_entry(pos)[pc][to][type_of(capturedPiece)];
+        }
 
         else if constexpr (Type == QUIETS)
         {

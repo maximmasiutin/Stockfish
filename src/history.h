@@ -141,6 +141,13 @@ using LowPlyHistory = Stats<std::int16_t, 7183, LOW_PLY_HISTORY_SIZE, UINT_16_HI
 // CapturePieceToHistory is addressed by a move's [piece][to][captured piece type]
 using CapturePieceToHistory = Stats<std::int16_t, 10692, PIECE_NB, SQUARE_NB, PIECE_TYPE_NB>;
 
+constexpr int SHARED_CAPTURE_HISTORY_BASE_SIZE = 256;
+
+// SharedCapturePieceToHistory is a thread-shared version indexed by pawn key
+using SharedCapturePieceToHistory =
+  DynStats<Stats<std::int16_t, 10692, PIECE_NB, SQUARE_NB, PIECE_TYPE_NB>,
+           SHARED_CAPTURE_HISTORY_BASE_SIZE>;
+
 // PieceToHistory is like ButterflyHistory but is addressed by a move's [piece][to]
 using PieceToHistory = Stats<std::int16_t, 30000, PIECE_NB, SQUARE_NB>;
 
@@ -222,10 +229,12 @@ using TTMoveHistory = StatsEntry<std::int16_t, 8192>;
 struct SharedHistories {
     SharedHistories(size_t threadCount) :
         correctionHistory(threadCount),
-        pawnHistory(threadCount) {
+        pawnHistory(threadCount),
+        sharedCaptureHistory(threadCount) {
         assert((threadCount & (threadCount - 1)) == 0 && threadCount != 0);
         sizeMinus1         = correctionHistory.get_size() - 1;
         pawnHistSizeMinus1 = pawnHistory.get_size() - 1;
+        captHistSizeMinus1 = sharedCaptureHistory.get_size() - 1;
     }
 
     size_t get_size() const { return sizeMinus1 + 1; }
@@ -260,12 +269,20 @@ struct SharedHistories {
         return correctionHistory[pos.non_pawn_key(c) & sizeMinus1];
     }
 
-    UnifiedCorrectionHistory correctionHistory;
-    PawnHistory              pawnHistory;
+    auto& capture_history_entry(const Position& pos) {
+        return sharedCaptureHistory[pos.pawn_key() & captHistSizeMinus1];
+    }
+    const auto& capture_history_entry(const Position& pos) const {
+        return sharedCaptureHistory[pos.pawn_key() & captHistSizeMinus1];
+    }
+
+    UnifiedCorrectionHistory    correctionHistory;
+    PawnHistory                 pawnHistory;
+    SharedCapturePieceToHistory sharedCaptureHistory;
 
 
    private:
-    size_t sizeMinus1, pawnHistSizeMinus1;
+    size_t sizeMinus1, pawnHistSizeMinus1, captHistSizeMinus1;
 };
 
 }  // namespace Stockfish
