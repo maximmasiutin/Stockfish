@@ -226,6 +226,7 @@ struct SharedHistories {
         assert((threadCount & (threadCount - 1)) == 0 && threadCount != 0);
         sizeMinus1         = correctionHistory.get_size() - 1;
         pawnHistSizeMinus1 = pawnHistory.get_size() - 1;
+        contcorrDEff       = int(std::min(size_t(1024) * threadCount, size_t(32767)));
     }
 
     size_t get_size() const { return sizeMinus1 + 1; }
@@ -263,9 +264,29 @@ struct SharedHistories {
     UnifiedCorrectionHistory correctionHistory;
     PawnHistory              pawnHistory;
 
+    static constexpr int DefaultContCorrFill = 7;
+
+    CorrectionHistory<Continuation> continuationCorrectionHistory;
+
+    void clear_contcorr_range(size_t threadIdx, size_t numaTotal) {
+        constexpr size_t total = PIECE_NB * SQUARE_NB;
+        size_t           start = uint64_t(threadIdx) * total / numaTotal;
+        size_t           end =
+          threadIdx + 1 == numaTotal ? total : uint64_t(threadIdx + 1) * total / numaTotal;
+        for (size_t i = start; i < end; i++)
+            continuationCorrectionHistory[i / SQUARE_NB][i % SQUARE_NB].fill(DefaultContCorrFill);
+    }
+
+    template<typename E>
+    void contcorr_update(E& entry, int bonus) {
+        int clampedBonus = std::clamp(bonus, -contcorrDEff, contcorrDEff);
+        int val          = int(entry);
+        entry            = val + clampedBonus - val * std::abs(clampedBonus) / contcorrDEff;
+    }
 
    private:
     size_t sizeMinus1, pawnHistSizeMinus1;
+    int    contcorrDEff;
 };
 
 }  // namespace Stockfish
