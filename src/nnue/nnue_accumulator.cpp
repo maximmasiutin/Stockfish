@@ -775,9 +775,10 @@ void update_accumulator_refresh_cache(Color                                 pers
         }
 
         for (IndexType k = 0; k < Tiling::NumRegs; k++)
+        {
             vec_store(&entryTile[k], acc[k]);
-        for (IndexType k = 0; k < Tiling::NumRegs; k++)
             vec_store(&accTile[k], acc[k]);
+        }
 
         weights += Tiling::TileHeight;
     }
@@ -814,9 +815,10 @@ void update_accumulator_refresh_cache(Color                                 pers
         }
 
         for (IndexType k = 0; k < Tiling::NumPsqtRegs; ++k)
+        {
             vec_store_psqt(&entryTilePsqt[k], psqt[k]);
-        for (IndexType k = 0; k < Tiling::NumPsqtRegs; ++k)
             vec_store_psqt(&accTilePsqt[k], psqt[k]);
+        }
     }
 
 #else
