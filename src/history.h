@@ -144,10 +144,11 @@ using CapturePieceToHistory = Stats<std::int16_t, 10692, PIECE_NB, SQUARE_NB, PI
 // PieceToHistory is like ButterflyHistory but is addressed by a move's [piece][to]
 using PieceToHistory = Stats<std::int16_t, 30000, PIECE_NB, SQUARE_NB>;
 
-// ContinuationHistory is the combined history of a given pair of moves, usually
-// the current one given a previous one. The nested history table is based on
-// PieceToHistory instead of ButterflyBoards.
-using ContinuationHistory = MultiArray<PieceToHistory, PIECE_NB, SQUARE_NB>;
+// Non-atomic version of PieceToHistory for NUMA-shared access
+using AtomicPieceToHistory = Stats<std::int16_t, 30000, PIECE_NB, SQUARE_NB>;
+
+// NUMA-shared continuation history using atomics
+using SharedContinuationHistory = MultiArray<AtomicPieceToHistory, PIECE_NB, SQUARE_NB>;
 
 // PawnHistory is addressed by the pawn structure and a move's [piece][to]
 using PawnHistory =
@@ -263,6 +264,25 @@ struct SharedHistories {
     UnifiedCorrectionHistory correctionHistory;
     PawnHistory              pawnHistory;
 
+    SharedContinuationHistory continuationHistory[2][2];
+
+    void clear_conthist_range(int value, size_t threadIdx, size_t numaTotal) {
+        constexpr size_t total = 2 * 2 * PIECE_NB * SQUARE_NB;
+        size_t           start = uint64_t(threadIdx) * total / numaTotal;
+        size_t           end =
+          threadIdx + 1 == numaTotal ? total : uint64_t(threadIdx + 1) * total / numaTotal;
+        for (size_t i = start; i < end; i++)
+        {
+            size_t rem = i;
+            size_t sq  = rem % SQUARE_NB;
+            rem /= SQUARE_NB;
+            size_t pc = rem % PIECE_NB;
+            rem /= PIECE_NB;
+            size_t cap   = rem % 2;
+            size_t inChk = rem / 2;
+            continuationHistory[inChk][cap][pc][sq].fill(value);
+        }
+    }
 
    private:
     size_t sizeMinus1, pawnHistSizeMinus1;
