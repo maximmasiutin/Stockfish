@@ -41,7 +41,7 @@ class MovePicker {
     MovePicker(const Position&,
                Move,
                Depth,
-               const ButterflyHistory*,
+               const SharedButterflyHistory*,
                const LowPlyHistory*,
                const CapturePieceToHistory*,
                const PieceToHistory**,
@@ -59,20 +59,20 @@ class MovePicker {
     ExtMove* begin() { return cur; }
     ExtMove* end() { return endCur; }
 
-    const Position&              pos;
-    const ButterflyHistory*      mainHistory;
-    const LowPlyHistory*         lowPlyHistory;
-    const CapturePieceToHistory* captureHistory;
-    const PieceToHistory**       continuationHistory;
-    const SharedHistories*       sharedHistory;
-    Move                         ttMove;
-    ExtMove *                    cur, *endCur, *endBadCaptures, *endCaptures, *endGenerated;
-    int                          stage;
-    int                          threshold;
-    Depth                        depth;
-    int                          ply;
-    bool                         skipQuiets = false;
-    ExtMove                      moves[MAX_MOVES];
+    const Position&               pos;
+    const SharedButterflyHistory* mainHistory;
+    const LowPlyHistory*          lowPlyHistory;
+    const CapturePieceToHistory*  captureHistory;
+    const PieceToHistory**        continuationHistory;
+    const SharedHistories*        sharedHistory;
+    Move                          ttMove;
+    ExtMove *                     cur, *endCur, *endBadCaptures, *endCaptures, *endGenerated;
+    int                           stage;
+    int                           threshold;
+    Depth                         depth;
+    int                           ply;
+    bool                          skipQuiets = false;
+    ExtMove                       moves[MAX_MOVES];
 };
 
 }  // namespace Stockfish

@@ -134,6 +134,9 @@ struct DynStats {
 // see https://www.chessprogramming.org/Butterfly_Boards
 using ButterflyHistory = Stats<std::int16_t, 7183, COLOR_NB, UINT_16_HISTORY_SIZE>;
 
+// Non-atomic version of ButterflyHistory for NUMA-shared access
+using SharedButterflyHistory = Stats<std::int16_t, 7183, COLOR_NB, UINT_16_HISTORY_SIZE>;
+
 // LowPlyHistory is addressed by ply and move's from and to squares, used
 // to improve move ordering near the root
 using LowPlyHistory = Stats<std::int16_t, 7183, LOW_PLY_HISTORY_SIZE, UINT_16_HISTORY_SIZE>;
@@ -263,6 +266,16 @@ struct SharedHistories {
     UnifiedCorrectionHistory correctionHistory;
     PawnHistory              pawnHistory;
 
+    SharedButterflyHistory mainHistory;
+
+    void clear_mainhistory_range(int value, size_t threadIdx, size_t numaTotal) {
+        constexpr size_t total = COLOR_NB * UINT_16_HISTORY_SIZE;
+        size_t           start = uint64_t(threadIdx) * total / numaTotal;
+        size_t           end =
+          threadIdx + 1 == numaTotal ? total : uint64_t(threadIdx + 1) * total / numaTotal;
+        for (size_t i = start; i < end; i++)
+            mainHistory[i / UINT_16_HISTORY_SIZE][i % UINT_16_HISTORY_SIZE] = value;
+    }
 
    private:
     size_t sizeMinus1, pawnHistSizeMinus1;

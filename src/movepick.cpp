@@ -80,15 +80,15 @@ void partial_insertion_sort(ExtMove* begin, ExtMove* end, int limit) {
 // good moves first, and how important move ordering is at the current node.
 
 // MovePicker constructor for the main search and for the quiescence search
-MovePicker::MovePicker(const Position&              p,
-                       Move                         ttm,
-                       Depth                        d,
-                       const ButterflyHistory*      mh,
-                       const LowPlyHistory*         lph,
-                       const CapturePieceToHistory* cph,
-                       const PieceToHistory**       ch,
-                       const SharedHistories*       sh,
-                       int                          pl) :
+MovePicker::MovePicker(const Position&               p,
+                       Move                          ttm,
+                       Depth                         d,
+                       const SharedButterflyHistory* mh,
+                       const LowPlyHistory*          lph,
+                       const CapturePieceToHistory*  cph,
+                       const PieceToHistory**        ch,
+                       const SharedHistories*        sh,
+                       int                           pl) :
     pos(p),
     mainHistory(mh),
     lowPlyHistory(lph),
