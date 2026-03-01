@@ -62,20 +62,20 @@ namespace Search {
 // shallower and deeper in the tree during the search. Each search thread has
 // its own array of Stack objects, indexed by the current ply.
 struct Stack {
-    Move*                       pv;
-    PieceToHistory*             continuationHistory;
-    CorrectionHistory<PieceTo>* continuationCorrectionHistory;
-    int                         ply;
-    Move                        currentMove;
-    Move                        excludedMove;
-    Value                       staticEval;
-    int                         statScore;
-    int                         moveCount;
-    bool                        inCheck;
-    bool                        ttPv;
-    bool                        ttHit;
-    int                         cutoffCnt;
-    int                         reduction;
+    Move*                pv;
+    PieceToHistory*      continuationHistory;
+    CompactContCorrHist* continuationCorrectionHistory;
+    int                  ply;
+    Move                 currentMove;
+    Move                 excludedMove;
+    Value                staticEval;
+    int                  statScore;
+    int                  moveCount;
+    bool                 inCheck;
+    bool                 ttPv;
+    bool                 ttHit;
+    int                  cutoffCnt;
+    int                  reduction;
 };
 
 
@@ -290,9 +290,8 @@ class Worker {
     ButterflyHistory mainHistory;
     LowPlyHistory    lowPlyHistory;
 
-    CapturePieceToHistory           captureHistory;
-    ContinuationHistory             continuationHistory[2][2];
-    CorrectionHistory<Continuation> continuationCorrectionHistory;
+    CapturePieceToHistory captureHistory;
+    ContinuationHistory   continuationHistory[2][2];
 
     TTMoveHistory    ttMoveHistory;
     SharedHistories& sharedHistory;

@@ -149,6 +149,28 @@ using PieceToHistory = Stats<std::int16_t, 30000, PIECE_NB, SQUARE_NB>;
 // PieceToHistory instead of ButterflyBoards.
 using ContinuationHistory = MultiArray<PieceToHistory, PIECE_NB, SQUARE_NB>;
 
+// int8 D=64 shared continuation correction; byte access is naturally atomic.
+// D=64 is power of 2: operator<< divides by sar $0x6 (single instruction).
+constexpr int CONTCORR_D                 = 64;
+constexpr int CONTCORR_SCALE             = 8;
+constexpr int CONTCORR_CLAMP             = CONTCORR_SCALE * (CONTCORR_D / 4);
+constexpr int CONTCORR_FILL              = 1;
+constexpr int CONTCORR_FALLBACK          = 8;
+constexpr int CONTCORR_WEIGHT_MULTIPLIER = 2;
+constexpr int CONTCORR_HASH_BASE_SIZE    = 1024;
+using CompactContCorrHist                = Stats<std::int8_t, CONTCORR_D, PIECE_NB, SQUARE_NB>;
+using SharedContCorrHist                 = DynStats<CompactContCorrHist, CONTCORR_HASH_BASE_SIZE>;
+
+template<typename H>
+int contcorr_val(const H& h, Piece pc, Square to) {
+    return int(h[pc][to]) * CONTCORR_SCALE;
+}
+
+template<typename E>
+void contcorr_update(E& entry, int bonus) {
+    entry << std::clamp(bonus, -CONTCORR_CLAMP, CONTCORR_CLAMP) / CONTCORR_SCALE;
+}
+
 // PawnHistory is addressed by the pawn structure and a move's [piece][to]
 using PawnHistory =
   DynStats<AtomicStats<std::int16_t, 8192, PIECE_NB, SQUARE_NB>, PAWN_HISTORY_BASE_SIZE>;
@@ -222,10 +244,12 @@ using TTMoveHistory = StatsEntry<std::int16_t, 8192>;
 struct SharedHistories {
     SharedHistories(size_t threadCount) :
         correctionHistory(threadCount),
-        pawnHistory(threadCount) {
+        pawnHistory(threadCount),
+        contcorrHistory(threadCount) {
         assert((threadCount & (threadCount - 1)) == 0 && threadCount != 0);
         sizeMinus1         = correctionHistory.get_size() - 1;
         pawnHistSizeMinus1 = pawnHistory.get_size() - 1;
+        contcorrSizeMinus1 = contcorrHistory.get_size() - 1;
     }
 
     size_t get_size() const { return sizeMinus1 + 1; }
@@ -260,12 +284,21 @@ struct SharedHistories {
         return correctionHistory[pos.non_pawn_key(c) & sizeMinus1];
     }
 
+    // Pawn-key-hashed shared continuation correction history
+    CompactContCorrHist& contcorr_entry(Key pawnKey, Piece pc, Square to) {
+        Key k = pawnKey ^ Key(pc) * 6364136223846793005ULL ^ Key(to) * 1442695040888963407ULL;
+        return contcorrHistory[k & contcorrSizeMinus1];
+    }
+
+    CompactContCorrHist& contcorr_sentinel() { return contcorrSentinel; }
+
     UnifiedCorrectionHistory correctionHistory;
     PawnHistory              pawnHistory;
-
+    SharedContCorrHist       contcorrHistory;
+    CompactContCorrHist      contcorrSentinel;
 
    private:
-    size_t sizeMinus1, pawnHistSizeMinus1;
+    size_t sizeMinus1, pawnHistSizeMinus1, contcorrSizeMinus1;
 };
 
 }  // namespace Stockfish
