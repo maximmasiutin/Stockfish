@@ -149,6 +149,31 @@ using PieceToHistory = Stats<std::int16_t, 30000, PIECE_NB, SQUARE_NB>;
 // PieceToHistory instead of ButterflyBoards.
 using ContinuationHistory = MultiArray<PieceToHistory, PIECE_NB, SQUARE_NB>;
 
+// int8 continuation correction with power-of-2 gravity division.
+// Storage: Stats<int8_t, 127> (safe range [-127, 127]).
+// Gravity divides by CONTCORR_GRAVITY=128 (sar $0x7), bypassing operator<<.
+constexpr int CONTCORR_GRAVITY           = 128;
+constexpr int CONTCORR_SCALE             = 8;
+constexpr int CONTCORR_CLAMP             = CONTCORR_SCALE * 16;
+constexpr int CONTCORR_FILL              = 1;
+constexpr int CONTCORR_FALLBACK          = 8;
+constexpr int CONTCORR_WEIGHT_MULTIPLIER = 1;
+constexpr int CONTCORR_MAX               = 127;
+using CompactContCorrHist                = Stats<std::int8_t, CONTCORR_MAX, PIECE_NB, SQUARE_NB>;
+
+template<typename H>
+int contcorr_val(const H& h, Piece pc, Square to) {
+    return int(h[pc][to]) * CONTCORR_SCALE;
+}
+
+template<typename E>
+void contcorr_update(E& entry, int bonus) {
+    int b = std::clamp(bonus, -CONTCORR_CLAMP, CONTCORR_CLAMP) / CONTCORR_SCALE;
+    int v = int(entry);
+    entry = std::int8_t(
+      std::clamp(v + b - v * std::abs(b) / CONTCORR_GRAVITY, -CONTCORR_MAX, CONTCORR_MAX));
+}
+
 // PawnHistory is addressed by the pawn structure and a move's [piece][to]
 using PawnHistory =
   DynStats<AtomicStats<std::int16_t, 8192, PIECE_NB, SQUARE_NB>, PAWN_HISTORY_BASE_SIZE>;
@@ -263,6 +288,16 @@ struct SharedHistories {
     UnifiedCorrectionHistory correctionHistory;
     PawnHistory              pawnHistory;
 
+    MultiArray<CompactContCorrHist, PIECE_NB, SQUARE_NB> continuationCorrectionHistory;
+
+    void clear_contcorr_range(size_t threadIdx, size_t numaTotal) {
+        constexpr size_t total = PIECE_NB * SQUARE_NB;
+        size_t           start = uint64_t(threadIdx) * total / numaTotal;
+        size_t           end =
+          threadIdx + 1 == numaTotal ? total : uint64_t(threadIdx + 1) * total / numaTotal;
+        for (size_t i = start; i < end; i++)
+            continuationCorrectionHistory[i / SQUARE_NB][i % SQUARE_NB].fill(CONTCORR_FILL);
+    }
 
    private:
     size_t sizeMinus1, pawnHistSizeMinus1;
