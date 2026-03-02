@@ -39,6 +39,7 @@ constexpr int PAWN_HISTORY_BASE_SIZE   = 8192;  // has to be a power of 2
 constexpr int UINT_16_HISTORY_SIZE     = std::numeric_limits<uint16_t>::max() + 1;
 constexpr int CORRHIST_BASE_SIZE       = UINT_16_HISTORY_SIZE;
 constexpr int CORRECTION_HISTORY_LIMIT = 1024;
+constexpr int CONTCORR_HASH_SLOTS      = 1024;  // has to be a power of 2
 constexpr int LOW_PLY_HISTORY_SIZE     = 5;
 
 static_assert((PAWN_HISTORY_BASE_SIZE & (PAWN_HISTORY_BASE_SIZE - 1)) == 0,
@@ -263,6 +264,16 @@ struct SharedHistories {
     UnifiedCorrectionHistory correctionHistory;
     PawnHistory              pawnHistory;
 
+    CorrectionHistory<PieceTo> contCorrHash[CONTCORR_HASH_SLOTS];
+
+    void clear_contcorr_range(int value, size_t threadIdx, size_t numaTotal) {
+        size_t start = uint64_t(threadIdx) * CONTCORR_HASH_SLOTS / numaTotal;
+        size_t end   = threadIdx + 1 == numaTotal
+                       ? CONTCORR_HASH_SLOTS
+                       : uint64_t(threadIdx + 1) * CONTCORR_HASH_SLOTS / numaTotal;
+        for (size_t i = start; i < end; i++)
+            contCorrHash[i].fill(value);
+    }
 
    private:
     size_t sizeMinus1, pawnHistSizeMinus1;
