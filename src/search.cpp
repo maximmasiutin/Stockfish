@@ -113,6 +113,10 @@ void update_correction_history(const Position& pos,
     shared.nonpawn_correction_entry<WHITE>(pos).at(us).nonPawnWhite << bonus * nonPawnWeight / 128;
     shared.nonpawn_correction_entry<BLACK>(pos).at(us).nonPawnBlack << bonus * nonPawnWeight / 128;
 
+    // Write shared contcorr every 4th ply to reduce 8-thread contention
+    if (ss->ply & 3)
+        return;
+
     // Branchless: use mask to zero bonus when move is not ok
     const int    mask   = int(m.is_ok());
     const Square to     = m.to_sq_unchecked();
@@ -281,8 +285,9 @@ void Search::Worker::iterative_deepening() {
     {
         (ss - i)->continuationHistory =
           &continuationHistory[0][0][NO_PIECE][0];  // Use as a sentinel
-        (ss - i)->continuationCorrectionHistory = &continuationCorrectionHistory[NO_PIECE][0];
-        (ss - i)->staticEval                    = VALUE_NONE;
+        (ss - i)->continuationCorrectionHistory =
+          &sharedHistory.continuationCorrectionHistory[NO_PIECE][0];
+        (ss - i)->staticEval = VALUE_NONE;
     }
 
     for (int i = 0; i <= MAX_PLY + 2; ++i)
@@ -563,7 +568,7 @@ void Search::Worker::do_move(
         ss->continuationHistory =
           &continuationHistory[ss->inCheck][capture][dirtyPiece.pc][move.to_sq()];
         ss->continuationCorrectionHistory =
-          &continuationCorrectionHistory[dirtyPiece.pc][move.to_sq()];
+          &sharedHistory.continuationCorrectionHistory[dirtyPiece.pc][move.to_sq()];
     }
 }
 
@@ -571,7 +576,7 @@ void Search::Worker::do_null_move(Position& pos, StateInfo& st, Stack* const ss)
     pos.do_null_move(st);
     ss->currentMove                   = Move::null();
     ss->continuationHistory           = &continuationHistory[0][0][NO_PIECE][0];
-    ss->continuationCorrectionHistory = &continuationCorrectionHistory[NO_PIECE][0];
+    ss->continuationCorrectionHistory = &sharedHistory.continuationCorrectionHistory[NO_PIECE][0];
 }
 
 void Search::Worker::undo_move(Position& pos, const Move move) {
@@ -593,9 +598,7 @@ void Search::Worker::clear() {
 
     ttMoveHistory = 0;
 
-    for (auto& to : continuationCorrectionHistory)
-        for (auto& h : to)
-            h.fill(7);
+    sharedHistory.clear_contcorr_range(7, numaThreadIdx, numaTotal);
 
     for (bool inCheck : {false, true})
         for (StatsType c : {NoCaptures, Captures})
