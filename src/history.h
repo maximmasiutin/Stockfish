@@ -149,6 +149,14 @@ using PieceToHistory = Stats<std::int16_t, 30000, PIECE_NB, SQUARE_NB>;
 // PieceToHistory instead of ButterflyBoards.
 using ContinuationHistory = MultiArray<PieceToHistory, PIECE_NB, SQUARE_NB>;
 
+// int8 D=127 continuation correction; halves per-worker memory.
+// SCALE=8: read range [-1016,1016] covers CORRECTION_HISTORY_LIMIT (1024).
+constexpr int CONTCORR_SCALE             = 8;
+constexpr int CONTCORR_FILL              = 1;
+constexpr int CONTCORR_FALLBACK          = 8;
+constexpr int CONTCORR_WEIGHT_MULTIPLIER = 1;
+using CompactContCorrHist                = Stats<std::int8_t, 127, PIECE_NB, SQUARE_NB>;
+
 // PawnHistory is addressed by the pawn structure and a move's [piece][to]
 using PawnHistory =
   DynStats<AtomicStats<std::int16_t, 8192, PIECE_NB, SQUARE_NB>, PAWN_HISTORY_BASE_SIZE>;
