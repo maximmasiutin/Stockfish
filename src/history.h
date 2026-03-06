@@ -173,10 +173,14 @@ struct CorrectionBundle {
     StatsEntry<T, D, true> nonPawnBlack;
 
     void operator=(T val) {
-        pawn         = val;
-        minor        = val;
-        nonPawnWhite = val;
-        nonPawnBlack = val;
+        if (T(pawn) != val)
+            pawn = val;
+        if (T(minor) != val)
+            minor = val;
+        if (T(nonPawnWhite) != val)
+            nonPawnWhite = val;
+        if (T(nonPawnBlack) != val)
+            nonPawnBlack = val;
     }
 };
 
