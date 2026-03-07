@@ -84,12 +84,14 @@ int correction_value(const Worker& w, const Position& pos, const Stack* const ss
     const int   micv   = shared.minor_piece_correction_entry(pos).at(us).minor;
     const int   wnpcv  = shared.nonpawn_correction_entry<WHITE>(pos).at(us).nonPawnWhite;
     const int   bnpcv  = shared.nonpawn_correction_entry<BLACK>(pos).at(us).nonPawnBlack;
-    const int   cntcv =
-      m.is_ok() ? (*(ss - 2)->continuationCorrectionHistory)[pos.piece_on(m.to_sq())][m.to_sq()]
-                    + (*(ss - 4)->continuationCorrectionHistory)[pos.piece_on(m.to_sq())][m.to_sq()]
-                  : 8;
+    const int   cntcv  = m.is_ok() ? contcorr_val(*(ss - 2)->continuationCorrectionHistory,
+                                                  pos.piece_on(m.to_sq()), m.to_sq())
+                                    + contcorr_val(*(ss - 4)->continuationCorrectionHistory,
+                                                      pos.piece_on(m.to_sq()), m.to_sq())
+                                   : CONTCORR_FALLBACK;
 
-    return 11433 * pcv + 8823 * micv + 12749 * (wnpcv + bnpcv) + 8022 * cntcv;
+    return 11433 * pcv + 8823 * micv + 12749 * (wnpcv + bnpcv)
+         + 8022 * CONTCORR_WEIGHT_MULTIPLIER * cntcv;
 }
 
 // Add correctionHistory value to raw staticEval and guarantee evaluation
@@ -114,13 +116,11 @@ void update_correction_history(const Position& pos,
     shared.nonpawn_correction_entry<BLACK>(pos).at(us).nonPawnBlack << bonus * nonPawnWeight / 128;
 
     // Branchless: use mask to zero bonus when move is not ok
-    const int    mask   = int(m.is_ok());
-    const Square to     = m.to_sq_unchecked();
-    const Piece  pc     = pos.piece_on(to);
-    const int    bonus2 = (bonus * 129 / 128) * mask;
-    const int    bonus4 = (bonus * 61 / 128) * mask;
-    (*(ss - 2)->continuationCorrectionHistory)[pc][to] << bonus2;
-    (*(ss - 4)->continuationCorrectionHistory)[pc][to] << bonus4;
+    const int    mask = int(m.is_ok());
+    const Square to   = m.to_sq_unchecked();
+    const Piece  pc   = pos.piece_on(to);
+    contcorr_update((*(ss - 2)->continuationCorrectionHistory)[pc][to], (bonus * 129 / 128) * mask);
+    contcorr_update((*(ss - 4)->continuationCorrectionHistory)[pc][to], (bonus * 61 / 128) * mask);
 }
 
 // Add a small random component to draw evaluations to avoid 3-fold blindness
@@ -281,7 +281,7 @@ void Search::Worker::iterative_deepening() {
     {
         (ss - i)->continuationHistory =
           &continuationHistory[0][0][NO_PIECE][0];  // Use as a sentinel
-        (ss - i)->continuationCorrectionHistory = &continuationCorrectionHistory[NO_PIECE][0];
+        (ss - i)->continuationCorrectionHistory = &sharedHistory.contcorr_sentinel();
         (ss - i)->staticEval                    = VALUE_NONE;
     }
 
@@ -563,7 +563,7 @@ void Search::Worker::do_move(
         ss->continuationHistory =
           &continuationHistory[ss->inCheck][capture][dirtyPiece.pc][move.to_sq()];
         ss->continuationCorrectionHistory =
-          &continuationCorrectionHistory[dirtyPiece.pc][move.to_sq()];
+          &sharedHistory.contcorr_entry(pos.pawn_key(), dirtyPiece.pc, move.to_sq());
     }
 }
 
@@ -571,7 +571,7 @@ void Search::Worker::do_null_move(Position& pos, StateInfo& st, Stack* const ss)
     pos.do_null_move(st);
     ss->currentMove                   = Move::null();
     ss->continuationHistory           = &continuationHistory[0][0][NO_PIECE][0];
-    ss->continuationCorrectionHistory = &continuationCorrectionHistory[NO_PIECE][0];
+    ss->continuationCorrectionHistory = &sharedHistory.contcorr_sentinel();
 }
 
 void Search::Worker::undo_move(Position& pos, const Move move) {
@@ -593,9 +593,8 @@ void Search::Worker::clear() {
 
     ttMoveHistory = 0;
 
-    for (auto& to : continuationCorrectionHistory)
-        for (auto& h : to)
-            h.fill(7);
+    sharedHistory.contcorrHistory.clear_range(CONTCORR_FILL, numaThreadIdx, numaTotal);
+    sharedHistory.contcorr_sentinel().fill(CONTCORR_FILL);
 
     for (bool inCheck : {false, true})
         for (StatsType c : {NoCaptures, Captures})
