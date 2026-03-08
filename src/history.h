@@ -149,6 +149,24 @@ using PieceToHistory = Stats<std::int16_t, 30000, PIECE_NB, SQUARE_NB>;
 // PieceToHistory instead of ButterflyBoards.
 using ContinuationHistory = MultiArray<PieceToHistory, PIECE_NB, SQUARE_NB>;
 
+// int8 D=128 continuation correction; halves per-worker memory.
+// Cannot use operator<< (D=128 overflows int8_t), uses custom gravity template.
+constexpr int CONTCORR_GRAVITY           = 128;
+constexpr int CONTCORR_SCALE             = 8;
+constexpr int CONTCORR_FILL              = 1;
+constexpr int CONTCORR_FALLBACK          = 8;
+constexpr int CONTCORR_WEIGHT_MULTIPLIER = 1;
+constexpr int CONTCORR_MAX               = 127;
+using CompactContCorrHist                = Stats<std::int8_t, CONTCORR_MAX, PIECE_NB, SQUARE_NB>;
+
+template<typename E>
+void contcorr_update(E& entry, int bonus) {
+    int b = std::clamp(bonus / CONTCORR_SCALE, -CONTCORR_MAX, CONTCORR_MAX);
+    int v = int(entry);
+    entry = std::int8_t(
+      std::clamp(v + b - v * std::abs(b) / CONTCORR_GRAVITY, -CONTCORR_MAX, CONTCORR_MAX));
+}
+
 // PawnHistory is addressed by the pawn structure and a move's [piece][to]
 using PawnHistory =
   DynStats<AtomicStats<std::int16_t, 8192, PIECE_NB, SQUARE_NB>, PAWN_HISTORY_BASE_SIZE>;
