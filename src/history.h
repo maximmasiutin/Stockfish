@@ -41,6 +41,12 @@ constexpr int CORRHIST_BASE_SIZE       = UINT_16_HISTORY_SIZE;
 constexpr int CORRECTION_HISTORY_LIMIT = 1024;
 constexpr int LOW_PLY_HISTORY_SIZE     = 5;
 
+constexpr int CONTCORR_D    = 127;
+constexpr int CONTCORR_WDIV = 4;
+constexpr int CONTCORR_RMUL = 8;
+constexpr int CONTCORR_FILL = 1;
+constexpr int CONTCORR_FALLBACK = 8;
+
 static_assert((PAWN_HISTORY_BASE_SIZE & (PAWN_HISTORY_BASE_SIZE - 1)) == 0,
               "PAWN_HISTORY_BASE_SIZE has to be a power of 2");
 
@@ -213,6 +219,18 @@ using UnifiedCorrectionHistory =
 template<CorrHistType T>
 using CorrectionHistory = typename Detail::CorrHistTypedef<T>::type;
 
+using CompactContCorrHist = Stats<std::int8_t, CONTCORR_D, PIECE_NB, SQUARE_NB>;
+
+template<typename H>
+int contcorr_val(const H& h, Piece pc, Square to) {
+    return static_cast<int>(h[pc][to]) * CONTCORR_RMUL;
+}
+
+template<typename E>
+void contcorr_update(E& entry, int bonus) {
+    entry << (bonus / CONTCORR_WDIV);
+}
+
 using TTMoveHistory = StatsEntry<std::int16_t, 8192>;
 
 // Set of histories shared between groups of threads. To avoid excessive
@@ -263,6 +281,16 @@ struct SharedHistories {
     UnifiedCorrectionHistory correctionHistory;
     PawnHistory              pawnHistory;
 
+    MultiArray<CompactContCorrHist, PIECE_NB, SQUARE_NB> continuationCorrectionHistory;
+
+    void clear_contcorr_range(int value, size_t threadIdx, size_t numaTotal) {
+        constexpr size_t total = PIECE_NB * SQUARE_NB;
+        size_t           start = uint64_t(threadIdx) * total / numaTotal;
+        size_t           end =
+          threadIdx + 1 == numaTotal ? total : uint64_t(threadIdx + 1) * total / numaTotal;
+        for (size_t i = start; i < end; i++)
+            continuationCorrectionHistory[i / SQUARE_NB][i % SQUARE_NB].fill(value);
+    }
 
    private:
     size_t sizeMinus1, pawnHistSizeMinus1;
