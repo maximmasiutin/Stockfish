@@ -87,6 +87,7 @@ int correction_value(const Worker& w, const Position& pos, const Stack* const ss
     const int   cntcv =
       m.is_ok() ? (*(ss - 2)->continuationCorrectionHistory)[pos.piece_on(m.to_sq())][m.to_sq()]
                     + (*(ss - 4)->continuationCorrectionHistory)[pos.piece_on(m.to_sq())][m.to_sq()]
+                    + (*(ss - 6)->continuationCorrectionHistory)[pos.piece_on(m.to_sq())][m.to_sq()]
                   : 8;
 
     return 11433 * pcv + 8823 * micv + 12749 * (wnpcv + bnpcv) + 8022 * cntcv;
@@ -119,8 +120,10 @@ void update_correction_history(const Position& pos,
     const Piece  pc     = pos.piece_on(to);
     const int    bonus2 = (bonus * 129 / 128) * mask;
     const int    bonus4 = (bonus * 61 / 128) * mask;
+    const int    bonus6 = (bonus * 30 / 128) * mask;
     (*(ss - 2)->continuationCorrectionHistory)[pc][to] << bonus2;
     (*(ss - 4)->continuationCorrectionHistory)[pc][to] << bonus4;
+    (*(ss - 6)->continuationCorrectionHistory)[pc][to] << bonus6;
 }
 
 // Add a small random component to draw evaluations to avoid 3-fold blindness
