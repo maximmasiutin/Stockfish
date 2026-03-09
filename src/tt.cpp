@@ -93,23 +93,38 @@ bool TTEntry::is_occupied() const { return bool(depth8); }
 void TTEntry::save(
   Key k, Value v, bool pv, Bound b, Depth d, Move m, Value ev, uint8_t generation8) {
 
-    // Preserve the old ttmove if we don't have a new one
-    if (m || uint16_t(k) != key16)
-        move16 = m;
-
-    // Overwrite less valuable entries (cheapest checks first)
-    if (b == BOUND_EXACT || uint16_t(k) != key16 || d - DEPTH_ENTRY_OFFSET + 2 * pv > depth8 - 4
-        || relative_age(generation8))
+    // Different position: always replace move and overwrite entry.
+    // Same position: keep old move unless caller provides one,
+    // and skip overwrite only when all three hold: not exact bound,
+    // not deeper, and same generation.
+    if (uint16_t(k) != key16)
     {
-        assert(d > DEPTH_ENTRY_OFFSET);
-        assert(d < 256 + DEPTH_ENTRY_OFFSET);
-
-        key16     = uint16_t(k);
-        depth8    = uint8_t(d - DEPTH_ENTRY_OFFSET);
-        genBound8 = uint8_t(generation8 | uint8_t(pv) << 2 | b);
-        value16   = int16_t(v);
-        eval16    = int16_t(ev);
+        move16 = m;
     }
+    else
+    {
+        if (m)
+            move16 = m;
+
+        // Bitwise AND evaluates all operands without short-circuit
+        // branches, collapsing the skip test into one conditional jump.
+        // XOR with GENERATION_MASK tests same-vs-different generation
+        // without the cyclic arithmetic of relative_age(); this works
+        // because we only need a same-generation check here, not the
+        // actual age distance.
+        if ((b != BOUND_EXACT) & (d - DEPTH_ENTRY_OFFSET + 2 * pv <= depth8 - 4)
+            & !bool((genBound8 ^ generation8) & GENERATION_MASK))
+            return;
+    }
+
+    assert(d > DEPTH_ENTRY_OFFSET);
+    assert(d < 256 + DEPTH_ENTRY_OFFSET);
+
+    key16     = uint16_t(k);
+    depth8    = uint8_t(d - DEPTH_ENTRY_OFFSET);
+    genBound8 = uint8_t(generation8 | uint8_t(pv) << 2 | b);
+    value16   = int16_t(v);
+    eval16    = int16_t(ev);
 }
 
 
