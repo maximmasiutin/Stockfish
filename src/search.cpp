@@ -117,8 +117,8 @@ void update_correction_history(const Position& pos,
     const int    mask   = int(m.is_ok());
     const Square to     = m.to_sq_unchecked();
     const Piece  pc     = pos.piece_on(to);
-    const int    bonus2 = (bonus * 129 / 128) * mask;
-    const int    bonus4 = (bonus * 61 / 128) * mask;
+    const int    bonus2 = (bonus * 129 / 256) * mask;
+    const int    bonus4 = (bonus * 61 / 256) * mask;
     (*(ss - 2)->continuationCorrectionHistory)[pc][to] << bonus2;
     (*(ss - 4)->continuationCorrectionHistory)[pc][to] << bonus4;
 }
