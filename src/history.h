@@ -226,6 +226,14 @@ struct SharedHistories {
         assert((threadCount & (threadCount - 1)) == 0 && threadCount != 0);
         sizeMinus1         = correctionHistory.get_size() - 1;
         pawnHistSizeMinus1 = pawnHistory.get_size() - 1;
+        // Linear D scaling: D = 1024 * threadCount, always power of 2
+        int tc = int(threadCount);
+        contcorrDShift = 10;
+        while (tc > 1)
+        {
+            tc >>= 1;
+            contcorrDShift++;
+        }
     }
 
     size_t get_size() const { return sizeMinus1 + 1; }
@@ -263,9 +271,33 @@ struct SharedHistories {
     UnifiedCorrectionHistory correctionHistory;
     PawnHistory              pawnHistory;
 
+    static constexpr int DefaultContCorrFill = 7;
+
+    using AtomicPieceToCorrHist =
+      AtomicStats<std::int16_t, CORRECTION_HISTORY_LIMIT, PIECE_NB, SQUARE_NB>;
+
+    MultiArray<AtomicPieceToCorrHist, PIECE_NB, SQUARE_NB> continuationCorrectionHistory;
+
+    void clear_contcorr_range(size_t threadIdx, size_t numaTotal) {
+        constexpr size_t total = PIECE_NB * SQUARE_NB;
+        size_t           start = uint64_t(threadIdx) * total / numaTotal;
+        size_t           end =
+          threadIdx + 1 == numaTotal ? total : uint64_t(threadIdx + 1) * total / numaTotal;
+        for (size_t i = start; i < end; i++)
+            continuationCorrectionHistory[i / SQUARE_NB][i % SQUARE_NB].fill(DefaultContCorrFill);
+    }
+
+    void update_contcorr(AtomicPieceToCorrHist& hist, Piece pc, Square to, int bonus) {
+        auto& e  = hist[pc][to];
+        int   d  = 1 << contcorrDShift;
+        int   cb = std::clamp(bonus, -d, d);
+        int   v  = int(e);
+        e        = v + cb - ((v * std::abs(cb)) >> contcorrDShift);
+    }
 
    private:
     size_t sizeMinus1, pawnHistSizeMinus1;
+    int    contcorrDShift;
 };
 
 }  // namespace Stockfish
