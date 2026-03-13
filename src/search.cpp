@@ -128,9 +128,9 @@ Value value_draw(size_t nodes) { return VALUE_DRAW - 1 + Value(nodes & 0x2); }
 Value value_to_tt(Value v, int ply);
 Value value_from_tt(Value v, int ply, int r50c);
 void  update_pv(Move* pv, Move move, const Move* childPv);
-void  update_continuation_histories(Stack* ss, Piece pc, Square to, int bonus);
+void  update_continuation_histories(Stack* ss, Piece pc, Square to, int bonus, int bonusShift);
 void  update_quiet_histories(
-   const Position& pos, Stack* ss, Search::Worker& workerThread, Move move, int bonus);
+   const Position& pos, Stack* ss, Search::Worker& workerThread, Move move, int bonus, int bonusShift);
 void update_all_stats(const Position& pos,
                       Stack*          ss,
                       Search::Worker& workerThread,
@@ -280,7 +280,7 @@ void Search::Worker::iterative_deepening() {
     for (int i = 7; i > 0; --i)
     {
         (ss - i)->continuationHistory =
-          &continuationHistory[0][0][NO_PIECE][0];  // Use as a sentinel
+          &sharedHistory.continuationHistory[0][0][NO_PIECE][0];  // Use as a sentinel
         (ss - i)->continuationCorrectionHistory = &continuationCorrectionHistory[NO_PIECE][0];
         (ss - i)->staticEval                    = VALUE_NONE;
     }
@@ -561,7 +561,7 @@ void Search::Worker::do_move(
     {
         ss->currentMove = move;
         ss->continuationHistory =
-          &continuationHistory[ss->inCheck][capture][dirtyPiece.pc][move.to_sq()];
+          &sharedHistory.continuationHistory[ss->inCheck][capture][dirtyPiece.pc][move.to_sq()];
         ss->continuationCorrectionHistory =
           &continuationCorrectionHistory[dirtyPiece.pc][move.to_sq()];
     }
@@ -570,7 +570,7 @@ void Search::Worker::do_move(
 void Search::Worker::do_null_move(Position& pos, StateInfo& st, Stack* const ss) {
     pos.do_null_move(st);
     ss->currentMove                   = Move::null();
-    ss->continuationHistory           = &continuationHistory[0][0][NO_PIECE][0];
+    ss->continuationHistory           = &sharedHistory.continuationHistory[0][0][NO_PIECE][0];
     ss->continuationCorrectionHistory = &continuationCorrectionHistory[NO_PIECE][0];
 }
 
@@ -597,11 +597,18 @@ void Search::Worker::clear() {
         for (auto& h : to)
             h.fill(7);
 
-    for (bool inCheck : {false, true})
-        for (StatsType c : {NoCaptures, Captures})
-            for (auto& to : continuationHistory[inCheck][c])
-                for (auto& h : to)
-                    h.fill(-541);
+    // Clear shared continuation history (distributed across threads)
+    {
+        size_t totalEntries = PIECE_NB * SQUARE_NB;
+        size_t start        = uint64_t(numaThreadIdx) * totalEntries / numaTotal;
+        size_t end          = numaThreadIdx + 1 == numaTotal
+                                ? totalEntries
+                                : uint64_t(numaThreadIdx + 1) * totalEntries / numaTotal;
+        for (bool inCheck : {false, true})
+            for (StatsType c : {NoCaptures, Captures})
+                for (size_t i = start; i < end; i++)
+                    sharedHistory.continuationHistory[inCheck][c][Piece(i / SQUARE_NB)][Square(i % SQUARE_NB)].fill(-541);
+    }
 
     for (size_t i = 1; i < reductions.size(); ++i)
         reductions[i] = int(2809 / 128.0 * std::log(i));
@@ -768,11 +775,11 @@ Value Search::Worker::search(
             // Bonus for a quiet ttMove that fails high
             if (!ttCapture)
                 update_quiet_histories(pos, ss, *this, ttData.move,
-                                       std::min(121 * depth - 75, 932));
+                                       std::min(121 * depth - 75, 932), sharedHistory.conthistBonusShift);
 
             // Extra penalty for early quiet moves of the previous ply
             if (prevSq != SQ_NONE && (ss - 1)->moveCount < 4 && !priorCapture)
-                update_continuation_histories(ss - 1, pos.piece_on(prevSq), prevSq, -2104);
+                update_continuation_histories(ss - 1, pos.piece_on(prevSq), prevSq, -2104, sharedHistory.conthistBonusShift);
         }
 
         // Partial workaround for the graph history interaction problem
@@ -988,7 +995,7 @@ moves_loop:  // When in check, search starts here
         && !is_decisive(beta) && is_valid(ttData.value) && !is_decisive(ttData.value))
         return probCutBeta;
 
-    const PieceToHistory* contHist[] = {
+    const AtomicPieceToHistory* contHist[] = {
       (ss - 1)->continuationHistory, (ss - 2)->continuationHistory, (ss - 3)->continuationHistory,
       (ss - 4)->continuationHistory, (ss - 5)->continuationHistory, (ss - 6)->continuationHistory};
 
@@ -1256,7 +1263,7 @@ moves_loop:  // When in check, search starts here
                     value = -search<NonPV>(pos, ss + 1, -(alpha + 1), -alpha, newDepth, !cutNode);
 
                 // Post LMR continuation history updates
-                update_continuation_histories(ss, movedPiece, move.to_sq(), 1342);
+                update_continuation_histories(ss, movedPiece, move.to_sq(), 1342, sharedHistory.conthistBonusShift);
             }
         }
 
@@ -1436,7 +1443,7 @@ moves_loop:  // When in check, search starts here
         const int scaledBonus = std::min(137 * depth - 79, 1394) * bonusScale;
 
         update_continuation_histories(ss - 1, pos.piece_on(prevSq), prevSq,
-                                      scaledBonus * 222 / 16384);
+                                      scaledBonus * 222 / 16384, sharedHistory.conthistBonusShift);
 
         mainHistory[~us][((ss - 1)->currentMove).raw()] << scaledBonus * 221 / 32768;
 
@@ -1604,7 +1611,7 @@ Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta)
         futilityBase = ss->staticEval + 351;
     }
 
-    const PieceToHistory* contHist[] = {(ss - 1)->continuationHistory};
+    const AtomicPieceToHistory* contHist[] = {(ss - 1)->continuationHistory};
 
     Square prevSq = ((ss - 1)->currentMove).is_ok() ? ((ss - 1)->currentMove).to_sq() : SQ_NONE;
 
@@ -1835,14 +1842,14 @@ void update_all_stats(const Position& pos,
 
     if (!pos.capture_stage(bestMove))
     {
-        update_quiet_histories(pos, ss, workerThread, bestMove, bonus * 810 / 1024);
+        update_quiet_histories(pos, ss, workerThread, bestMove, bonus * 810 / 1024, workerThread.sharedHistory.conthistBonusShift);
 
         int actualMalus = malus * 1159 / 1024;
         // Decrease stats for all non-best quiet moves
         for (Move move : quietsSearched)
         {
             actualMalus = actualMalus * 963 / 1024;
-            update_quiet_histories(pos, ss, workerThread, move, -actualMalus);
+            update_quiet_histories(pos, ss, workerThread, move, -actualMalus, workerThread.sharedHistory.conthistBonusShift);
         }
     }
     else
@@ -1855,7 +1862,7 @@ void update_all_stats(const Position& pos,
     // Extra penalty for a quiet early move that was not a TT move in
     // previous ply when it gets refuted.
     if (prevSq != SQ_NONE && ((ss - 1)->moveCount == 1 + (ss - 1)->ttHit) && !pos.captured_piece())
-        update_continuation_histories(ss - 1, pos.piece_on(prevSq), prevSq, -malus * 596 / 1024);
+        update_continuation_histories(ss - 1, pos.piece_on(prevSq), prevSq, -malus * 596 / 1024, workerThread.sharedHistory.conthistBonusShift);
 
     // Decrease stats for all non-best capture moves
     for (Move move : capturesSearched)
@@ -1869,7 +1876,7 @@ void update_all_stats(const Position& pos,
 
 // Updates histories of the move pairs formed by moves
 // at ply -1, -2, -3, -4, and -6 with current move.
-void update_continuation_histories(Stack* ss, Piece pc, Square to, int bonus) {
+void update_continuation_histories(Stack* ss, Piece pc, Square to, int bonus, int bonusShift) {
     static constexpr std::array<ConthistBonus, 6> conthist_bonuses = {
       {{1, 1106}, {2, 705}, {3, 316}, {4, 572}, {5, 126}, {6, 427}}};
 
@@ -1889,8 +1896,11 @@ void update_continuation_histories(Stack* ss, Piece pc, Square to, int bonus) {
             if (historyEntry > 0)
                 positiveCount++;
 
-            int multiplier = CMHCMultipliers[positiveCount];
-            historyEntry << (bonus * weight * multiplier / 131072) + 82 * (i < 2);
+            int multiplier    = CMHCMultipliers[positiveCount];
+            int rawBonus      = (bonus * weight * multiplier / 131072) + 82 * (i < 2);
+            int scaledBonus   = rawBonus >> bonusShift;
+            if (std::abs(scaledBonus) >= 4)
+                historyEntry << scaledBonus;
         }
     }
 }
@@ -1898,7 +1908,7 @@ void update_continuation_histories(Stack* ss, Piece pc, Square to, int bonus) {
 // Updates move sorting heuristics
 
 void update_quiet_histories(
-  const Position& pos, Stack* ss, Search::Worker& workerThread, Move move, int bonus) {
+  const Position& pos, Stack* ss, Search::Worker& workerThread, Move move, int bonus, int bonusShift) {
 
     Color us = pos.side_to_move();
     workerThread.mainHistory[us][move.raw()] << bonus;  // Untuned to prevent duplicate effort
@@ -1906,7 +1916,7 @@ void update_quiet_histories(
     if (ss->ply < LOW_PLY_HISTORY_SIZE)
         workerThread.lowPlyHistory[ss->ply][move.raw()] << bonus * 714 / 1024;
 
-    update_continuation_histories(ss, pos.moved_piece(move), move.to_sq(), bonus * 898 / 1024);
+    update_continuation_histories(ss, pos.moved_piece(move), move.to_sq(), bonus * 898 / 1024, bonusShift);
 
     workerThread.sharedHistory.pawn_entry(pos)[pos.moved_piece(move)][move.to_sq()]
       << bonus * (bonus > 0 ? 967 : 535) / 1024;

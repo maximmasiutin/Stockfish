@@ -144,10 +144,14 @@ using CapturePieceToHistory = Stats<std::int16_t, 10692, PIECE_NB, SQUARE_NB, PI
 // PieceToHistory is like ButterflyHistory but is addressed by a move's [piece][to]
 using PieceToHistory = Stats<std::int16_t, 30000, PIECE_NB, SQUARE_NB>;
 
+// Atomic version for shared continuation history
+using AtomicPieceToHistory = AtomicStats<std::int16_t, 30000, PIECE_NB, SQUARE_NB>;
+
 // ContinuationHistory is the combined history of a given pair of moves, usually
 // the current one given a previous one. The nested history table is based on
 // PieceToHistory instead of ButterflyBoards.
 using ContinuationHistory = MultiArray<PieceToHistory, PIECE_NB, SQUARE_NB>;
+using SharedContinuationHistory = MultiArray<AtomicPieceToHistory, PIECE_NB, SQUARE_NB>;
 
 // PawnHistory is addressed by the pawn structure and a move's [piece][to]
 using PawnHistory =
@@ -226,6 +230,8 @@ struct SharedHistories {
         assert((threadCount & (threadCount - 1)) == 0 && threadCount != 0);
         sizeMinus1         = correctionHistory.get_size() - 1;
         pawnHistSizeMinus1 = pawnHistory.get_size() - 1;
+
+        conthistBonusShift = lsb(Bitboard(threadCount));
     }
 
     size_t get_size() const { return sizeMinus1 + 1; }
@@ -262,7 +268,8 @@ struct SharedHistories {
 
     UnifiedCorrectionHistory correctionHistory;
     PawnHistory              pawnHistory;
-
+    SharedContinuationHistory continuationHistory[2][2];
+    int                       conthistBonusShift;
 
    private:
     size_t sizeMinus1, pawnHistSizeMinus1;
