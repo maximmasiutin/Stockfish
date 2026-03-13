@@ -86,7 +86,7 @@ MovePicker::MovePicker(const Position&              p,
                        const ButterflyHistory*      mh,
                        const LowPlyHistory*         lph,
                        const CapturePieceToHistory* cph,
-                       const PieceToHistory**       ch,
+                       const AtomicPieceToHistory** ch,
                        const SharedHistories*       sh,
                        int                          pl) :
     pos(p),
