@@ -215,6 +215,9 @@ using CorrectionHistory = typename Detail::CorrHistTypedef<T>::type;
 
 using TTMoveHistory = StatsEntry<std::int16_t, 8192>;
 
+// Atomic PieceTo correction history for shared continuation correction
+using AtomicPieceToCorrHist = AtomicStats<std::int16_t, CORRECTION_HISTORY_LIMIT, PIECE_NB, SQUARE_NB>;
+
 // Set of histories shared between groups of threads. To avoid excessive
 // cross-node data transfer, histories are shared only between threads
 // on a given NUMA node. The passed size must be a power of two to make
@@ -226,6 +229,15 @@ struct SharedHistories {
         assert((threadCount & (threadCount - 1)) == 0 && threadCount != 0);
         sizeMinus1         = correctionHistory.get_size() - 1;
         pawnHistSizeMinus1 = pawnHistory.get_size() - 1;
+
+        // Compute log2(threadCount * 1024) for shift-based division
+        int tc       = int(threadCount);
+        contcorrDShift = 10;
+        while (tc > 1)
+        {
+            tc >>= 1;
+            contcorrDShift++;
+        }
     }
 
     size_t get_size() const { return sizeMinus1 + 1; }
@@ -260,12 +272,24 @@ struct SharedHistories {
         return correctionHistory[pos.non_pawn_key(c) & sizeMinus1];
     }
 
+    // Update shared contcorr entry with thread-scaled D via shift
+    void update_contcorr(AtomicPieceToCorrHist& hist, Piece pc, Square to, int bonus) {
+        auto& e       = hist[pc][to];
+        int   d       = 1 << contcorrDShift;
+        int   cb      = std::clamp(bonus, -d, d);
+        int   v       = int(e);
+        int   gravity = v * std::abs(cb);
+        int   mask    = (gravity >> 31) & (d - 1);
+        e             = v + cb - ((gravity + mask) >> contcorrDShift);
+    }
+
     UnifiedCorrectionHistory correctionHistory;
     PawnHistory              pawnHistory;
-
+    MultiArray<AtomicPieceToCorrHist, PIECE_NB, SQUARE_NB> continuationCorrectionHistory;
 
    private:
     size_t sizeMinus1, pawnHistSizeMinus1;
+    int    contcorrDShift;
 };
 
 }  // namespace Stockfish
