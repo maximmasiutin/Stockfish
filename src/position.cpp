@@ -916,6 +916,7 @@ void Position::do_move(Move                      m,
         prefetch(&history->minor_piece_correction_entry(*this));
         prefetch(&history->nonpawn_correction_entry<WHITE>(*this));
         prefetch(&history->nonpawn_correction_entry<BLACK>(*this));
+        prefetch(&history->material_correction_entry(*this));
     }
 
     // Set capture piece

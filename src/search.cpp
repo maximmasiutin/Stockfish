@@ -84,12 +84,13 @@ int correction_value(const Worker& w, const Position& pos, const Stack* const ss
     const int   micv   = shared.minor_piece_correction_entry(pos).at(us).minor;
     const int   wnpcv  = shared.nonpawn_correction_entry<WHITE>(pos).at(us).nonPawnWhite;
     const int   bnpcv  = shared.nonpawn_correction_entry<BLACK>(pos).at(us).nonPawnBlack;
+    const int   matcv  = shared.material_correction_entry(pos).at(us).material;
     const int   cntcv =
       m.is_ok() ? (*(ss - 2)->continuationCorrectionHistory)[pos.piece_on(m.to_sq())][m.to_sq()]
                     + (*(ss - 4)->continuationCorrectionHistory)[pos.piece_on(m.to_sq())][m.to_sq()]
                   : 8;
 
-    return 11433 * pcv + 8823 * micv + 12749 * (wnpcv + bnpcv) + 8022 * cntcv;
+    return 11433 * pcv + 8823 * micv + 12749 * (wnpcv + bnpcv) + 7000 * matcv + 8022 * cntcv;
 }
 
 // Add correctionHistory value to raw staticEval and guarantee evaluation
@@ -112,6 +113,7 @@ void update_correction_history(const Position& pos,
     shared.minor_piece_correction_entry(pos).at(us).minor << bonus * 155 / 128;
     shared.nonpawn_correction_entry<WHITE>(pos).at(us).nonPawnWhite << bonus * nonPawnWeight / 128;
     shared.nonpawn_correction_entry<BLACK>(pos).at(us).nonPawnBlack << bonus * nonPawnWeight / 128;
+    shared.material_correction_entry(pos).at(us).material << bonus * 140 / 128;
 
     // Branchless: use mask to zero bonus when move is not ok
     const int    mask   = int(m.is_ok());
