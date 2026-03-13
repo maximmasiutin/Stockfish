@@ -39,6 +39,7 @@ constexpr int PAWN_HISTORY_BASE_SIZE   = 8192;  // has to be a power of 2
 constexpr int UINT_16_HISTORY_SIZE     = std::numeric_limits<uint16_t>::max() + 1;
 constexpr int CORRHIST_BASE_SIZE       = UINT_16_HISTORY_SIZE;
 constexpr int CORRECTION_HISTORY_LIMIT = 1024;
+constexpr int CONTCORR_TABLE_SIZE     = 64;  // hash buckets for compact contcorr
 constexpr int LOW_PLY_HISTORY_SIZE     = 5;
 
 static_assert((PAWN_HISTORY_BASE_SIZE & (PAWN_HISTORY_BASE_SIZE - 1)) == 0,
@@ -195,7 +196,7 @@ struct CorrHistTypedef<PieceTo> {
 
 template<>
 struct CorrHistTypedef<Continuation> {
-    using type = MultiArray<CorrHistTypedef<PieceTo>::type, PIECE_NB, SQUARE_NB>;
+    using type = std::array<CorrHistTypedef<PieceTo>::type, CONTCORR_TABLE_SIZE + 1>;
 };
 
 template<>

@@ -281,7 +281,7 @@ void Search::Worker::iterative_deepening() {
     {
         (ss - i)->continuationHistory =
           &continuationHistory[0][0][NO_PIECE][0];  // Use as a sentinel
-        (ss - i)->continuationCorrectionHistory = &continuationCorrectionHistory[NO_PIECE][0];
+        (ss - i)->continuationCorrectionHistory = &continuationCorrectionHistory[CONTCORR_TABLE_SIZE];
         (ss - i)->staticEval                    = VALUE_NONE;
     }
 
@@ -563,7 +563,7 @@ void Search::Worker::do_move(
         ss->continuationHistory =
           &continuationHistory[ss->inCheck][capture][dirtyPiece.pc][move.to_sq()];
         ss->continuationCorrectionHistory =
-          &continuationCorrectionHistory[dirtyPiece.pc][move.to_sq()];
+          &continuationCorrectionHistory[(size_t(dirtyPiece.pc) * 41 + size_t(move.to_sq())) & (CONTCORR_TABLE_SIZE - 1)];
     }
 }
 
@@ -571,7 +571,7 @@ void Search::Worker::do_null_move(Position& pos, StateInfo& st, Stack* const ss)
     pos.do_null_move(st);
     ss->currentMove                   = Move::null();
     ss->continuationHistory           = &continuationHistory[0][0][NO_PIECE][0];
-    ss->continuationCorrectionHistory = &continuationCorrectionHistory[NO_PIECE][0];
+    ss->continuationCorrectionHistory = &continuationCorrectionHistory[CONTCORR_TABLE_SIZE];
 }
 
 void Search::Worker::undo_move(Position& pos, const Move move) {
