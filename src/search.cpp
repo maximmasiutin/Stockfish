@@ -117,10 +117,13 @@ void update_correction_history(const Position& pos,
     const int    mask   = int(m.is_ok());
     const Square to     = m.to_sq_unchecked();
     const Piece  pc     = pos.piece_on(to);
-    const int    bonus2 = (bonus * 129 / 128) * mask;
-    const int    bonus4 = (bonus * 61 / 128) * mask;
-    (*(ss - 2)->continuationCorrectionHistory)[pc][to] << bonus2;
-    (*(ss - 4)->continuationCorrectionHistory)[pc][to] << bonus4;
+    const int    ex2   = int((*(ss - 2)->continuationCorrectionHistory)[pc][to]);
+    const int    ex4   = int((*(ss - 4)->continuationCorrectionHistory)[pc][to]);
+    const int    agree = ((ex2 >= 0) == (bonus > 0)) + ((ex4 >= 0) == (bonus > 0));
+    constexpr int scales[] = {85, 110, 140};
+    const int    scale = scales[agree];
+    (*(ss - 2)->continuationCorrectionHistory)[pc][to] << (bonus * 129 * scale / 16384) * mask;
+    (*(ss - 4)->continuationCorrectionHistory)[pc][to] << (bonus * 61 * scale / 16384) * mask;
 }
 
 // Add a small random component to draw evaluations to avoid 3-fold blindness
