@@ -226,8 +226,8 @@ struct SharedHistories {
         assert((threadCount & (threadCount - 1)) == 0 && threadCount != 0);
         sizeMinus1         = correctionHistory.get_size() - 1;
         pawnHistSizeMinus1 = pawnHistory.get_size() - 1;
-        // Sublinear D scaling: D = 1024 * (1 + (threadCount - 1) / 3)
-        contcorrDEff = int(std::min(size_t(CORRECTION_HISTORY_LIMIT) * (1 + (threadCount - 1) / 3),
+        // Sublinear D scaling: D = 1024 * (threadCount + 2) / 3
+        contcorrDEff = int(std::min(size_t(CORRECTION_HISTORY_LIMIT) * (threadCount + 2) / 3,
                                     size_t(std::numeric_limits<std::int16_t>::max())));
     }
 
