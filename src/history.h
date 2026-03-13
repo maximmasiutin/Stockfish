@@ -260,9 +260,22 @@ struct SharedHistories {
         return correctionHistory[pos.non_pawn_key(c) & sizeMinus1];
     }
 
+    using AtomicPieceToCorrHist =
+      AtomicStats<std::int16_t, CORRECTION_HISTORY_LIMIT, PIECE_NB, SQUARE_NB>;
+
+    // Update shared contcorr entry, skipping writes with small delta
+    void update_contcorr(AtomicPieceToCorrHist& hist, Piece pc, Square to, int bonus) {
+        auto& e  = hist[pc][to];
+        int   v  = int(e);
+        int   cb = std::clamp(bonus, -CORRECTION_HISTORY_LIMIT, CORRECTION_HISTORY_LIMIT);
+        int   nv = v + cb - v * std::abs(cb) / CORRECTION_HISTORY_LIMIT;
+        if (std::abs(nv - v) >= 64)
+            e = nv;
+    }
+
     UnifiedCorrectionHistory correctionHistory;
     PawnHistory              pawnHistory;
-
+    MultiArray<AtomicPieceToCorrHist, PIECE_NB, SQUARE_NB> continuationCorrectionHistory;
 
    private:
     size_t sizeMinus1, pawnHistSizeMinus1;
