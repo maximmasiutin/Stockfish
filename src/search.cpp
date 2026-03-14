@@ -1889,8 +1889,13 @@ void update_continuation_histories(Stack* ss, Piece pc, Square to, int bonus) {
             if (historyEntry > 0)
                 positiveCount++;
 
-            int multiplier = CMHCMultipliers[positiveCount];
-            historyEntry << (bonus * weight * multiplier / 131072) + 82 * (i < 2);
+            int multiplier  = CMHCMultipliers[positiveCount];
+            int scaledBonus = (bonus * weight * multiplier / 131072) + 82 * (i < 2);
+            int cb          = std::clamp(scaledBonus, -30000, 30000);
+            int val         = int(historyEntry);
+            int newVal      = val + cb - val * std::abs(cb) / 30000;
+            if (std::abs(newVal - val) >= 100)
+                historyEntry = newVal;
         }
     }
 }
