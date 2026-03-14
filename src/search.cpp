@@ -1889,8 +1889,12 @@ void update_continuation_histories(Stack* ss, Piece pc, Square to, int bonus) {
             if (historyEntry > 0)
                 positiveCount++;
 
-            int multiplier = CMHCMultipliers[positiveCount];
-            historyEntry << (bonus * weight * multiplier / 131072) + 82 * (i < 2);
+            int multiplier  = CMHCMultipliers[positiveCount];
+            int scaledBonus = (bonus * weight * multiplier / 131072) + 82 * (i < 2);
+            int val         = int(historyEntry);
+            bool destructive = (val > -541 && scaledBonus < 0) || (val < -541 && scaledBonus > 0);
+            if (!destructive)
+                historyEntry << scaledBonus;
         }
     }
 }
