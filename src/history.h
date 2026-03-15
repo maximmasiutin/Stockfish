@@ -52,7 +52,7 @@ static_assert((CORRHIST_BASE_SIZE & (CORRHIST_BASE_SIZE - 1)) == 0,
 // the entry. The first template parameter T is the base type of the array,
 // and the second template parameter D limits the range of updates in [-D, D]
 // when we update values with the << operator
-template<typename T, int D, bool Atomic = false>
+template<typename T, int D, bool Atomic = false, int WriteThreshold = 0>
 struct StatsEntry {
     static_assert(std::is_arithmetic_v<T>, "Not an arithmetic type");
 
@@ -78,7 +78,13 @@ struct StatsEntry {
         // Make sure that bonus is in range [-D, D]
         int clampedBonus = std::clamp(bonus, -D, D);
         T   val          = *this;
-        *this            = val + clampedBonus - val * std::abs(clampedBonus) / D;
+        T   newval       = val + clampedBonus - val * std::abs(clampedBonus) / D;
+        if constexpr (WriteThreshold > 0)
+        {
+            if (std::abs(newval - val) < WriteThreshold)
+                return;
+        }
+        *this = newval;
 
         assert(std::abs(T(*this)) <= D);
     }
@@ -165,12 +171,12 @@ enum CorrHistType {
     Continuation,  // Combined history of move pairs
 };
 
-template<typename T, int D>
+template<typename T, int D, int WriteThreshold = 0>
 struct CorrectionBundle {
-    StatsEntry<T, D, true> pawn;
-    StatsEntry<T, D, true> minor;
-    StatsEntry<T, D, true> nonPawnWhite;
-    StatsEntry<T, D, true> nonPawnBlack;
+    StatsEntry<T, D, true, WriteThreshold> pawn;
+    StatsEntry<T, D, true, WriteThreshold> minor;
+    StatsEntry<T, D, true, WriteThreshold> nonPawnWhite;
+    StatsEntry<T, D, true, WriteThreshold> nonPawnBlack;
 
     void operator=(T val) {
         pawn         = val;
@@ -207,7 +213,7 @@ struct CorrHistTypedef<NonPawn> {
 }
 
 using UnifiedCorrectionHistory =
-  DynStats<MultiArray<CorrectionBundle<std::int16_t, CORRECTION_HISTORY_LIMIT>, COLOR_NB>,
+  DynStats<MultiArray<CorrectionBundle<std::int16_t, CORRECTION_HISTORY_LIMIT, 4>, COLOR_NB>,
            CORRHIST_BASE_SIZE>;
 
 template<CorrHistType T>
