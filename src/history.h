@@ -52,7 +52,7 @@ static_assert((CORRHIST_BASE_SIZE & (CORRHIST_BASE_SIZE - 1)) == 0,
 // the entry. The first template parameter T is the base type of the array,
 // and the second template parameter D limits the range of updates in [-D, D]
 // when we update values with the << operator
-template<typename T, int D, bool Atomic = false>
+template<typename T, int D, bool Atomic = false, int WriteThreshold = 0>
 struct StatsEntry {
     static_assert(std::is_arithmetic_v<T>, "Not an arithmetic type");
 
@@ -78,7 +78,13 @@ struct StatsEntry {
         // Make sure that bonus is in range [-D, D]
         int clampedBonus = std::clamp(bonus, -D, D);
         T   val          = *this;
-        *this            = val + clampedBonus - val * std::abs(clampedBonus) / D;
+        T   newval       = val + clampedBonus - val * std::abs(clampedBonus) / D;
+        if constexpr (WriteThreshold > 0)
+        {
+            if (std::abs(newval - val) < WriteThreshold)
+                return;
+        }
+        *this = newval;
 
         assert(std::abs(T(*this)) <= D);
     }
@@ -142,7 +148,7 @@ using LowPlyHistory = Stats<std::int16_t, 7183, LOW_PLY_HISTORY_SIZE, UINT_16_HI
 using CapturePieceToHistory = Stats<std::int16_t, 10692, PIECE_NB, SQUARE_NB, PIECE_TYPE_NB>;
 
 // PieceToHistory is like ButterflyHistory but is addressed by a move's [piece][to]
-using PieceToHistory = Stats<std::int16_t, 30000, PIECE_NB, SQUARE_NB>;
+using PieceToHistory = MultiArray<StatsEntry<std::int16_t, 30000, false, 100>, PIECE_NB, SQUARE_NB>;
 
 // ContinuationHistory is the combined history of a given pair of moves, usually
 // the current one given a previous one. The nested history table is based on
