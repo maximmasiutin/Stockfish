@@ -243,6 +243,10 @@ void UCIEngine::bench(std::istream& args) {
     num = count_if(list.begin(), list.end(),
                    [](const std::string& s) { return s.find("go ") == 0 || s.find("eval") == 0; });
 
+    // Suppress stderr during bench to avoid pipe buffer issues at high depths
+    auto* origBuf = std::cerr.rdbuf();
+    std::cerr.rdbuf(nullptr);
+
     TimePoint elapsed = now();
 
     for (const auto& cmd : list)
@@ -252,8 +256,7 @@ void UCIEngine::bench(std::istream& args) {
 
         if (token == "go" || token == "eval")
         {
-            std::cerr << "\nPosition: " << cnt++ << '/' << num << " (" << engine.fen() << ")"
-                      << std::endl;
+            cnt++;
             if (token == "go")
             {
                 Search::LimitsType limits = parse_limits(is);
@@ -285,7 +288,13 @@ void UCIEngine::bench(std::istream& args) {
 
     elapsed = now() - elapsed + 1;  // Ensure positivity to avoid a 'divide by zero'
 
+    // Restore stderr for summary output
+    std::cerr.rdbuf(origBuf);
+
     dbg_print();
+
+    // Print per-table delta instrumentation report
+    { extern void print_delta_report(); print_delta_report(); }
 
     std::cerr << "\n==========================="    //
               << "\nTotal time (ms) : " << elapsed  //

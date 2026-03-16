@@ -25,6 +25,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <initializer_list>
 #include <iostream>
@@ -63,6 +64,44 @@ void syzygy_extend_pv(const OptionsMap&            options,
 using namespace Search;
 
 namespace {
+enum TableId { PAWN_CORR, MINOR_CORR, NONPAWN_W_CORR, NONPAWN_B_CORR, CONT_CORR_2, CONT_CORR_4, NUM_TABLES };
+static const char* TableName[] = {"pawnCorr", "minorCorr", "nonpawnW", "nonpawnB", "contCorr2", "contCorr4"};
+
+struct DeltaCounters {
+    uint64_t bins[NUM_TABLES][11] = {};
+    uint64_t total[NUM_TABLES] = {};
+};
+static thread_local DeltaCounters tlCounters;
+static constexpr int MAX_THREADS = 256;
+static DeltaCounters threadCounters[MAX_THREADS];
+static std::atomic<int> threadSlot{0};
+static thread_local int mySlot = -1;
+
+void record_delta(TableId tbl, int delta) {
+    int bin;
+    if (delta == 0) bin = 0;
+    else if (delta == 1) bin = 1;
+    else if (delta == 2) bin = 2;
+    else if (delta == 3) bin = 3;
+    else if (delta <= 5) bin = 4;
+    else if (delta <= 9) bin = 5;
+    else if (delta <= 19) bin = 6;
+    else if (delta <= 49) bin = 7;
+    else if (delta <= 99) bin = 8;
+    else if (delta <= 199) bin = 9;
+    else bin = 10;
+    tlCounters.bins[tbl][bin]++;
+    tlCounters.total[tbl]++;
+}
+
+template<typename Entry>
+void instrument_write(TableId tbl, Entry& entry, int bonus, int D) {
+    int clampedBonus = std::clamp(bonus, -D, D);
+    int16_t val = static_cast<int16_t>(entry);
+    int16_t newval = val + clampedBonus - val * std::abs(clampedBonus) / D;
+    record_delta(tbl, std::abs(newval - val));
+    entry << bonus;
+}
 
 constexpr int SEARCHEDLIST_CAPACITY = 32;
 using SearchedList                  = ValueList<Move, SEARCHEDLIST_CAPACITY>;
@@ -108,10 +147,10 @@ void update_correction_history(const Position& pos,
     constexpr int nonPawnWeight = 181;
     auto&         shared        = workerThread.sharedHistory;
 
-    shared.pawn_correction_entry(pos).at(us).pawn << bonus;
-    shared.minor_piece_correction_entry(pos).at(us).minor << bonus * 155 / 128;
-    shared.nonpawn_correction_entry<WHITE>(pos).at(us).nonPawnWhite << bonus * nonPawnWeight / 128;
-    shared.nonpawn_correction_entry<BLACK>(pos).at(us).nonPawnBlack << bonus * nonPawnWeight / 128;
+    instrument_write(PAWN_CORR, shared.pawn_correction_entry(pos).at(us).pawn, bonus, 1024);
+    instrument_write(MINOR_CORR, shared.minor_piece_correction_entry(pos).at(us).minor, bonus * 155 / 128, 1024);
+    instrument_write(NONPAWN_W_CORR, shared.nonpawn_correction_entry<WHITE>(pos).at(us).nonPawnWhite, bonus * nonPawnWeight / 128, 1024);
+    instrument_write(NONPAWN_B_CORR, shared.nonpawn_correction_entry<BLACK>(pos).at(us).nonPawnBlack, bonus * nonPawnWeight / 128, 1024);
 
     // Branchless: use mask to zero bonus when move is not ok
     const int    mask   = int(m.is_ok());
@@ -119,8 +158,8 @@ void update_correction_history(const Position& pos,
     const Piece  pc     = pos.piece_on(to);
     const int    bonus2 = (bonus * 129 / 128) * mask;
     const int    bonus4 = (bonus * 61 / 128) * mask;
-    (*(ss - 2)->continuationCorrectionHistory)[pc][to] << bonus2;
-    (*(ss - 4)->continuationCorrectionHistory)[pc][to] << bonus4;
+    instrument_write(CONT_CORR_2, (*(ss - 2)->continuationCorrectionHistory)[pc][to], bonus2, 1024);
+    instrument_write(CONT_CORR_4, (*(ss - 4)->continuationCorrectionHistory)[pc][to], bonus4, 1024);
 }
 
 // Add a small random component to draw evaluations to avoid 3-fold blindness
@@ -150,7 +189,58 @@ bool is_shuffling(Move move, Stack* const ss, const Position& pos) {
         && (ss - 2)->currentMove.from_sq() == (ss - 4)->currentMove.to_sq();
 }
 
+void flush_thread_counters() {
+    if (mySlot < 0)
+        mySlot = threadSlot.fetch_add(1, std::memory_order_relaxed);
+    if (mySlot < MAX_THREADS)
+        threadCounters[mySlot] = tlCounters;
+}
+
 }  // namespace
+
+void print_delta_report() {
+    flush_thread_counters();
+
+    // Aggregate all thread slots
+    DeltaCounters agg = {};
+    int nSlots = threadSlot.load(std::memory_order_relaxed);
+    if (nSlots > MAX_THREADS) nSlots = MAX_THREADS;
+    for (int s = 0; s < nSlots; s++) {
+        for (int t = 0; t < NUM_TABLES; t++) {
+            agg.total[t] += threadCounters[s].total[t];
+            for (int b = 0; b < 11; b++)
+                agg.bins[t][b] += threadCounters[s].bins[t][b];
+        }
+    }
+
+    // CSV header
+    static bool headerPrinted = false;
+    if (!headerPrinted) {
+        std::cout << "depth,table,total_writes,d0,d1,d2,d3,d4_5,d6_9,d10_19,d20_49,d50_99,d100_199,d200p" << std::endl;
+        headerPrinted = true;
+    }
+
+    // CSV output using fixed-point integer math
+    for (int t = 0; t < NUM_TABLES; t++) {
+        uint64_t tot = agg.total[t];
+        if (tot == 0) continue;
+        std::cout << 0 << "," << TableName[t] << "," << tot;
+        for (int b = 0; b < 11; b++) {
+            uint64_t bps = agg.bins[t][b] * 1000000ULL / tot;
+            char buf[20];
+            snprintf(buf, sizeof(buf), ",%llu.%04llu",
+                     (unsigned long long)(bps / 10000),
+                     (unsigned long long)(bps % 10000));
+            std::cout << buf;
+        }
+        std::cout << std::endl;
+    }
+
+    // Reset all slots
+    for (int s = 0; s < nSlots; s++)
+        threadCounters[s] = DeltaCounters{};
+    tlCounters = DeltaCounters{};
+}
 
 Search::Worker::Worker(SharedState&                    sharedState,
                        std::unique_ptr<ISearchManager> sm,
@@ -187,6 +277,7 @@ void Search::Worker::start_searching() {
     if (!is_mainthread())
     {
         iterative_deepening();
+        flush_thread_counters();
         return;
     }
 
@@ -204,6 +295,7 @@ void Search::Worker::start_searching() {
     {
         threads.start_searching();  // start non-main threads
         iterative_deepening();      // main thread start searching
+        flush_thread_counters();
     }
 
     // When we reach the maximum depth, we can arrive here without a raise of
