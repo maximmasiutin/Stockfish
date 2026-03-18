@@ -601,7 +601,7 @@ void Search::Worker::undo_null_move(Position& pos) { pos.undo_null_move(); }
 // Reset histories, usually before a new game
 void Search::Worker::clear() {
     mainHistory.fill(0);
-    captureHistory.fill(-678);
+    captureHistory.fill(-678 * 3);
 
     // Each thread is responsible for clearing their part of shared history
     sharedHistory.correctionHistory.clear_range(0, numaThreadIdx, numaTotal);
@@ -1080,7 +1080,7 @@ moves_loop:  // When in check, search starts here
             if (capture || givesCheck)
             {
                 Piece capturedPiece = pos.piece_on(move.to_sq());
-                int   captHist = captureHistory[movedPiece][move.to_sq()][type_of(capturedPiece)];
+                int captHist = captureHistory[movedPiece][move.to_sq()][type_of(capturedPiece)] / 3;
 
                 // Futility pruning for captures
                 if (!givesCheck && lmrDepth < 7)
@@ -1233,8 +1233,9 @@ moves_loop:  // When in check, search starts here
             r -= 2239;
 
         if (capture)
-            ss->statScore = 863 * int(PieceValue[pos.captured_piece()]) / 128
-                          + captureHistory[movedPiece][move.to_sq()][type_of(pos.captured_piece())];
+            ss->statScore =
+              863 * int(PieceValue[pos.captured_piece()]) / 128
+              + captureHistory[movedPiece][move.to_sq()][type_of(pos.captured_piece())] / 3;
         else
             ss->statScore = 2 * mainHistory[us][move.raw()]
                           + (*contHist[0])[movedPiece][move.to_sq()]
@@ -1469,7 +1470,7 @@ moves_loop:  // When in check, search starts here
     {
         Piece capturedPiece = pos.captured_piece();
         assert(capturedPiece != NO_PIECE);
-        captureHistory[pos.piece_on(prevSq)][prevSq][type_of(capturedPiece)] << 1018;
+        captureHistory[pos.piece_on(prevSq)][prevSq][type_of(capturedPiece)] << 1018 * 3;
     }
 
     if (PvNode)
@@ -1870,7 +1871,7 @@ void update_all_stats(const Position& pos,
     {
         // Increase stats for the best move in case it was a capture move
         capturedPiece = type_of(pos.piece_on(bestMove.to_sq()));
-        captureHistory[movedPiece][bestMove.to_sq()][capturedPiece] << bonus * 1286 / 1024;
+        captureHistory[movedPiece][bestMove.to_sq()][capturedPiece] << bonus * 1286 * 3 / 1024;
     }
 
     // Extra penalty for a quiet early move that was not a TT move in
@@ -1883,7 +1884,7 @@ void update_all_stats(const Position& pos,
     {
         movedPiece    = pos.moved_piece(move);
         capturedPiece = type_of(pos.piece_on(move.to_sq()));
-        captureHistory[movedPiece][move.to_sq()][capturedPiece] << -malus * 1559 / 1024;
+        captureHistory[movedPiece][move.to_sq()][capturedPiece] << -malus * 1559 * 3 / 1024;
     }
 }
 
