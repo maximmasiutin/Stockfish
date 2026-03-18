@@ -605,7 +605,7 @@ void Search::Worker::clear() {
 
     // Each thread is responsible for clearing their part of shared history
     sharedHistory.correctionHistory.clear_range(0, numaThreadIdx, numaTotal);
-    sharedHistory.pawnHistory.clear_range(-1238, numaThreadIdx, numaTotal);
+    sharedHistory.pawnHistory.clear_range(-1238 * 3, numaThreadIdx, numaTotal);
 
     ttMoveHistory = 0;
 
@@ -883,7 +883,7 @@ Value Search::Worker::search(
         mainHistory[~us][((ss - 1)->currentMove).raw()] << evalDiff * 10;
         if (!ttHit && type_of(pos.piece_on(prevSq)) != PAWN
             && ((ss - 1)->currentMove).type_of() != PROMOTION)
-            sharedHistory.pawn_entry(pos)[pos.piece_on(prevSq)][prevSq] << evalDiff * 12;
+            sharedHistory.pawn_entry(pos)[pos.piece_on(prevSq)][prevSq] << evalDiff * 12 * 3;
     }
 
 
@@ -1103,7 +1103,7 @@ moves_loop:  // When in check, search starts here
             {
                 int history = (*contHist[0])[movedPiece][move.to_sq()]
                             + (*contHist[1])[movedPiece][move.to_sq()]
-                            + sharedHistory.pawn_entry(pos)[movedPiece][move.to_sq()];
+                            + sharedHistory.pawn_entry(pos)[movedPiece][move.to_sq()] / 3;
 
                 // Continuation history based pruning
                 if (history < -4097 * depth)
@@ -1461,7 +1461,8 @@ moves_loop:  // When in check, search starts here
         mainHistory[~us][((ss - 1)->currentMove).raw()] << scaledBonus * 235 / 32768;
 
         if (type_of(pos.piece_on(prevSq)) != PAWN && ((ss - 1)->currentMove).type_of() != PROMOTION)
-            sharedHistory.pawn_entry(pos)[pos.piece_on(prevSq)][prevSq] << scaledBonus * 290 / 8192;
+            sharedHistory.pawn_entry(pos)[pos.piece_on(prevSq)][prevSq]
+              << scaledBonus * 290 * 3 / 8192;
     }
 
     // Bonus for prior capture countermove that caused the fail low
@@ -1930,7 +1931,7 @@ void update_quiet_histories(
     update_continuation_histories(ss, pos.moved_piece(move), move.to_sq(), bonus * 894 / 1024);
 
     workerThread.sharedHistory.pawn_entry(pos)[pos.moved_piece(move)][move.to_sq()]
-      << bonus * (bonus > 0 ? 974 : 543) / 1024;
+      << bonus * (bonus > 0 ? 974 : 543) * 3 / 1024;
 }
 
 }
