@@ -258,6 +258,7 @@ void UCIEngine::bench(std::istream& args) {
             if (!restored)
             {
                 std::cerr.rdbuf(saved);
+                std::cerr.clear();
                 restored = true;
             }
         }

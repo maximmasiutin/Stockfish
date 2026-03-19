@@ -220,6 +220,7 @@ void flush_thread_counters() {
         mySlot = threadSlot.fetch_add(1, std::memory_order_relaxed);
     if (mySlot < MAX_THREADS)
         threadCounters[mySlot] = tlCounters;
+    tlCounters = DeltaCounters{};
 }
 
 }  // namespace
@@ -267,19 +268,16 @@ void print_delta_report() {
         {
             uint64_t bps = agg.bins[t][b] * 1000000ULL / tot;
             char     buf[20];
-            snprintf(buf, sizeof(buf), ",%llu.%04llu", (unsigned long long) (bps / 10000),
+            std::snprintf(buf, sizeof(buf), ",%llu.%04llu", (unsigned long long) (bps / 10000),
                      (unsigned long long) (bps % 10000));
             std::cout << buf;
         }
         std::cout << std::endl;
     }
 
-    // Reset all slots and counter so threads get fresh slot assignments next run
+    // Reset per-slot counters; keep mySlot/threadSlot so worker threads reuse their slots
     for (int s = 0; s < nSlots; s++)
         threadCounters[s] = DeltaCounters{};
-    tlCounters = DeltaCounters{};
-    mySlot     = -1;
-    threadSlot.store(0, std::memory_order_relaxed);
 }
 
 Search::Worker::Worker(SharedState&                    sharedState,
