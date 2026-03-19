@@ -152,14 +152,15 @@ ExtMove* MovePicker::score(MoveList<Type>& ml) {
         const Piece     capturedPiece = pos.piece_on(to);
 
         if constexpr (Type == CAPTURES)
-            m.value = (*captureHistory)[pc][to][type_of(capturedPiece)]
+            m.value = (*captureHistory)[pc][to][type_of(capturedPiece)] / HISTORY_K
                     + 7 * int(PieceValue[capturedPiece]);
 
         else if constexpr (Type == QUIETS)
         {
             // histories
-            m.value = 2 * (*mainHistory)[us][m.raw()];
-            m.value += 2 * sharedHistory->pawn_entry(pos)[pc][to];
+            // mainHistory and pawnHistory are K=3 scaled; normalize to K=1 for balance with contHist
+            m.value = 2 * (*mainHistory)[us][m.raw()] / HISTORY_K;
+            m.value += 2 * sharedHistory->pawn_entry(pos)[pc][to] / HISTORY_K;
             m.value += (*continuationHistory[0])[pc][to];
             m.value += (*continuationHistory[1])[pc][to];
             m.value += (*continuationHistory[2])[pc][to];
@@ -184,7 +185,7 @@ ExtMove* MovePicker::score(MoveList<Type>& ml) {
             if (pos.capture_stage(m))
                 m.value = PieceValue[capturedPiece] + (1 << 28);
             else
-                m.value = (*mainHistory)[us][m.raw()] + (*continuationHistory[0])[pc][to];
+                m.value = (*mainHistory)[us][m.raw()] / HISTORY_K + (*continuationHistory[0])[pc][to];
         }
     }
     return it;
