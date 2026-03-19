@@ -42,6 +42,9 @@
 
 namespace Stockfish {
 
+// Forward declaration for instrumentation reporting (defined in search.cpp)
+void print_delta_report();
+
 constexpr auto BenchmarkCommand = "speedtest";
 
 constexpr auto StartFEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
@@ -244,6 +247,23 @@ void UCIEngine::bench(std::istream& args) {
     num = count_if(list.begin(), list.end(),
                    [](const std::string& s) { return s.find("go ") == 0 || s.find("eval") == 0; });
 
+    // Suppress stderr during bench to avoid pipe buffer issues at high depths.
+    // RAII guard restores rdbuf on scope exit even if an exception is thrown.
+    struct StderrGuard {
+        std::streambuf* saved;
+        bool            restored = false;
+        StderrGuard() :
+            saved(std::cerr.rdbuf(nullptr)) {}
+        void restore() {
+            if (!restored)
+            {
+                std::cerr.rdbuf(saved);
+                restored = true;
+            }
+        }
+        ~StderrGuard() { restore(); }
+    } stderrGuard;
+
     TimePoint elapsed = now();
 
     for (const auto& cmd : list)
@@ -253,8 +273,7 @@ void UCIEngine::bench(std::istream& args) {
 
         if (token == "go" || token == "eval")
         {
-            std::cerr << "\nPosition: " << cnt++ << '/' << num << " (" << engine.fen() << ")"
-                      << std::endl;
+            cnt++;
             if (token == "go")
             {
                 Search::LimitsType limits = parse_limits(is);
@@ -286,7 +305,12 @@ void UCIEngine::bench(std::istream& args) {
 
     elapsed = now() - elapsed + 1;  // Ensure positivity to avoid a 'divide by zero'
 
+    stderrGuard.restore();  // Restore stderr before printing summary
+
     dbg_print();
+
+    // Print per-table delta instrumentation report
+    print_delta_report();
 
     std::cerr << "\n==========================="    //
               << "\nTotal time (ms) : " << elapsed  //
