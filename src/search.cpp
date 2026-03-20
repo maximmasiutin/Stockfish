@@ -101,7 +101,8 @@ Value to_corrected_static_eval(const Value v, const int cv) {
 void update_correction_history(const Position& pos,
                                Stack* const    ss,
                                Search::Worker& workerThread,
-                               const int       bonus) {
+                               const int       bonus,
+                               const int       depth) {
     const Move  m  = (ss - 1)->currentMove;
     const Color us = pos.side_to_move();
 
@@ -119,8 +120,19 @@ void update_correction_history(const Position& pos,
     const Piece  pc     = pos.piece_on(to);
     const int    bonus2 = (bonus * 126 / 128) * mask;
     const int    bonus4 = (bonus * 63 / 128) * mask;
-    (*(ss - 2)->continuationCorrectionHistory)[pc][to] << bonus2;
-    (*(ss - 4)->continuationCorrectionHistory)[pc][to] << bonus4;
+
+    // Use larger D at high depths to slow convergence and absorb more information
+    const int d = depth >= 18 ? 2048 : CORRECTION_HISTORY_LIMIT;
+
+    auto& entry2 = (*(ss - 2)->continuationCorrectionHistory)[pc][to];
+    int   cb2    = std::clamp(bonus2, -d, d);
+    int   val2   = int(int16_t(entry2));
+    entry2       = int16_t(val2 + cb2 - val2 * std::abs(cb2) / d);
+
+    auto& entry4 = (*(ss - 4)->continuationCorrectionHistory)[pc][to];
+    int   cb4    = std::clamp(bonus4, -d, d);
+    int   val4   = int(int16_t(entry4));
+    entry4       = int16_t(val4 + cb4 - val4 * std::abs(cb4) / d);
 }
 
 // Add a small random component to draw evaluations to avoid 3-fold blindness
@@ -1498,7 +1510,7 @@ moves_loop:  // When in check, search starts here
         auto bonus =
           std::clamp(int(bestValue - ss->staticEval) * depth * (bestMove ? 12 : 17) / 128,
                      -CORRECTION_HISTORY_LIMIT / 4, CORRECTION_HISTORY_LIMIT / 4);
-        update_correction_history(pos, ss, *this, 1069 * bonus / 1024);
+        update_correction_history(pos, ss, *this, 1069 * bonus / 1024, depth);
     }
 
     assert(bestValue > -VALUE_INFINITE && bestValue < VALUE_INFINITE);
