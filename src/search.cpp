@@ -1243,6 +1243,10 @@ moves_loop:  // When in check, search starts here
         // Decrease/increase reduction for moves with a good/bad history
         r -= ss->statScore * 428 / 4096;
 
+        // Reduce less for check-giving moves that continue a check sequence
+        if (givesCheck && (ss - 1)->inCheck)
+            r -= 1024;
+
         // Scale up reductions for expected ALL nodes
         if (allNode)
             r += r * 273 / (256 * depth + 260);
