@@ -76,6 +76,37 @@ using SearchedList                  = ValueList<Move, SEARCHEDLIST_CAPACITY>;
 // (*Scaler) All tuned parameters at time controls shorter than
 // optimized for require verifications at longer time controls
 
+// Compute winning threats: our pieces attacked by lower-value opponent pieces
+Key winning_threat_key(const Position& pos) {
+    const Color    us         = pos.side_to_move();
+    const Color    them       = ~us;
+    const Bitboard occ        = pos.pieces() ^ pos.pieces(us, KING);
+    Bitboard       winThreats = Bitboard(0);
+
+    // Rooks attacking our queens
+    Bitboard targets = pos.pieces(us, QUEEN);
+    Bitboard b       = pos.pieces(them, ROOK);
+    while (b)
+        winThreats |= attacks_bb<ROOK>(pop_lsb(b), occ) & targets;
+
+    // Bishops and knights attacking our queens + rooks
+    targets |= pos.pieces(us, ROOK);
+    b = pos.pieces(them, BISHOP);
+    while (b)
+        winThreats |= attacks_bb<BISHOP>(pop_lsb(b), occ) & targets;
+    b = pos.pieces(them, KNIGHT);
+    while (b)
+        winThreats |= attacks_bb<KNIGHT>(pop_lsb(b)) & targets;
+
+    // Pawns attacking any of our non-pawn pieces
+    targets |= pos.pieces(us, KNIGHT) | pos.pieces(us, BISHOP);
+    Bitboard pawnAtk = us == WHITE ? pawn_attacks_bb<BLACK>(pos.pieces(BLACK, PAWN))
+                                   : pawn_attacks_bb<WHITE>(pos.pieces(WHITE, PAWN));
+    winThreats |= pawnAtk & targets;
+
+    return make_key(uint64_t(winThreats));
+}
+
 int correction_value(const Worker& w, const Position& pos, const Stack* const ss) {
     const Color us     = pos.side_to_move();
     const auto  m      = (ss - 1)->currentMove;
@@ -84,12 +115,13 @@ int correction_value(const Worker& w, const Position& pos, const Stack* const ss
     const int   micv   = shared.minor_piece_correction_entry(pos).at(us).minor;
     const int   wnpcv  = shared.nonpawn_correction_entry<WHITE>(pos).at(us).nonPawnWhite;
     const int   bnpcv  = shared.nonpawn_correction_entry<BLACK>(pos).at(us).nonPawnBlack;
+    const int   wtcv   = shared.correction_entry_by_key(winning_threat_key(pos)).at(us).winThreat;
     const int   cntcv =
       m.is_ok() ? (*(ss - 2)->continuationCorrectionHistory)[pos.piece_on(m.to_sq())][m.to_sq()]
                     + (*(ss - 4)->continuationCorrectionHistory)[pos.piece_on(m.to_sq())][m.to_sq()]
                   : 8;
 
-    return 12153 * pcv + 8620 * micv + 12355 * (wnpcv + bnpcv) + 7982 * cntcv;
+    return 12153 * pcv + 8620 * micv + 12355 * (wnpcv + bnpcv) + 7000 * wtcv + 7982 * cntcv;
 }
 
 // Add correctionHistory value to raw staticEval and guarantee evaluation
@@ -112,6 +144,7 @@ void update_correction_history(const Position& pos,
     shared.minor_piece_correction_entry(pos).at(us).minor << bonus * 153 / 128;
     shared.nonpawn_correction_entry<WHITE>(pos).at(us).nonPawnWhite << bonus * nonPawnWeight / 128;
     shared.nonpawn_correction_entry<BLACK>(pos).at(us).nonPawnBlack << bonus * nonPawnWeight / 128;
+    shared.correction_entry_by_key(winning_threat_key(pos)).at(us).winThreat << bonus * 140 / 128;
 
     // Branchless: use mask to zero bonus when move is not ok
     const int    mask   = int(m.is_ok());
