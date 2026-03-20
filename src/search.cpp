@@ -77,19 +77,23 @@ using SearchedList                  = ValueList<Move, SEARCHEDLIST_CAPACITY>;
 // optimized for require verifications at longer time controls
 
 int correction_value(const Worker& w, const Position& pos, const Stack* const ss) {
-    const Color us     = pos.side_to_move();
-    const auto  m      = (ss - 1)->currentMove;
-    const auto& shared = w.sharedHistory;
-    const int   pcv    = shared.pawn_correction_entry(pos).at(us).pawn;
-    const int   micv   = shared.minor_piece_correction_entry(pos).at(us).minor;
-    const int   wnpcv  = shared.nonpawn_correction_entry<WHITE>(pos).at(us).nonPawnWhite;
-    const int   bnpcv  = shared.nonpawn_correction_entry<BLACK>(pos).at(us).nonPawnBlack;
-    const int   cntcv =
+    const Color    us          = pos.side_to_move();
+    const auto     m           = (ss - 1)->currentMove;
+    const auto&    shared      = w.sharedHistory;
+    const int      pcv         = shared.pawn_correction_entry(pos).at(us).pawn;
+    const int      micv        = shared.minor_piece_correction_entry(pos).at(us).minor;
+    const int      wnpcv       = shared.nonpawn_correction_entry<WHITE>(pos).at(us).nonPawnWhite;
+    const int      bnpcv       = shared.nonpawn_correction_entry<BLACK>(pos).at(us).nonPawnBlack;
+    const Bitboard pawnThreats = us == WHITE ? pawn_attacks_bb<BLACK>(pos.pieces(BLACK, PAWN))
+                                             : pawn_attacks_bb<WHITE>(pos.pieces(WHITE, PAWN));
+    const Key      ptKey       = make_key(uint64_t(pawnThreats & pos.pieces(us)));
+    const int      ptcv        = shared.correction_entry_by_key(ptKey).at(us).pawnThreat;
+    const int      cntcv =
       m.is_ok() ? (*(ss - 2)->continuationCorrectionHistory)[pos.piece_on(m.to_sq())][m.to_sq()]
                     + (*(ss - 4)->continuationCorrectionHistory)[pos.piece_on(m.to_sq())][m.to_sq()]
-                  : 8;
+                     : 8;
 
-    return 12153 * pcv + 8620 * micv + 12355 * (wnpcv + bnpcv) + 7982 * cntcv;
+    return 12153 * pcv + 8620 * micv + 12355 * (wnpcv + bnpcv) + 7000 * ptcv + 7982 * cntcv;
 }
 
 // Add correctionHistory value to raw staticEval and guarantee evaluation
@@ -112,6 +116,11 @@ void update_correction_history(const Position& pos,
     shared.minor_piece_correction_entry(pos).at(us).minor << bonus * 153 / 128;
     shared.nonpawn_correction_entry<WHITE>(pos).at(us).nonPawnWhite << bonus * nonPawnWeight / 128;
     shared.nonpawn_correction_entry<BLACK>(pos).at(us).nonPawnBlack << bonus * nonPawnWeight / 128;
+
+    const Bitboard ptBB = us == WHITE ? pawn_attacks_bb<BLACK>(pos.pieces(BLACK, PAWN))
+                                      : pawn_attacks_bb<WHITE>(pos.pieces(WHITE, PAWN));
+    shared.correction_entry_by_key(make_key(uint64_t(ptBB & pos.pieces(us)))).at(us).pawnThreat
+      << bonus * 140 / 128;
 
     // Branchless: use mask to zero bonus when move is not ok
     const int    mask   = int(m.is_ok());
