@@ -1200,6 +1200,10 @@ moves_loop:  // When in check, search starts here
                 extension = -2;
         }
 
+        // Extend when receiving consecutive checks from opponent
+        if (ss->inCheck && (ss - 2)->inCheck)
+            extension++;
+
         // Step 16. Make the move
         do_move(pos, move, st, givesCheck, ss);
 
