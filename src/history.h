@@ -171,12 +171,14 @@ struct CorrectionBundle {
     StatsEntry<T, D, true> minor;
     StatsEntry<T, D, true> nonPawnWhite;
     StatsEntry<T, D, true> nonPawnBlack;
+    StatsEntry<T, D, true> lastMove;
 
     void operator=(T val) {
         pawn         = val;
         minor        = val;
         nonPawnWhite = val;
         nonPawnBlack = val;
+        lastMove     = val;
     }
 };
 
@@ -258,6 +260,13 @@ struct SharedHistories {
     template<Color c>
     const auto& nonpawn_correction_entry(const Position& pos) const {
         return correctionHistory[pos.non_pawn_key(c) & sizeMinus1];
+    }
+
+    auto& lastmove_correction_entry(Move m) {
+        return correctionHistory[make_key(m.raw()) & sizeMinus1];
+    }
+    const auto& lastmove_correction_entry(Move m) const {
+        return correctionHistory[make_key(m.raw()) & sizeMinus1];
     }
 
     UnifiedCorrectionHistory correctionHistory;
