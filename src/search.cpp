@@ -1063,8 +1063,7 @@ moves_loop:  // When in check, search starts here
 
         // Increase reduction for ttPv nodes (*Scaler)
         // Larger values scale well
-        if (ss->ttPv)
-            r += 1013;
+        r += ss->ttPv * 1013;
 
         // Step 14. Pruning at shallow depths.
         // Depth conditions are important for mate finding.
@@ -1208,29 +1207,25 @@ moves_loop:  // When in check, search starts here
         uint64_t nodeCount = rootNode ? uint64_t(nodes) : 0;
 
         // Decrease reduction for PvNodes (*Scaler)
-        if (ss->ttPv)
-            r -= 2819 + PvNode * 973 + (ttData.value > alpha) * 905
-               + (ttData.depth >= depth) * (935 + cutNode * 959);
+        r -= ss->ttPv
+           * (2819 + PvNode * 973 + (ttData.value > alpha) * 905
+              + (ttData.depth >= depth) * (935 + cutNode * 959));
 
         r += 691;  // Base reduction offset to compensate for other tweaks
         r -= moveCount * 65;
         r -= std::abs(correctionValue) / 25600;
 
         // Increase reduction for cut nodes
-        if (cutNode)
-            r += 3611 + 985 * !ttData.move;
+        r += cutNode * (3611 + 985 * !ttData.move);
 
         // Increase reduction if ttMove is a capture
-        if (ttCapture)
-            r += 1054;
+        r += ttCapture * 1054;
 
         // Increase reduction if next ply has a lot of fail high
-        if ((ss + 1)->cutoffCnt > 1)
-            r += 251 + 1124 * ((ss + 1)->cutoffCnt > 2) + 1042 * allNode;
+        r += ((ss + 1)->cutoffCnt > 1) * (251 + 1124 * ((ss + 1)->cutoffCnt > 2) + 1042 * allNode);
 
         // For first picked move (ttMove) reduce reduction
-        if (move == ttData.move)
-            r -= 2239;
+        r -= (move == ttData.move) * 2239;
 
         if (capture)
             ss->statScore = 863 * int(PieceValue[pos.captured_piece()]) / 128
@@ -1244,8 +1239,7 @@ moves_loop:  // When in check, search starts here
         r -= ss->statScore * 428 / 4096;
 
         // Scale up reductions for expected ALL nodes
-        if (allNode)
-            r += r * 273 / (256 * depth + 260);
+        r += allNode * (r * 273 / (256 * depth + 260));
 
         // Step 17. Late moves reduction / extension (LMR)
         if (depth >= 2 && moveCount > 1)
@@ -1284,8 +1278,7 @@ moves_loop:  // When in check, search starts here
         else if (!PvNode || moveCount > 1)
         {
             // Increase reduction if ttMove is not present
-            if (!ttData.move)
-                r += 1057;
+            r += !ttData.move * 1057;
 
             // Note that if expected reduction is high, we reduce search depth here
             value = -search<NonPV>(pos, ss + 1, -(alpha + 1), -alpha,
