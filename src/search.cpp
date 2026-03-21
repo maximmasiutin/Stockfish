@@ -1216,6 +1216,10 @@ moves_loop:  // When in check, search starts here
         r -= moveCount * 65;
         r -= std::abs(correctionValue) / 25600;
 
+        // Reduce less along the predicted PV line from previous iteration
+        if (ss->followPV)
+            r -= 1536;
+
         // Increase reduction for cut nodes
         if (cutNode)
             r += 3611 + 985 * !ttData.move;
