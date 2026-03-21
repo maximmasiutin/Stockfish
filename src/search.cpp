@@ -1243,6 +1243,10 @@ moves_loop:  // When in check, search starts here
         // Decrease/increase reduction for moves with a good/bad history
         r -= ss->statScore * 428 / 4096;
 
+        // Reduce check-giving moves in a check sequence when eval is near draw
+        if (givesCheck && (ss - 1)->inCheck && std::abs(eval) < 200)
+            r += 1024;
+
         // Scale up reductions for expected ALL nodes
         if (allNode)
             r += r * 273 / (256 * depth + 260);
