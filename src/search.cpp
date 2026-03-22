@@ -84,10 +84,21 @@ int correction_value(const Worker& w, const Position& pos, const Stack* const ss
     const int   micv   = shared.minor_piece_correction_entry(pos).at(us).minor;
     const int   wnpcv  = shared.nonpawn_correction_entry<WHITE>(pos).at(us).nonPawnWhite;
     const int   bnpcv  = shared.nonpawn_correction_entry<BLACK>(pos).at(us).nonPawnBlack;
-    const int   cntcv =
-      m.is_ok() ? (*(ss - 2)->continuationCorrectionHistory)[pos.piece_on(m.to_sq())][m.to_sq()]
-                    + (*(ss - 4)->continuationCorrectionHistory)[pos.piece_on(m.to_sq())][m.to_sq()]
-                  : 8;
+    int         cntcv;
+    if (m.is_ok())
+    {
+        const auto sq = m.to_sq();
+        const auto pc = pos.piece_on(sq);
+
+        cntcv = (*(ss - 2)->continuationCorrectionHistory)[pc][sq]
+              + (*(ss - 3)->continuationCorrectionHistory)[pc][sq]
+              + (*(ss - 4)->continuationCorrectionHistory)[pc][sq]
+              + (*(ss - 5)->continuationCorrectionHistory)[pc][sq]
+              + (*(ss - 6)->continuationCorrectionHistory)[pc][sq]
+              + (*(ss - 7)->continuationCorrectionHistory)[pc][sq];
+    }
+    else
+        cntcv = 8;
 
     return 12153 * pcv + 8620 * micv + 12355 * (wnpcv + bnpcv) + 7982 * cntcv;
 }
@@ -117,10 +128,18 @@ void update_correction_history(const Position& pos,
     const int    mask   = int(m.is_ok());
     const Square to     = m.to_sq_unchecked();
     const Piece  pc     = pos.piece_on(to);
-    const int    bonus2 = (bonus * 126 / 128) * mask;
-    const int    bonus4 = (bonus * 63 / 128) * mask;
+    const int    bonus2 = (bonus * 128 / 128) * mask;
+    const int    bonus3 = (bonus * 90 / 128) * mask;
+    const int    bonus4 = (bonus * 64 / 128) * mask;
+    const int    bonus5 = (bonus * 45 / 128) * mask;
+    const int    bonus6 = (bonus * 30 / 128) * mask;
+    const int    bonus7 = (bonus * 20 / 128) * mask;
     (*(ss - 2)->continuationCorrectionHistory)[pc][to] << bonus2;
+    (*(ss - 3)->continuationCorrectionHistory)[pc][to] << bonus3;
     (*(ss - 4)->continuationCorrectionHistory)[pc][to] << bonus4;
+    (*(ss - 5)->continuationCorrectionHistory)[pc][to] << bonus5;
+    (*(ss - 6)->continuationCorrectionHistory)[pc][to] << bonus6;
+    (*(ss - 7)->continuationCorrectionHistory)[pc][to] << bonus7;
 }
 
 // Add a small random component to draw evaluations to avoid 3-fold blindness
