@@ -86,6 +86,18 @@ Value Eval::evaluate(const Eval::NNUE::Networks&    networks,
     // Guarantee evaluation does not hit the tablebase range
     v = std::clamp(v, VALUE_TB_LOSS_IN_MAX_PLY + 1, VALUE_TB_WIN_IN_MAX_PLY - 1);
 
+    // Burn exactly 15 cycles (5 dependent imul, 3 cycles each)
+    {
+        int burn;
+        asm volatile("mov $1, %%eax\n\t"
+                     "imul $1, %%eax, %%eax\n\t"
+                     "imul $1, %%eax, %%eax\n\t"
+                     "imul $1, %%eax, %%eax\n\t"
+                     "imul $1, %%eax, %%eax\n\t"
+                     "imul $1, %%eax, %%eax\n\t"
+                     : "=a"(burn)::);
+    }
+
     return v;
 }
 
