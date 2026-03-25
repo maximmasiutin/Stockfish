@@ -282,7 +282,7 @@ class FeatureTransformer {
             const vec_t* in1 =
               reinterpret_cast<const vec_t*>(&(accumulation[perspectives[p]][HalfDimensions / 2]));
             vec_t*   out     = reinterpret_cast<vec_t*>(output + offset);
-            uint8_t* nnz_out = nnz + offset / 32;
+            uint8_t* nnz_out = nnz ? nnz + offset / 32 : nullptr;
 
             // Per the NNUE architecture, here we want to multiply pairs of
             // clipped elements and divide the product by 128. To do this,
@@ -367,15 +367,16 @@ class FeatureTransformer {
                     const vec_t pb = vec_mulhi_16(sum0b, sum1b);
 
                     out[j] = vec_packus_16(pa, pb);
-    #if defined(USE_AVX512)
+                    if (nnz_out)
                     {
+    #if defined(USE_AVX512)
                         uint16_t mask = _mm512_cmpgt_epi32_mask(out[j], _mm512_setzero_si512());
                         std::memcpy(nnz_out + j * 2, &mask, sizeof(mask));
-                    }
     #else
-                    nnz_out[j] = _mm256_movemask_ps(
-                      _mm256_castsi256_ps(_mm256_cmpgt_epi32(out[j], _mm256_setzero_si256())));
+                        nnz_out[j] = _mm256_movemask_ps(
+                          _mm256_castsi256_ps(_mm256_cmpgt_epi32(out[j], _mm256_setzero_si256())));
     #endif
+                    }
                 }
             }
             else
@@ -393,15 +394,16 @@ class FeatureTransformer {
                     const vec_t pb = vec_mulhi_16(sum0b, sum1b);
 
                     out[j] = vec_packus_16(pa, pb);
-    #if defined(USE_AVX512)
+                    if (nnz_out)
                     {
+    #if defined(USE_AVX512)
                         uint16_t mask = _mm512_cmpgt_epi32_mask(out[j], _mm512_setzero_si512());
                         std::memcpy(nnz_out + j * 2, &mask, sizeof(mask));
-                    }
     #else
-                    nnz_out[j] = _mm256_movemask_ps(
-                      _mm256_castsi256_ps(_mm256_cmpgt_epi32(out[j], _mm256_setzero_si256())));
+                        nnz_out[j] = _mm256_movemask_ps(
+                          _mm256_castsi256_ps(_mm256_cmpgt_epi32(out[j], _mm256_setzero_si256())));
     #endif
+                    }
                 }
             }
 
