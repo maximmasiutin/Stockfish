@@ -178,13 +178,14 @@ Network<Arch, Transformer>::evaluate(const Position&                         pos
 
     alignas(alignment)
       TransformedFeatureType transformedFeatures[FeatureTransformer<FTDimensions>::BufferSize];
+    uint8_t                  nnz[sizeof(transformedFeatures) / 32];
 
     ASSERT_ALIGNED(transformedFeatures, alignment);
 
     const int  bucket = (pos.count<ALL_PIECES>() - 1) / 4;
     const auto psqt =
-      featureTransformer.transform(pos, accumulatorStack, cache, transformedFeatures, bucket);
-    const auto positional = network[bucket].propagate(transformedFeatures);
+      featureTransformer.transform(pos, accumulatorStack, cache, transformedFeatures, bucket, nnz);
+    const auto positional = network[bucket].propagate(transformedFeatures, nnz);
     return {static_cast<Value>(psqt / OutputScale), static_cast<Value>(positional / OutputScale)};
 }
 
@@ -247,9 +248,9 @@ Network<Arch, Transformer>::trace_evaluate(const Position&                      
     t.correctBucket = (pos.count<ALL_PIECES>() - 1) / 4;
     for (IndexType bucket = 0; bucket < LayerStacks; ++bucket)
     {
-        const auto materialist =
-          featureTransformer.transform(pos, accumulatorStack, cache, transformedFeatures, bucket);
-        const auto positional = network[bucket].propagate(transformedFeatures);
+        const auto materialist = featureTransformer.transform(pos, accumulatorStack, cache,
+                                                              transformedFeatures, bucket, nullptr);
+        const auto positional  = network[bucket].propagate(transformedFeatures, nullptr);
 
         t.psqt[bucket]       = static_cast<Value>(materialist / OutputScale);
         t.positional[bucket] = static_cast<Value>(positional / OutputScale);

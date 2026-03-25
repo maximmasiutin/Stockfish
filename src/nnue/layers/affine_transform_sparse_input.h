@@ -251,7 +251,7 @@ class AffineTransformSparseInput {
     }
 
     // Forward propagation
-    void propagate(const InputType* input, OutputType* output) const {
+    void propagate(const InputType* input, const uint8_t* nnz, OutputType* output) const {
 
 #if (USE_SSSE3 | (USE_NEON >= 8))
     #if defined(USE_AVX512)
@@ -283,8 +283,7 @@ class AffineTransformSparseInput {
         #define vec_add_dpbusd_32 SIMD::neon_m128_add_dpbusd_epi32
     #endif
         constexpr IndexType OutputSimdWidth = sizeof(outvec_t) / sizeof(OutputType);
-        constexpr IndexType NumChunks = ceil_to_multiple<IndexType>(InputDimensions, 8) / ChunkSize;
-        constexpr IndexType NumAccums = OutputDimensions / OutputSimdWidth;
+        constexpr IndexType NumAccums       = OutputDimensions / OutputSimdWidth;
         // If we're using high-latency dot product instructions, split the accumulators
         // to create 3 separate dependency chains and merge at the end
         constexpr IndexType NumRegs =
@@ -293,61 +292,51 @@ class AffineTransformSparseInput {
     #else
           NumAccums;
     #endif
-        std::uint16_t nnz[NumChunks];
-        IndexType     count;
-
-        // Find indices of nonzero 32-bit blocks
-        find_nnz<NumChunks>(input, nnz, count);
-
         const outvec_t* biasvec = reinterpret_cast<const outvec_t*>(biases);
         outvec_t        acc[NumRegs];
         for (IndexType k = 0; k < NumAccums; ++k)
             acc[k] = biasvec[k];
 
-        const auto* start = nnz;
-        const auto* end   = nnz + count;
-
-        // convince GCC to not do weird pointer arithmetic in the following loop
-        const std::int8_t* weights_cp = weights;
-    #if defined(USE_VNNI)
-        for (IndexType k = NumAccums; k < NumRegs; ++k)
-            acc[k] = vec_zero();
-
-        while (start < end - 2)
-        {
-            const std::ptrdiff_t i0 = *start++;
-            const std::ptrdiff_t i1 = *start++;
-            const std::ptrdiff_t i2 = *start++;
-            const invec_t        in0 =
-              vec_set_32(load_as<std::int32_t>(input + i0 * sizeof(std::int32_t)));
-            const invec_t in1 =
-              vec_set_32(load_as<std::int32_t>(input + i1 * sizeof(std::int32_t)));
-            const invec_t in2 =
-              vec_set_32(load_as<std::int32_t>(input + i2 * sizeof(std::int32_t)));
-            const auto col0 =
-              reinterpret_cast<const invec_t*>(&weights_cp[i0 * OutputDimensions * ChunkSize]);
-            const auto col1 =
-              reinterpret_cast<const invec_t*>(&weights_cp[i1 * OutputDimensions * ChunkSize]);
-            const auto col2 =
-              reinterpret_cast<const invec_t*>(&weights_cp[i2 * OutputDimensions * ChunkSize]);
-            for (IndexType k = 0; k < NumAccums; ++k)
-            {
-                vec_add_dpbusd_32(acc[k], in0, col0[k]);
-                vec_add_dpbusd_32(acc[k + NumAccums], in1, col1[k]);
-                vec_add_dpbusd_32(acc[k + 2 * NumAccums], in2, col2[k]);
-            }
-        }
-        for (IndexType k = 0; k < NumAccums; ++k)
-            acc[k] = vec_add_32(vec_add_32(acc[k], acc[k + NumAccums]), acc[k + 2 * NumAccums]);
-    #endif
-        while (start < end)
-        {
-            const std::ptrdiff_t i = *start++;
+        auto processOne = [&](const std::int8_t* weights_cp, ptrdiff_t i) {
             const invec_t in = vec_set_32(load_as<std::int32_t>(input + i * sizeof(std::int32_t)));
             const auto    col =
               reinterpret_cast<const invec_t*>(&weights_cp[i * OutputDimensions * ChunkSize]);
-            for (IndexType k = 0; k < NumAccums; ++k)
-                vec_add_dpbusd_32(acc[k], in, col[k]);
+            for (IndexType l = 0; l < NumAccums; ++l)
+                vec_add_dpbusd_32(acc[l], in, col[l]);
+        };
+
+        auto processWord = [&](const std::int8_t* weights_cp, uint64_t bits, ptrdiff_t base) {
+            int cnt = popcount(bits);
+            for (; cnt >= 4; cnt -= 4)
+            {
+                ptrdiff_t i0 = pop_lsb(bits) + base;
+                ptrdiff_t i1 = pop_lsb(bits) + base;
+                ptrdiff_t i2 = pop_lsb(bits) + base;
+                ptrdiff_t i3 = pop_lsb(bits) + base;
+                processOne(weights_cp, i0);
+                processOne(weights_cp, i1);
+                processOne(weights_cp, i2);
+                processOne(weights_cp, i3);
+            }
+            for (; cnt > 0; --cnt)
+                processOne(weights_cp, pop_lsb(bits) + base);
+        };
+
+        if constexpr (InputDimensions == 128)
+        {
+            const std::int8_t* weights_cp = weights;
+            uint64_t           bits       = load_as<uint32_t>(nnz);
+            processWord(weights_cp, bits, 0);
+        }
+        else
+        {
+            const std::int8_t* weights_cp = weights;
+            for (IndexType k = 0; k < InputDimensions / 256; ++k)
+            {
+                uint64_t  bits = load_as<uint64_t>(nnz + k * 8);
+                ptrdiff_t base = k * 64;
+                processWord(weights_cp, bits, base);
+            }
         }
 
         outvec_t* outptr = reinterpret_cast<outvec_t*>(output);
