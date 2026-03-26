@@ -237,7 +237,8 @@ class FeatureTransformer {
                            AccumulatorStack&                         accumulatorStack,
                            AccumulatorCaches::Cache<HalfDimensions>& cache,
                            OutputType*                               output,
-                           int                                       bucket) const {
+                           int                                       bucket,
+                           uint8_t*                                  nnz = nullptr) const {
 
         using namespace SIMD;
         accumulatorStack.evaluate(pos, *this, cache);
@@ -280,7 +281,8 @@ class FeatureTransformer {
             const vec_t* in0 = reinterpret_cast<const vec_t*>(&(accumulation[perspectives[p]][0]));
             const vec_t* in1 =
               reinterpret_cast<const vec_t*>(&(accumulation[perspectives[p]][HalfDimensions / 2]));
-            vec_t* out = reinterpret_cast<vec_t*>(output + offset);
+            vec_t*   out     = reinterpret_cast<vec_t*>(output + offset);
+            uint8_t* nnz_out = nnz ? nnz + offset / 32 : nullptr;
 
             // Per the NNUE architecture, here we want to multiply pairs of
             // clipped elements and divide the product by 128. To do this,
@@ -365,6 +367,34 @@ class FeatureTransformer {
                     const vec_t pb = vec_mulhi_16(sum0b, sum1b);
 
                     out[j] = vec_packus_16(pa, pb);
+                    if (nnz_out)
+                    {
+    #if defined(USE_AVX512)
+                        uint16_t mask = _mm512_cmpgt_epi32_mask(out[j], _mm512_setzero_si512());
+                        std::memcpy(nnz_out + j * 2, &mask, sizeof(mask));
+    #elif defined(USE_AVX2)
+                        nnz_out[j] = _mm256_movemask_ps(_mm256_castsi256_ps(
+                          _mm256_cmpgt_epi32(out[j], _mm256_setzero_si256())));
+    #elif defined(USE_SSE2)
+                        __m128i cmp = _mm_cmpeq_epi32(out[j], _mm_setzero_si128());
+                        uint8_t bits4 =
+                          static_cast<uint8_t>(~_mm_movemask_ps(_mm_castsi128_ps(cmp)) & 0xF);
+                        if (j & 1)
+                            nnz_out[j >> 1] |= bits4 << 4;
+                        else
+                            nnz_out[j >> 1] = bits4;
+    #elif (USE_NEON >= 8)
+                        static const uint32_t bpos[] = {1, 2, 4, 8};
+                        uint32x4_t words = vld1q_u32(reinterpret_cast<const uint32_t*>(&out[j]));
+                        uint32x4_t nonzero = vtstq_u32(words, words);
+                        uint32x4_t masked  = vandq_u32(nonzero, vld1q_u32(bpos));
+                        uint8_t    bits4   = static_cast<uint8_t>(vaddvq_u32(masked));
+                        if (j & 1)
+                            nnz_out[j >> 1] |= bits4 << 4;
+                        else
+                            nnz_out[j >> 1] = bits4;
+    #endif
+                    }
                 }
             }
             else
@@ -382,6 +412,34 @@ class FeatureTransformer {
                     const vec_t pb = vec_mulhi_16(sum0b, sum1b);
 
                     out[j] = vec_packus_16(pa, pb);
+                    if (nnz_out)
+                    {
+    #if defined(USE_AVX512)
+                        uint16_t mask = _mm512_cmpgt_epi32_mask(out[j], _mm512_setzero_si512());
+                        std::memcpy(nnz_out + j * 2, &mask, sizeof(mask));
+    #elif defined(USE_AVX2)
+                        nnz_out[j] = _mm256_movemask_ps(_mm256_castsi256_ps(
+                          _mm256_cmpgt_epi32(out[j], _mm256_setzero_si256())));
+    #elif defined(USE_SSE2)
+                        __m128i cmp = _mm_cmpeq_epi32(out[j], _mm_setzero_si128());
+                        uint8_t bits4 =
+                          static_cast<uint8_t>(~_mm_movemask_ps(_mm_castsi128_ps(cmp)) & 0xF);
+                        if (j & 1)
+                            nnz_out[j >> 1] |= bits4 << 4;
+                        else
+                            nnz_out[j >> 1] = bits4;
+    #elif (USE_NEON >= 8)
+                        static const uint32_t bpos[] = {1, 2, 4, 8};
+                        uint32x4_t words = vld1q_u32(reinterpret_cast<const uint32_t*>(&out[j]));
+                        uint32x4_t nonzero = vtstq_u32(words, words);
+                        uint32x4_t masked  = vandq_u32(nonzero, vld1q_u32(bpos));
+                        uint8_t    bits4   = static_cast<uint8_t>(vaddvq_u32(masked));
+                        if (j & 1)
+                            nnz_out[j >> 1] |= bits4 << 4;
+                        else
+                            nnz_out[j >> 1] = bits4;
+    #endif
+                    }
                 }
             }
 
