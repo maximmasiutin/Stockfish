@@ -27,6 +27,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <initializer_list>
+#include <cstring>
 #include <iostream>
 #include <list>
 #include <ratio>
@@ -62,42 +63,34 @@ void syzygy_extend_pv(const OptionsMap&            options,
 
 using namespace Search;
 
+void print_overlap_report();
+
 namespace {
 
 constexpr int SEARCHEDLIST_CAPACITY = 32;
 using SearchedList                  = ValueList<Move, SEARCHEDLIST_CAPACITY>;
 
-// === ContinuationCorrectionHistory occupancy instrumentation ===
-// Counts non-zero entries per worker after each bench run.
-static constexpr size_t OCC_TOTAL =
-  static_cast<size_t>(PIECE_NB) * SQUARE_NB * PIECE_NB * SQUARE_NB;
-static constexpr int    OCC_MAX_SLOTS            = 256;
-static uint64_t         occCounts[OCC_MAX_SLOTS] = {};
-static std::atomic<int> occSlotIdx{0};
-static std::atomic<int> occGeneration{0};
-static thread_local int myOccSlot       = -1;
-static thread_local int myOccGeneration = -1;
+// === ContinuationCorrectionHistory thread-overlap instrumentation ===
+// Per-entry bitmask tracking which threads write to each contCorrHist entry.
+// Two slots: [0]=ss-2 entries, [1]=ss-4 entries. Up to 32 threads.
+static constexpr int OCC_PLY_SLOTS = 2;
+static uint32_t
+  occ_thread_mask[OCC_PLY_SLOTS][PIECE_NB][SQUARE_NB][PIECE_NB][SQUARE_NB] = {};
 
-void flush_occ_count(const CorrectionHistory<Continuation>& hist) {
-    // Re-acquire slot if generation changed (reset after a previous bench run).
-    int gen = occGeneration.load(std::memory_order_relaxed);
-    if (myOccGeneration != gen)
-    {
-        myOccSlot       = -1;
-        myOccGeneration = gen;
-    }
-    if (myOccSlot < 0)
-        myOccSlot = occSlotIdx.fetch_add(1, std::memory_order_relaxed);
-    if (myOccSlot >= OCC_MAX_SLOTS)
+void record_overlap(int                                    plyIdx,
+                    const CorrectionHistory<Continuation>& table,
+                    const CorrectionHistory<PieceTo>*      ptr,
+                    Piece                                  pc,
+                    Square                                 to,
+                    size_t                                 threadIdx) {
+    const auto* base = &table[0][0];
+    ptrdiff_t   idx  = ptr - base;
+    if (idx < static_cast<ptrdiff_t>(SQUARE_NB)
+        || idx >= static_cast<ptrdiff_t>(PIECE_NB) * SQUARE_NB)
         return;
-    uint64_t n = 0;
-    for (int p1 = 0; p1 < PIECE_NB; ++p1)
-        for (int s1 = 0; s1 < SQUARE_NB; ++s1)
-            for (int p2 = 0; p2 < PIECE_NB; ++p2)
-                for (int s2 = 0; s2 < SQUARE_NB; ++s2)
-                    if (int16_t(hist[p1][s1][p2][s2]) != 0)
-                        ++n;
-    occCounts[myOccSlot] = n;
+    int p1 = static_cast<int>(idx / SQUARE_NB);
+    int s1 = static_cast<int>(idx % SQUARE_NB);
+    occ_thread_mask[plyIdx][p1][s1][pc][to] |= (1u << threadIdx);
 }
 
 // (*Scalers):
@@ -154,6 +147,16 @@ void update_correction_history(const Position& pos,
     const int    bonus4 = (bonus * 63 / 128) * mask;
     (*(ss - 2)->continuationCorrectionHistory)[pc][to] << bonus2;
     (*(ss - 4)->continuationCorrectionHistory)[pc][to] << bonus4;
+
+    if (mask != 0 && workerThread.thread_idx() < 32)
+    {
+        record_overlap(0, workerThread.continuationCorrectionHistory,
+                       (ss - 2)->continuationCorrectionHistory, pc, to,
+                       workerThread.thread_idx());
+        record_overlap(1, workerThread.continuationCorrectionHistory,
+                       (ss - 4)->continuationCorrectionHistory, pc, to,
+                       workerThread.thread_idx());
+    }
 }
 
 // Add a small random component to draw evaluations to avoid 3-fold blindness
@@ -185,46 +188,34 @@ bool is_shuffling(Move move, Stack* const ss, const Position& pos) {
 
 }  // namespace
 
-void print_occupancy_report() {
-    int nSlots = occSlotIdx.load(std::memory_order_relaxed);
-    if (nSlots > OCC_MAX_SLOTS)
-        nSlots = OCC_MAX_SLOTS;
+void print_overlap_report() {
+    constexpr int MAX_POP    = 32;
+    constexpr int TOTAL_ENTS = PIECE_NB * SQUARE_NB * PIECE_NB * SQUARE_NB;
 
-    const char* depthEnv = std::getenv("BENCH_DEPTH");
-    int         depth    = depthEnv ? std::atoi(depthEnv) : 0;
-
-    static bool headerPrinted = false;
-    if (!headerPrinted)
+    for (int plyIdx = 0; plyIdx < OCC_PLY_SLOTS; ++plyIdx)
     {
-        std::cout << "occ,depth,nthreads,total_entries,sum_occupied,occupancy_pct";
-        for (int i = 0; i < nSlots; ++i)
-            std::cout << ",t" << i << "_occupied";
-        std::cout << std::endl;
-        headerPrinted = true;
+        int      ply = (plyIdx == 0) ? 2 : 4;
+        uint64_t dist[MAX_POP + 1] = {};
+
+        for (int p1 = 0; p1 < PIECE_NB; ++p1)
+            for (int s1 = 0; s1 < SQUARE_NB; ++s1)
+                for (int p2 = 0; p2 < PIECE_NB; ++p2)
+                    for (int s2 = 0; s2 < SQUARE_NB; ++s2)
+                    {
+                        uint32_t m = occ_thread_mask[plyIdx][p1][s1][p2][s2];
+                        dist[__builtin_popcount(m)]++;
+                    }
+
+        // overlap,ply,total_entries,pop0,pop1,...,pop32
+        std::cout << "overlap," << ply << "," << TOTAL_ENTS;
+        for (int k = 0; k <= MAX_POP; ++k)
+            std::cout << "," << dist[k];
+        std::cout << "\n";
     }
+    std::cout << std::flush;
 
-    uint64_t sum = 0;
-    for (int s = 0; s < nSlots; ++s)
-        sum += occCounts[s];
-
-    uint64_t denom  = static_cast<uint64_t>(nSlots) * OCC_TOTAL;
-    uint64_t pct10k = denom ? sum * 10000ULL / denom : 0;
-    char     pctBuf[20];
-    snprintf(pctBuf, sizeof(pctBuf), "%llu.%02llu", (unsigned long long) (pct10k / 100),
-             (unsigned long long) (pct10k % 100));
-
-    std::cout << "occ," << depth << "," << nSlots << "," << OCC_TOTAL << "," << sum << ","
-              << pctBuf;
-    for (int s = 0; s < nSlots; ++s)
-        std::cout << "," << occCounts[s];
-    std::cout << std::endl;
-
-    // Reset for next bench run. Increment generation so all threads re-acquire
-    // a fresh slot instead of reusing stale myOccSlot values.
-    for (int s = 0; s < nSlots; ++s)
-        occCounts[s] = 0;
-    occSlotIdx.store(0, std::memory_order_relaxed);
-    occGeneration.fetch_add(1, std::memory_order_relaxed);
+    // Reset for next run
+    std::memset(occ_thread_mask, 0, sizeof(occ_thread_mask));
 }
 
 Search::Worker::Worker(SharedState&                    sharedState,
@@ -263,7 +254,6 @@ void Search::Worker::start_searching() {
     if (!is_mainthread())
     {
         iterative_deepening();
-        flush_occ_count(continuationCorrectionHistory);
         return;
     }
 
@@ -281,7 +271,6 @@ void Search::Worker::start_searching() {
     {
         threads.start_searching();  // start non-main threads
         iterative_deepening();      // main thread start searching
-        flush_occ_count(continuationCorrectionHistory);
     }
 
     // When we reach the maximum depth, we can arrive here without a raise of

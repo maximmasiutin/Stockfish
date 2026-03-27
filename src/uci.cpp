@@ -42,8 +42,8 @@
 
 namespace Stockfish {
 
-// Forward declaration for occupancy instrumentation (defined in search.cpp)
-void print_occupancy_report();
+// Forward declaration for overlap instrumentation (defined in search.cpp)
+void print_overlap_report();
 
 constexpr auto BenchmarkCommand = "speedtest";
 
@@ -180,6 +180,9 @@ void UCIEngine::loop() {
                       << sync_endl;
 
     } while (token != "quit" && cli.argc == 1);  // The command-line arguments are one-shot
+
+    // Output overlap data collected during any UCI go commands
+    print_overlap_report();
 }
 
 Search::LimitsType UCIEngine::parse_limits(std::istream& is) {
@@ -309,8 +312,8 @@ void UCIEngine::bench(std::istream& args) {
 
     dbg_print();
 
-    // Print per-thread contCorrHist occupancy report
-    print_occupancy_report();
+    // Print per-entry thread overlap report
+    print_overlap_report();
 
     std::cerr << "\n==========================="    //
               << "\nTotal time (ms) : " << elapsed  //

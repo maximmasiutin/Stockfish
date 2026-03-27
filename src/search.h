@@ -283,7 +283,8 @@ class Worker {
     // It searches from the root position and outputs the "bestmove".
     void start_searching();
 
-    bool is_mainthread() const { return threadIdx == 0; }
+    bool   is_mainthread() const { return threadIdx == 0; }
+    size_t thread_idx() const { return threadIdx; }
 
     void ensure_network_replicated();
 
