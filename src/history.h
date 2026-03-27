@@ -220,12 +220,15 @@ using TTMoveHistory = StatsEntry<std::int16_t, 8192>;
 // on a given NUMA node. The passed size must be a power of two to make
 // the indexing more efficient.
 struct SharedHistories {
-    SharedHistories(size_t threadCount) :
+    SharedHistories(size_t threadCount, size_t actualThreads = 0) :
         correctionHistory(threadCount),
         pawnHistory(threadCount) {
         assert((threadCount & (threadCount - 1)) == 0 && threadCount != 0);
         sizeMinus1         = correctionHistory.get_size() - 1;
         pawnHistSizeMinus1 = pawnHistory.get_size() - 1;
+        size_t t           = actualThreads > 0 ? actualThreads : threadCount;
+        size_t scale       = std::max(size_t(1), t / 2);
+        contcorrShift      = std::min(4, scale > 1 ? int(msb(Bitboard(scale))) : 0);
     }
 
     size_t get_size() const { return sizeMinus1 + 1; }
@@ -263,6 +266,33 @@ struct SharedHistories {
     UnifiedCorrectionHistory correctionHistory;
     PawnHistory              pawnHistory;
 
+    using AtomicPieceToCorrHist =
+      AtomicStats<std::int16_t, CORRECTION_HISTORY_LIMIT, PIECE_NB, SQUARE_NB>;
+
+    struct alignas(64) AlignedPieceToCorrHist: AtomicPieceToCorrHist {};
+
+    MultiArray<AlignedPieceToCorrHist, PIECE_NB, SQUARE_NB> continuationCorrectionHistory;
+
+    void update_contcorr(AlignedPieceToCorrHist& hist, Piece pc, Square to, int bonus) {
+        auto& e       = hist[pc][to];
+        int   dShift  = 10 + contcorrShift;
+        int   d       = 1 << dShift;
+        int   cb      = std::clamp(bonus, -d, d);
+        int   v       = int(e);
+        int   product = v * std::abs(cb);
+        e             = v + cb - ((product + ((product >> 31) & (d - 1))) >> dShift);
+    }
+
+    void clear_contcorr_range(size_t threadIdx, size_t numaTotal) {
+        constexpr size_t total = PIECE_NB * SQUARE_NB;
+        size_t           start = uint64_t(threadIdx) * total / numaTotal;
+        size_t           end =
+          threadIdx + 1 == numaTotal ? total : uint64_t(threadIdx + 1) * total / numaTotal;
+        for (size_t i = start; i < end; i++)
+            continuationCorrectionHistory[i / SQUARE_NB][i % SQUARE_NB].fill(6 << contcorrShift);
+    }
+
+    int contcorrShift;
 
    private:
     size_t sizeMinus1, pawnHistSizeMinus1;
