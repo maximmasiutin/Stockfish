@@ -74,9 +74,18 @@ static constexpr size_t OCC_TOTAL =
 static constexpr int    OCC_MAX_SLOTS            = 256;
 static uint64_t         occCounts[OCC_MAX_SLOTS] = {};
 static std::atomic<int> occSlotIdx{0};
-static thread_local int myOccSlot = -1;
+static std::atomic<int> occGeneration{0};
+static thread_local int myOccSlot       = -1;
+static thread_local int myOccGeneration = -1;
 
 void flush_occ_count(const CorrectionHistory<Continuation>& hist) {
+    // Re-acquire slot if generation changed (reset after a previous bench run).
+    int gen = occGeneration.load(std::memory_order_relaxed);
+    if (myOccGeneration != gen)
+    {
+        myOccSlot       = -1;
+        myOccGeneration = gen;
+    }
     if (myOccSlot < 0)
         myOccSlot = occSlotIdx.fetch_add(1, std::memory_order_relaxed);
     if (myOccSlot >= OCC_MAX_SLOTS)
@@ -210,11 +219,12 @@ void print_occupancy_report() {
         std::cout << "," << occCounts[s];
     std::cout << std::endl;
 
-    // Reset for next bench run
+    // Reset for next bench run. Increment generation so all threads re-acquire
+    // a fresh slot instead of reusing stale myOccSlot values.
     for (int s = 0; s < nSlots; ++s)
         occCounts[s] = 0;
-    myOccSlot = -1;
     occSlotIdx.store(0, std::memory_order_relaxed);
+    occGeneration.fetch_add(1, std::memory_order_relaxed);
 }
 
 Search::Worker::Worker(SharedState&                    sharedState,
