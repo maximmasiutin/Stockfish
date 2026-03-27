@@ -117,8 +117,8 @@ void update_correction_history(const Position& pos,
     const int    mask   = int(m.is_ok());
     const Square to     = m.to_sq_unchecked();
     const Piece  pc     = pos.piece_on(to);
-    const int    bonus2 = (bonus * 126 / 128) * mask;
-    const int    bonus4 = (bonus * 63 / 128) * mask;
+    const int    bonus2 = (bonus * shared.contcorWriteS2 / 8192) * mask;
+    const int    bonus4 = (bonus * shared.contcorWriteS4 / 8192) * mask;
     (*(ss - 2)->continuationCorrectionHistory)[pc][to] << bonus2;
     (*(ss - 4)->continuationCorrectionHistory)[pc][to] << bonus4;
 }
@@ -282,8 +282,9 @@ void Search::Worker::iterative_deepening() {
     {
         (ss - i)->continuationHistory =
           &continuationHistory[0][0][NO_PIECE][0];  // Use as a sentinel
-        (ss - i)->continuationCorrectionHistory = &continuationCorrectionHistory[NO_PIECE][0];
-        (ss - i)->staticEval                    = VALUE_NONE;
+        (ss - i)->continuationCorrectionHistory =
+          &sharedHistory.continuationCorrectionHistory[NO_PIECE][0];
+        (ss - i)->staticEval = VALUE_NONE;
     }
 
     for (int i = 0; i <= MAX_PLY + 2; ++i)
@@ -579,7 +580,7 @@ void Search::Worker::do_move(
         ss->continuationHistory =
           &continuationHistory[ss->inCheck][capture][dirtyPiece.pc][move.to_sq()];
         ss->continuationCorrectionHistory =
-          &continuationCorrectionHistory[dirtyPiece.pc][move.to_sq()];
+          &sharedHistory.continuationCorrectionHistory[dirtyPiece.pc][move.to_sq()];
     }
 }
 
@@ -587,7 +588,7 @@ void Search::Worker::do_null_move(Position& pos, StateInfo& st, Stack* const ss)
     pos.do_null_move(st);
     ss->currentMove                   = Move::null();
     ss->continuationHistory           = &continuationHistory[0][0][NO_PIECE][0];
-    ss->continuationCorrectionHistory = &continuationCorrectionHistory[NO_PIECE][0];
+    ss->continuationCorrectionHistory = &sharedHistory.continuationCorrectionHistory[NO_PIECE][0];
 }
 
 void Search::Worker::undo_move(Position& pos, const Move move) {
@@ -609,9 +610,7 @@ void Search::Worker::clear() {
 
     ttMoveHistory = 0;
 
-    for (auto& to : continuationCorrectionHistory)
-        for (auto& h : to)
-            h.fill(6);
+    sharedHistory.clear_contcorr_range(numaThreadIdx, numaTotal);
 
     for (bool inCheck : {false, true})
         for (StatsType c : {NoCaptures, Captures})

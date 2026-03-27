@@ -200,7 +200,7 @@ void ThreadPool::set(const NumaConfig&                           numaConfig,
             NumaIndex numaIndex = pair.first;
             uint64_t  count     = pair.second;
             auto      f         = [&]() {
-                sharedState.sharedHistories.try_emplace(numaIndex, next_power_of_two(count));
+                sharedState.sharedHistories.try_emplace(numaIndex, next_power_of_two(count), count);
             };
             if (doBindThreads)
                 numaConfig.execute_on_numa_node(numaIndex, f);
