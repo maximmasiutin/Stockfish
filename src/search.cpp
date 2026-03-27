@@ -67,6 +67,30 @@ namespace {
 constexpr int SEARCHEDLIST_CAPACITY = 32;
 using SearchedList                  = ValueList<Move, SEARCHEDLIST_CAPACITY>;
 
+// === ContinuationCorrectionHistory occupancy instrumentation ===
+// Counts non-zero entries per worker after each bench run.
+static constexpr size_t OCC_TOTAL =
+  static_cast<size_t>(PIECE_NB) * SQUARE_NB * PIECE_NB * SQUARE_NB;
+static constexpr int    OCC_MAX_SLOTS            = 256;
+static uint64_t         occCounts[OCC_MAX_SLOTS] = {};
+static std::atomic<int> occSlotIdx{0};
+static thread_local int myOccSlot = -1;
+
+void flush_occ_count(const CorrectionHistory<Continuation>& hist) {
+    if (myOccSlot < 0)
+        myOccSlot = occSlotIdx.fetch_add(1, std::memory_order_relaxed);
+    if (myOccSlot >= OCC_MAX_SLOTS)
+        return;
+    uint64_t n = 0;
+    for (int p1 = 0; p1 < PIECE_NB; ++p1)
+        for (int s1 = 0; s1 < SQUARE_NB; ++s1)
+            for (int p2 = 0; p2 < PIECE_NB; ++p2)
+                for (int s2 = 0; s2 < SQUARE_NB; ++s2)
+                    if (int16_t(hist[p1][s1][p2][s2]) != 0)
+                        ++n;
+    occCounts[myOccSlot] = n;
+}
+
 // (*Scalers):
 // The values with Scaler asterisks have proven non-linear scaling.
 // They are optimized to time controls of 180 + 1.8 and longer,
@@ -152,6 +176,47 @@ bool is_shuffling(Move move, Stack* const ss, const Position& pos) {
 
 }  // namespace
 
+void print_occupancy_report() {
+    int nSlots = occSlotIdx.load(std::memory_order_relaxed);
+    if (nSlots > OCC_MAX_SLOTS)
+        nSlots = OCC_MAX_SLOTS;
+
+    const char* depthEnv = std::getenv("BENCH_DEPTH");
+    int         depth    = depthEnv ? std::atoi(depthEnv) : 0;
+
+    static bool headerPrinted = false;
+    if (!headerPrinted)
+    {
+        std::cout << "occ,depth,nthreads,total_entries,sum_occupied,occupancy_pct";
+        for (int i = 0; i < nSlots; ++i)
+            std::cout << ",t" << i << "_occupied";
+        std::cout << std::endl;
+        headerPrinted = true;
+    }
+
+    uint64_t sum = 0;
+    for (int s = 0; s < nSlots; ++s)
+        sum += occCounts[s];
+
+    uint64_t denom  = static_cast<uint64_t>(nSlots) * OCC_TOTAL;
+    uint64_t pct10k = denom ? sum * 10000ULL / denom : 0;
+    char     pctBuf[20];
+    snprintf(pctBuf, sizeof(pctBuf), "%llu.%02llu", (unsigned long long) (pct10k / 100),
+             (unsigned long long) (pct10k % 100));
+
+    std::cout << "occ," << depth << "," << nSlots << "," << OCC_TOTAL << "," << sum << ","
+              << pctBuf;
+    for (int s = 0; s < nSlots; ++s)
+        std::cout << "," << occCounts[s];
+    std::cout << std::endl;
+
+    // Reset for next bench run
+    for (int s = 0; s < nSlots; ++s)
+        occCounts[s] = 0;
+    myOccSlot = -1;
+    occSlotIdx.store(0, std::memory_order_relaxed);
+}
+
 Search::Worker::Worker(SharedState&                    sharedState,
                        std::unique_ptr<ISearchManager> sm,
                        size_t                          threadId,
@@ -188,6 +253,7 @@ void Search::Worker::start_searching() {
     if (!is_mainthread())
     {
         iterative_deepening();
+        flush_occ_count(continuationCorrectionHistory);
         return;
     }
 
@@ -205,6 +271,7 @@ void Search::Worker::start_searching() {
     {
         threads.start_searching();  // start non-main threads
         iterative_deepening();      // main thread start searching
+        flush_occ_count(continuationCorrectionHistory);
     }
 
     // When we reach the maximum depth, we can arrive here without a raise of
