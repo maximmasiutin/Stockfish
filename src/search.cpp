@@ -76,6 +76,8 @@ using SearchedList                  = ValueList<Move, SEARCHEDLIST_CAPACITY>;
 // (*Scaler) All tuned parameters at time controls shorter than
 // optimized for require verifications at longer time controls
 
+constexpr int CORRECTION_VALUE_SCALE = 131072;
+
 int correction_value(const Worker& w, const Position& pos, const Stack* const ss) {
     const Color us     = pos.side_to_move();
     const auto  m      = (ss - 1)->currentMove;
@@ -95,7 +97,8 @@ int correction_value(const Worker& w, const Position& pos, const Stack* const ss
 // Add correctionHistory value to raw staticEval and guarantee evaluation
 // does not hit the tablebase range.
 Value to_corrected_static_eval(const Value v, const int cv) {
-    return std::clamp(v + cv / 131072, VALUE_TB_LOSS_IN_MAX_PLY + 1, VALUE_TB_WIN_IN_MAX_PLY - 1);
+    return std::clamp(v + cv / CORRECTION_VALUE_SCALE, VALUE_TB_LOSS_IN_MAX_PLY + 1,
+                      VALUE_TB_WIN_IN_MAX_PLY - 1);
 }
 
 void update_correction_history(const Position& pos,
@@ -915,8 +918,18 @@ Value Search::Worker::search(
     {
         assert((ss - 1)->currentMove != Move::null());
 
-        // Null move dynamic reduction based on depth
-        Depth R = 7 + depth / 3;
+        // Null move dynamic reduction based on depth and correction magnitude.
+        // Prune more if NNUE underestimates, less if it overestimates.
+        constexpr unsigned centipawns[] = {192, 256, 288};
+        const unsigned     cvAbs        = std::abs(correctionValue);
+        unsigned           stepCount    = 0;
+        for (unsigned threshold : centipawns)
+            stepCount += (cvAbs > threshold * CORRECTION_VALUE_SCALE);
+        const int      c   = stepCount * depth;
+        const unsigned adj = 6 * 16 + depth * 6 + ((correctionValue < 0) ? -c : c);
+
+        Depth R = adj / 16;
+
         do_null_move(pos, st, ss);
 
         Value nullValue = -search<NonPV>(pos, ss + 1, -beta, -beta + 1, depth - R, false);
@@ -1911,7 +1924,7 @@ void update_continuation_histories(Stack* ss, Piece pc, Square to, int bonus) {
                 positiveCount++;
 
             int multiplier = CMHCMultipliers[positiveCount];
-            historyEntry << (bonus * weight * multiplier / 131072) + 73 * (i < 2);
+            historyEntry << (bonus * weight * multiplier / CORRECTION_VALUE_SCALE) + 73 * (i < 2);
         }
     }
 }
