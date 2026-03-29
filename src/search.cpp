@@ -899,9 +899,11 @@ Value Search::Worker::search(
         auto futility_margin = [&](Depth d) {
             Value futilityMult = 76 - 21 * !ss->ttHit;
 
+            unsigned absCorrValue = std::abs(correctionValue);
+            int      corrMargin   = absCorrValue / 180600;
             return futilityMult * d
                  - (2686 * improving + 362 * opponentWorsening) * futilityMult / 1024  //
-                 + std::abs(correctionValue) / 180600;
+                 + corrMargin;
         };
 
         if (!ss->ttPv && depth < 15 && eval - futility_margin(depth) >= beta && eval >= beta
@@ -916,7 +918,8 @@ Value Search::Worker::search(
         assert((ss - 1)->currentMove != Move::null());
 
         // Null move dynamic reduction based on depth
-        Depth R = 7 + depth / 3;
+        unsigned uDepth = depth;
+        Depth    R      = 7 + uDepth / 3;
         do_null_move(pos, st, ss);
 
         Value nullValue = -search<NonPV>(pos, ss + 1, -beta, -beta + 1, depth - R, false);
@@ -933,7 +936,8 @@ Value Search::Worker::search(
 
             // Do verification search at high depths, with null move pruning disabled
             // until ply exceeds nmpMinPly.
-            nmpMinPly = ss->ply + 3 * (depth - R) / 4;
+            unsigned verifyNumer = 3 * (depth - R);
+            nmpMinPly            = ss->ply + verifyNumer / 4;
 
             Value v = search<NonPV>(pos, ss, beta - 1, beta, depth - R, false);
 
@@ -1071,7 +1075,7 @@ moves_loop:  // When in check, search starts here
         if (!rootNode && pos.non_pawn_material(us) && !is_loss(bestValue))
         {
             // Skip quiet moves if movecount exceeds our FutilityMoveCount threshold
-            if (moveCount >= (3 + depth * depth) / (2 - improving))
+            if (moveCount >= (3 + depth * depth) >> (1 - improving))
                 mp.skip_quiet_moves();
 
             // Reduced depth of the next LMR search
@@ -1159,8 +1163,9 @@ moves_loop:  // When in check, search starts here
 
             if (value < singularBeta)
             {
-                int corrValAdj   = std::abs(correctionValue) / 210590;
-                int doubleMargin = -4 + 212 * PvNode - 182 * !ttCapture - corrValAdj
+                unsigned absCv        = std::abs(correctionValue);
+                int      corrValAdj   = absCv / 210590;
+                int      doubleMargin = -4 + 212 * PvNode - 182 * !ttCapture - corrValAdj
                                  - 906 * ttMoveHistory / 116517 - (ss->ply > rootDepth) * 44;
                 int tripleMargin = 73 + 320 * PvNode - 218 * !ttCapture + 92 * ss->ttPv - corrValAdj
                                  - (ss->ply > rootDepth) * 45;
@@ -1214,7 +1219,9 @@ moves_loop:  // When in check, search starts here
 
         r += 691;  // Base reduction offset to compensate for other tweaks
         r -= moveCount * 65;
-        r -= std::abs(correctionValue) / 25600;
+        unsigned absCorrLmr = std::abs(correctionValue);
+        int      corrReduc  = absCorrLmr / 25600;
+        r -= corrReduc;
 
         // Increase reduction for cut nodes
         if (cutNode)
