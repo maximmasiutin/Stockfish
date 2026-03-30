@@ -26,6 +26,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <initializer_list>
 #include <iostream>
 #include <list>
@@ -62,10 +63,57 @@ void syzygy_extend_pv(const OptionsMap&            options,
 
 using namespace Search;
 
+void print_nmp_instrument();
+
 namespace {
 
 constexpr int SEARCHEDLIST_CAPACITY = 32;
 using SearchedList                  = ValueList<Move, SEARCHEDLIST_CAPACITY>;
+
+// === NMP signal activation instrumentation ===
+// Per-thread counters for improving, cv>192, cv<-192, joint activation at NMP entry.
+// Indexed by remaining depth (0-32). Correction value histogram with 34 bins at 32cp.
+// Bins: lt-512, cp-480, cp-448, ..., cp0, ..., cp480, cp512, ge544
+static constexpr int NMP_MAX_DEPTH   = 33;
+static constexpr int NMP_CV_BINS     = 34;
+static constexpr int NMP_MAX_THREADS = 256;
+
+struct NmpThreadStats {
+    uint64_t entered[NMP_MAX_DEPTH];
+    uint64_t improvingCnt[NMP_MAX_DEPTH];
+    uint64_t cvPos[NMP_MAX_DEPTH];
+    uint64_t cvNeg[NMP_MAX_DEPTH];
+    uint64_t both[NMP_MAX_DEPTH];
+    uint64_t cvHist[NMP_MAX_DEPTH][NMP_CV_BINS];
+};
+
+static NmpThreadStats nmp_stats[NMP_MAX_THREADS] = {};
+
+int cv_to_bin(int cv) {
+    int cp = cv / 131072;
+    if (cp < -512)
+        return 0;
+    if (cp >= 544)
+        return 33;
+    return (cp + 512) / 32;
+}
+
+void record_nmp(size_t threadIdx, int depth, bool impr, int cv) {
+    if (threadIdx >= NMP_MAX_THREADS)
+        return;
+    int   d = std::min(depth, NMP_MAX_DEPTH - 1);
+    auto& s = nmp_stats[threadIdx];
+    s.entered[d]++;
+    if (impr)
+        s.improvingCnt[d]++;
+    if (cv > 192 * 131072)
+        s.cvPos[d]++;
+    if (cv < -192 * 131072)
+        s.cvNeg[d]++;
+    if (impr && cv > 192 * 131072)
+        s.both[d]++;
+    s.cvHist[d][cv_to_bin(cv)]++;
+}
 
 // (*Scalers):
 // The values with Scaler asterisks have proven non-linear scaling.
@@ -151,6 +199,54 @@ bool is_shuffling(Move move, Stack* const ss, const Position& pos) {
 }
 
 }  // namespace
+
+void print_nmp_instrument() {
+    // Aggregate across all threads
+    uint64_t entered[NMP_MAX_DEPTH]           = {};
+    uint64_t imprCnt[NMP_MAX_DEPTH]           = {};
+    uint64_t cvP[NMP_MAX_DEPTH]               = {};
+    uint64_t cvN[NMP_MAX_DEPTH]               = {};
+    uint64_t bth[NMP_MAX_DEPTH]               = {};
+    uint64_t hist[NMP_MAX_DEPTH][NMP_CV_BINS] = {};
+
+    for (int t = 0; t < NMP_MAX_THREADS; ++t)
+        for (int d = 0; d < NMP_MAX_DEPTH; ++d)
+        {
+            entered[d] += nmp_stats[t].entered[d];
+            imprCnt[d] += nmp_stats[t].improvingCnt[d];
+            cvP[d] += nmp_stats[t].cvPos[d];
+            cvN[d] += nmp_stats[t].cvNeg[d];
+            bth[d] += nmp_stats[t].both[d];
+            for (int b = 0; b < NMP_CV_BINS; ++b)
+                hist[d][b] += nmp_stats[t].cvHist[d][b];
+        }
+
+    // CSV header with named bins at 32cp resolution
+    static const char* bin_names[] = {
+      "lt-512", "cp-480", "cp-448", "cp-416", "cp-384", "cp-352", "cp-320", "cp-288", "cp-256",
+      "cp-224", "cp-192", "cp-160", "cp-128", "cp-96",  "cp-64",  "cp-32",  "cp0",    "cp32",
+      "cp64",   "cp96",   "cp128",  "cp160",  "cp192",  "cp224",  "cp256",  "cp288",  "cp320",
+      "cp352",  "cp384",  "cp416",  "cp448",  "cp480",  "cp512",  "ge544"};
+    std::cout << "nmp_cv,depth,entered,improving,impr_pct";
+    for (int b = 0; b < NMP_CV_BINS; ++b)
+        std::cout << "," << bin_names[b];
+    std::cout << "\n";
+
+    for (int d = 1; d < NMP_MAX_DEPTH; ++d)
+    {
+        uint64_t e = entered[d];
+        if (e == 0)
+            continue;
+        std::cout << "nmp_cv," << d << "," << e << "," << imprCnt[d] << ","
+                  << (100.0 * imprCnt[d] / e);
+        for (int b = 0; b < NMP_CV_BINS; ++b)
+            std::cout << "," << hist[d][b];
+        std::cout << "\n";
+    }
+    std::cout << std::flush;
+
+    std::memset(nmp_stats, 0, sizeof(nmp_stats));
+}
 
 Search::Worker::Worker(SharedState&                    sharedState,
                        std::unique_ptr<ISearchManager> sm,
@@ -917,6 +1013,9 @@ Value Search::Worker::search(
 
         // Null move dynamic reduction based on depth
         Depth R = 7 + depth / 3;
+
+        record_nmp(this->thread_idx(), depth, improving, correctionValue);
+
         do_null_move(pos, st, ss);
 
         Value nullValue = -search<NonPV>(pos, ss + 1, -beta, -beta + 1, depth - R, false);

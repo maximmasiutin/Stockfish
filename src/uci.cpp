@@ -42,6 +42,8 @@
 
 namespace Stockfish {
 
+void print_nmp_instrument();
+
 constexpr auto BenchmarkCommand = "speedtest";
 
 constexpr auto StartFEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
@@ -177,6 +179,8 @@ void UCIEngine::loop() {
                       << sync_endl;
 
     } while (token != "quit" && cli.argc == 1);  // The command-line arguments are one-shot
+
+    print_nmp_instrument();
 }
 
 Search::LimitsType UCIEngine::parse_limits(std::istream& is) {
@@ -287,6 +291,8 @@ void UCIEngine::bench(std::istream& args) {
     elapsed = now() - elapsed + 1;  // Ensure positivity to avoid a 'divide by zero'
 
     dbg_print();
+
+    print_nmp_instrument();
 
     std::cerr << "\n==========================="    //
               << "\nTotal time (ms) : " << elapsed  //
