@@ -73,6 +73,8 @@ using SearchedList                  = ValueList<Move, SEARCHEDLIST_CAPACITY>;
 // so changing them or adding conditions that are similar requires
 // tests at these types of time controls.
 
+constexpr int CORRECTION_CENTIPAWN_SCALE = 131072;
+
 // (*Scaler) All tuned parameters at time controls shorter than
 // optimized for require verifications at longer time controls
 
@@ -95,7 +97,8 @@ int correction_value(const Worker& w, const Position& pos, const Stack* const ss
 // Add correctionHistory value to raw staticEval and guarantee evaluation
 // does not hit the tablebase range.
 Value to_corrected_static_eval(const Value v, const int cv) {
-    return std::clamp(v + cv / 131072, VALUE_TB_LOSS_IN_MAX_PLY + 1, VALUE_TB_WIN_IN_MAX_PLY - 1);
+    return std::clamp(v + cv / CORRECTION_CENTIPAWN_SCALE, VALUE_TB_LOSS_IN_MAX_PLY + 1,
+                      VALUE_TB_WIN_IN_MAX_PLY - 1);
 }
 
 void update_correction_history(const Position& pos,
@@ -917,6 +920,15 @@ Value Search::Worker::search(
 
         // Null move dynamic reduction based on depth
         Depth R = 7 + depth / 3;
+
+        // Prune more when positive correction exceeds centipawn thresholds
+        bool     step1 = correctionValue > 192 * CORRECTION_CENTIPAWN_SCALE;
+        bool     step2 = correctionValue > 288 * CORRECTION_CENTIPAWN_SCALE;
+        bool     step3 = correctionValue > 384 * CORRECTION_CENTIPAWN_SCALE;
+        unsigned c     = (step1 + step2 + step3) * depth / 16;
+
+        R += c;
+
         do_null_move(pos, st, ss);
 
         Value nullValue = -search<NonPV>(pos, ss + 1, -beta, -beta + 1, depth - R, false);
