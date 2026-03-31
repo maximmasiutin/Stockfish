@@ -46,6 +46,7 @@
 #include "thread.h"
 #include "timeman.h"
 #include "tt.h"
+#include "tune.h"
 #include "types.h"
 #include "uci.h"
 #include "ucioption.h"
@@ -75,6 +76,31 @@ using SearchedList                  = ValueList<Move, SEARCHEDLIST_CAPACITY>;
 
 // (*Scaler) All tuned parameters at time controls shorter than
 // optimized for require verifications at longer time controls
+
+// Per-depth-bin NMP reduction coefficients (4-depth bins).
+// Bins 0-4 (depths 0-19) are hardcoded at 43 (settled from nmp-depth-bins-spsa).
+// Bin 5 (depths 20-23) is tunable, starting at 43.
+// Bins 6-7 (depths 24-31) are tunable, starting at 40 (converging in v1).
+// Bins 8-13 (depths 32-52+) are tunable, starting at 43.
+int nmpC5  = 43;
+int nmpC6  = 40;
+int nmpC7  = 40;
+int nmpC8  = 43;
+int nmpC9  = 43;
+int nmpC10 = 43;
+int nmpC11 = 43;
+int nmpC12 = 43;
+int nmpC13 = 43;
+
+TUNE(SetRange(20, 64), nmpC5);
+TUNE(SetRange(20, 64), nmpC6);
+TUNE(SetRange(20, 64), nmpC7);
+TUNE(SetRange(20, 64), nmpC8);
+TUNE(SetRange(20, 64), nmpC9);
+TUNE(SetRange(20, 64), nmpC10);
+TUNE(SetRange(20, 64), nmpC11);
+TUNE(SetRange(20, 64), nmpC12);
+TUNE(SetRange(20, 64), nmpC13);
 
 int correction_value(const Worker& w, const Position& pos, const Stack* const ss) {
     const Color us     = pos.side_to_move();
@@ -915,8 +941,12 @@ Value Search::Worker::search(
     {
         assert((ss - 1)->currentMove != Move::null());
 
-        // Null move dynamic reduction based on depth
-        Depth R = 7 + depth / 3;
+        // Null move dynamic reduction based on depth (4-depth bins, 14 entries)
+        const int depth_numerators[] = {43,    43,    43,    43,     43,     nmpC5,  nmpC6,
+                                        nmpC7, nmpC8, nmpC9, nmpC10, nmpC11, nmpC12, nmpC13};
+        assert(depth >= 0);
+        const unsigned idx = std::min(depth / 4, int(std::size(depth_numerators)) - 1);
+        Depth          R   = (896 + depth_numerators[idx] * depth) / 128;
         do_null_move(pos, st, ss);
 
         Value nullValue = -search<NonPV>(pos, ss + 1, -beta, -beta + 1, depth - R, false);
