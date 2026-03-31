@@ -46,6 +46,7 @@
 #include "thread.h"
 #include "timeman.h"
 #include "tt.h"
+#include "tune.h"
 #include "types.h"
 #include "uci.h"
 #include "ucioption.h"
@@ -75,6 +76,10 @@ using SearchedList                  = ValueList<Move, SEARCHEDLIST_CAPACITY>;
 
 // (*Scaler) All tuned parameters at time controls shorter than
 // optimized for require verifications at longer time controls
+
+int nmpDepthCoeff = 43;
+
+TUNE(SetRange(38, 50), nmpDepthCoeff);
 
 int correction_value(const Worker& w, const Position& pos, const Stack* const ss) {
     const Color us     = pos.side_to_move();
@@ -916,7 +921,8 @@ Value Search::Worker::search(
         assert((ss - 1)->currentMove != Move::null());
 
         // Null move dynamic reduction based on depth
-        Depth R = 7 + depth / 3;
+        const unsigned nmpD = depth;
+        Depth          R    = (896 + nmpD * nmpDepthCoeff) / 128;
         do_null_move(pos, st, ss);
 
         Value nullValue = -search<NonPV>(pos, ss + 1, -beta, -beta + 1, depth - R, false);
