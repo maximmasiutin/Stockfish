@@ -46,6 +46,7 @@
 #include "thread.h"
 #include "timeman.h"
 #include "tt.h"
+#include "tune.h"
 #include "types.h"
 #include "uci.h"
 #include "ucioption.h"
@@ -75,6 +76,20 @@ using SearchedList                  = ValueList<Move, SEARCHEDLIST_CAPACITY>;
 
 // (*Scaler) All tuned parameters at time controls shorter than
 // optimized for require verifications at longer time controls
+
+// Per-depth-bin NMP reduction coefficients (4-depth bins).
+// Bins 0-3 (depths 0-15) are hardcoded at 43 (settled).
+// Bin 4 (depths 16-19): tunable, starting at 43.
+// Bin 5 (depths 20-23): tunable, v2 theta 44.6 at 67.6%.
+// Bin 6 (depths 24-27): tunable, v2 theta 36.6 at 67.6%.
+// Bins 7-13: hardcoded at rounded v2 theta values (67.6% completion).
+int nmpC4 = 43;
+int nmpC5 = 45;
+int nmpC6 = 37;
+
+TUNE(SetRange(20, 64), nmpC4);
+TUNE(SetRange(20, 64), nmpC5);
+TUNE(SetRange(20, 64), nmpC6);
 
 int correction_value(const Worker& w, const Position& pos, const Stack* const ss) {
     const Color us     = pos.side_to_move();
@@ -915,8 +930,12 @@ Value Search::Worker::search(
     {
         assert((ss - 1)->currentMove != Move::null());
 
-        // Null move dynamic reduction based on depth
-        Depth R = 7 + depth / 3;
+        // Null move dynamic reduction based on depth (4-depth bins, 14 entries)
+        const int depth_numerators[] = {43, 43, 43, 43, nmpC4, nmpC5, nmpC6,
+                                        37, 41, 44, 45, 39,    41,    45};
+        assert(depth >= 0);
+        const unsigned idx = std::min(depth / 4, int(std::size(depth_numerators)) - 1);
+        Depth          R   = (896 + depth_numerators[idx] * depth) / 128;
         do_null_move(pos, st, ss);
 
         Value nullValue = -search<NonPV>(pos, ss + 1, -beta, -beta + 1, depth - R, false);
