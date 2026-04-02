@@ -101,7 +101,8 @@ Value to_corrected_static_eval(const Value v, const int cv) {
 void update_correction_history(const Position& pos,
                                Stack* const    ss,
                                Search::Worker& workerThread,
-                               const int       bonus) {
+                               const int       bonus,
+                               const int       depth) {
     const Move  m  = (ss - 1)->currentMove;
     const Color us = pos.side_to_move();
 
@@ -118,9 +119,14 @@ void update_correction_history(const Position& pos,
     const Square to     = m.to_sq_unchecked();
     const Piece  pc     = pos.piece_on(to);
     const int    bonus2 = (bonus * 126 / 128) * mask;
-    const int    bonus4 = (bonus * 63 / 128) * mask;
     (*(ss - 2)->continuationCorrectionHistory)[pc][to] << bonus2;
-    (*(ss - 4)->continuationCorrectionHistory)[pc][to] << bonus4;
+
+    // Skip contCorr4 (ss-4) writes at high depth where signal is weakest
+    if (depth < 18)
+    {
+        const int bonus4 = (bonus * 63 / 128) * mask;
+        (*(ss - 4)->continuationCorrectionHistory)[pc][to] << bonus4;
+    }
 }
 
 // Add a small random component to draw evaluations to avoid 3-fold blindness
@@ -1495,7 +1501,7 @@ moves_loop:  // When in check, search starts here
         auto bonus =
           std::clamp(int(bestValue - ss->staticEval) * depth * (bestMove ? 12 : 17) / 128,
                      -CORRECTION_HISTORY_LIMIT / 4, CORRECTION_HISTORY_LIMIT / 4);
-        update_correction_history(pos, ss, *this, 1069 * bonus / 1024);
+        update_correction_history(pos, ss, *this, 1069 * bonus / 1024, depth);
     }
 
     assert(bestValue > -VALUE_INFINITE && bestValue < VALUE_INFINITE);
