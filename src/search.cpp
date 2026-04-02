@@ -114,13 +114,18 @@ void update_correction_history(const Position& pos,
     shared.nonpawn_correction_entry<BLACK>(pos).at(us).nonPawnBlack << bonus * nonPawnWeight / 128;
 
     // Branchless: use mask to zero bonus when move is not ok
-    const int    mask   = int(m.is_ok());
-    const Square to     = m.to_sq_unchecked();
-    const Piece  pc     = pos.piece_on(to);
-    const int    bonus2 = (bonus * 126 / 128) * mask;
-    const int    bonus4 = (bonus * 63 / 128) * mask;
-    (*(ss - 2)->continuationCorrectionHistory)[pc][to] << bonus2;
-    (*(ss - 4)->continuationCorrectionHistory)[pc][to] << bonus4;
+    const int                     mask              = int(m.is_ok());
+    const Square                  to                = m.to_sq_unchecked();
+    const Piece                   pc                = pos.piece_on(to);
+    constexpr int                 D                 = CORRECTION_HISTORY_LIMIT;
+    constexpr std::pair<int, int> contcorrWeights[] = {{-2, 126}, {-4, 63}};
+    for (auto [ofs, mult] : contcorrWeights)
+    {
+        auto& e = (*(ss + ofs)->continuationCorrectionHistory)[pc][to];
+        int   v = int(e);
+        int   b = std::clamp((bonus * mult / 128) * mask * (1536 - std::abs(v)) / 2048, -D, D);
+        e       = std::int16_t(v + b - v * std::abs(b) / D);
+    }
 }
 
 // Add a small random component to draw evaluations to avoid 3-fold blindness
