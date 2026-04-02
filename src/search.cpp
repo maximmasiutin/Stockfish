@@ -78,6 +78,9 @@ using SearchedList                  = ValueList<Move, SEARCHEDLIST_CAPACITY>;
 // (*Scaler) All tuned parameters at time controls shorter than
 // optimized for require verifications at longer time controls
 
+// Per-ply contcorr write weights; read uses uniform sum (index only)
+constexpr std::array<Search::ContcorrBonus, 3> contcorr_plies = {{{2, 128}, {3, 128}, {4, 64}}};
+
 int correction_value(const Worker& w, const Position& pos, const Stack* const ss) {
     const Color us     = pos.side_to_move();
     const auto  m      = (ss - 1)->currentMove;
@@ -86,10 +89,18 @@ int correction_value(const Worker& w, const Position& pos, const Stack* const ss
     const int   micv   = shared.minor_piece_correction_entry(pos).at(us).minor;
     const int   wnpcv  = shared.nonpawn_correction_entry<WHITE>(pos).at(us).nonPawnWhite;
     const int   bnpcv  = shared.nonpawn_correction_entry<BLACK>(pos).at(us).nonPawnBlack;
-    const int   cntcv =
-      m.is_ok() ? (*(ss - 2)->continuationCorrectionHistory)[pos.piece_on(m.to_sq())][m.to_sq()]
-                    + (*(ss - 4)->continuationCorrectionHistory)[pos.piece_on(m.to_sq())][m.to_sq()]
-                  : 8;
+    int         cntcv;
+    if (m.is_ok())
+    {
+        const auto sq = m.to_sq();
+        const auto pc = pos.piece_on(sq);
+
+        cntcv = 0;
+        for (const auto& [i, weight] : contcorr_plies)
+            cntcv += (*(ss - i)->continuationCorrectionHistory)[pc][sq];
+    }
+    else
+        cntcv = 8;
 
     return 12153 * pcv + 8620 * micv + 12355 * (wnpcv + bnpcv) + 7982 * cntcv;
 }
@@ -119,8 +130,9 @@ void update_correction_history(const Position& pos,
     {
         const Square to = m.to_sq();
         const Piece  pc = pos.piece_on(to);
-        (*(ss - 2)->continuationCorrectionHistory)[pc][to] << bonus * 126 / 128;
-        (*(ss - 4)->continuationCorrectionHistory)[pc][to] << bonus * 63 / 128;
+
+        for (const auto [i, weight] : contcorr_plies)
+            (*(ss - i)->continuationCorrectionHistory)[pc][to] << (bonus * weight / 128);
     }
 }
 
