@@ -19,6 +19,7 @@
 #include "nnue_accumulator.h"
 
 #include <cassert>
+#include <cstring>
 #include <cstdint>
 #include <new>
 #include <type_traits>
@@ -359,56 +360,87 @@ struct AccumulatorUpdateContext {
         vec_t      acc[Tiling::NumRegs];
         psqt_vec_t psqt[Tiling::NumPsqtRegs];
 
-        const auto* threatWeights = &featureTransformer.threatWeights[0];
+        const auto* baseWeights = &featureTransformer.threatWeights[0];
 
-        for (IndexType j = 0; j < Dimensions / Tiling::TileHeight; ++j)
+        // Copy fromAcc to toAcc: 2KB, L1-resident, modified in place below.
+        std::memcpy(toAcc.data(), fromAcc.data(), Dimensions * sizeof(toAcc[0]));
+
+        // Entry-first: consume each column fully before moving to the next.
+        // The prefetch of column[i+1] is issued at the start of processing column[i],
+        // giving ~(Dimensions/TileHeight * NumRegs) vector ops of lead time.
+
+        for (int i = 0; i < removed.ssize(); ++i)
         {
-            auto* fromTile = reinterpret_cast<const vec_t*>(&fromAcc[j * Tiling::TileHeight]);
-            auto* toTile   = reinterpret_cast<vec_t*>(&toAcc[j * Tiling::TileHeight]);
-
-            for (IndexType k = 0; k < Tiling::NumRegs; ++k)
-                acc[k] = fromTile[k];
-
-            for (int i = 0; i < removed.ssize(); ++i)
+            const auto* nextCol = (i + 1 < removed.ssize())
+                                  ? baseWeights + Dimensions * removed[i + 1]
+                                : (added.ssize() > 0) ? baseWeights + Dimensions * added[0]
+                                                      : nullptr;
+            if (nextCol != nullptr)
             {
-                size_t       index  = removed[i];
-                const size_t offset = Dimensions * index;
-                auto*        column = reinterpret_cast<const vec_i8_t*>(&threatWeights[offset]);
+                prefetch(nextCol);
+                prefetch(nextCol + Tiling::TileHeight);
+            }
 
+            const size_t colBase = Dimensions * size_t(removed[i]);
+
+            for (IndexType j = 0; j < Dimensions / Tiling::TileHeight; ++j)
+            {
+                const IndexType tileOff = j * Tiling::TileHeight;
+                auto*           tile    = reinterpret_cast<vec_t*>(&toAcc[tileOff]);
+                const auto*     col =
+                  reinterpret_cast<const vec_i8_t*>(baseWeights + colBase + tileOff);
+
+                for (IndexType k = 0; k < Tiling::NumRegs; ++k)
+                    acc[k] = vec_load(&tile[k]);
     #ifdef USE_NEON
                 for (IndexType k = 0; k < Tiling::NumRegs; k += 2)
                 {
-                    acc[k]     = vsubw_s8(acc[k], vget_low_s8(column[k / 2]));
-                    acc[k + 1] = vsubw_high_s8(acc[k + 1], column[k / 2]);
+                    acc[k]     = vsubw_s8(acc[k], vget_low_s8(col[k / 2]));
+                    acc[k + 1] = vsubw_high_s8(acc[k + 1], col[k / 2]);
                 }
     #else
                 for (IndexType k = 0; k < Tiling::NumRegs; ++k)
-                    acc[k] = vec_sub_16(acc[k], vec_convert_8_16(column[k]));
+                    acc[k] = vec_sub_16(acc[k], vec_convert_8_16(col[k]));
     #endif
+                for (IndexType k = 0; k < Tiling::NumRegs; ++k)
+                    vec_store(&tile[k], acc[k]);
+            }
+        }
+
+        for (int i = 0; i < added.ssize(); ++i)
+        {
+            const auto* nextCol =
+              (i + 1 < added.ssize()) ? baseWeights + Dimensions * added[i + 1] : nullptr;
+            if (nextCol != nullptr)
+            {
+                prefetch(nextCol);
+                prefetch(nextCol + Tiling::TileHeight);
             }
 
-            for (int i = 0; i < added.ssize(); ++i)
-            {
-                size_t       index  = added[i];
-                const size_t offset = Dimensions * index;
-                auto*        column = reinterpret_cast<const vec_i8_t*>(&threatWeights[offset]);
+            const size_t colBase = Dimensions * size_t(added[i]);
 
+            for (IndexType j = 0; j < Dimensions / Tiling::TileHeight; ++j)
+            {
+                const IndexType tileOff = j * Tiling::TileHeight;
+                auto*           tile    = reinterpret_cast<vec_t*>(&toAcc[tileOff]);
+                const auto*     col =
+                  reinterpret_cast<const vec_i8_t*>(baseWeights + colBase + tileOff);
+
+                for (IndexType k = 0; k < Tiling::NumRegs; ++k)
+                    acc[k] = vec_load(&tile[k]);
     #ifdef USE_NEON
                 for (IndexType k = 0; k < Tiling::NumRegs; k += 2)
                 {
-                    acc[k]     = vaddw_s8(acc[k], vget_low_s8(column[k / 2]));
-                    acc[k + 1] = vaddw_high_s8(acc[k + 1], column[k / 2]);
+                    acc[k]     = vaddw_s8(acc[k], vget_low_s8(col[k / 2]));
+                    acc[k + 1] = vaddw_high_s8(acc[k + 1], col[k / 2]);
                 }
     #else
                 for (IndexType k = 0; k < Tiling::NumRegs; ++k)
-                    acc[k] = vec_add_16(acc[k], vec_convert_8_16(column[k]));
+                    acc[k] = vec_add_16(acc[k], vec_convert_8_16(col[k]));
     #endif
+                for (IndexType k = 0; k < Tiling::NumRegs; ++k)
+                    vec_store(&tile[k], acc[k]);
             }
-
-            for (IndexType k = 0; k < Tiling::NumRegs; k++)
-                vec_store(&toTile[k], acc[k]);
-
-            threatWeights += Tiling::TileHeight;
         }
 
         for (IndexType j = 0; j < PSQTBuckets / Tiling::PsqtTileHeight; ++j)
