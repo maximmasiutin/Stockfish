@@ -915,8 +915,12 @@ Value Search::Worker::search(
     {
         assert((ss - 1)->currentMove != Move::null());
 
-        // Null move dynamic reduction based on depth
-        Depth R = 7 + depth / 3;
+        // Null move dynamic reduction based on depth (4-depth bins)
+        assert(depth >= 0);
+        constexpr uint8_t nmp_coeffs[] = {43, 43, 43, 43, 43, 45, 36, 37, 43};
+        const unsigned    d            = unsigned(depth);
+        const unsigned    i            = std::min(d / 4, unsigned(std::size(nmp_coeffs) - 1));
+        const Depth       R            = Depth((896 + nmp_coeffs[i] * d) / 128);
         do_null_move(pos, st, ss);
 
         Value nullValue = -search<NonPV>(pos, ss + 1, -beta, -beta + 1, depth - R, false);
