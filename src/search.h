@@ -374,6 +374,11 @@ struct ConthistBonus {
     int weight;
 };
 
+struct ContcorrBonus {
+    int index;
+    int weight;
+};
+
 
 }  // namespace Search
 
