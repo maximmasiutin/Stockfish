@@ -86,10 +86,20 @@ int correction_value(const Worker& w, const Position& pos, const Stack* const ss
     const int   micv   = shared.minor_piece_correction_entry(pos).at(us).minor;
     const int   wnpcv  = shared.nonpawn_correction_entry<WHITE>(pos).at(us).nonPawnWhite;
     const int   bnpcv  = shared.nonpawn_correction_entry<BLACK>(pos).at(us).nonPawnBlack;
-    const int   cntcv =
-      m.is_ok() ? (*(ss - 2)->continuationCorrectionHistory)[pos.piece_on(m.to_sq())][m.to_sq()]
-                    + (*(ss - 4)->continuationCorrectionHistory)[pos.piece_on(m.to_sq())][m.to_sq()]
-                  : 8;
+    int         cntcv;
+    if (m.is_ok())
+    {
+        static constexpr std::array<int, 3> contcorr_plies = {2, 4, 5};
+
+        const auto sq = m.to_sq();
+        const auto pc = pos.piece_on(sq);
+
+        cntcv = 0;
+        for (const auto i : contcorr_plies)
+            cntcv += (*(ss - i)->continuationCorrectionHistory)[pc][sq];
+    }
+    else
+        cntcv = 8;
 
     return 12153 * pcv + 8620 * micv + 12355 * (wnpcv + bnpcv) + 7982 * cntcv;
 }
@@ -117,10 +127,14 @@ void update_correction_history(const Position& pos,
 
     if (m.is_ok())
     {
+        static constexpr std::array<ContcorrBonus, 3> contcorr_write = {
+          {{2, 128}, {4, 64}, {5, 32}}};
+
         const Square to = m.to_sq();
         const Piece  pc = pos.piece_on(to);
-        (*(ss - 2)->continuationCorrectionHistory)[pc][to] << bonus * 126 / 128;
-        (*(ss - 4)->continuationCorrectionHistory)[pc][to] << bonus * 63 / 128;
+
+        for (const auto [i, weight] : contcorr_write)
+            (*(ss - i)->continuationCorrectionHistory)[pc][to] << (bonus * weight / 128);
     }
 }
 
