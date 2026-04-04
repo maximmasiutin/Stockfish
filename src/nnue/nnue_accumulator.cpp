@@ -369,30 +369,15 @@ struct AccumulatorUpdateContext {
             for (IndexType k = 0; k < Tiling::NumRegs; ++k)
                 acc[k] = fromTile[k];
 
-            for (int i = 0; i < removed.ssize(); ++i)
-            {
-                size_t       index  = removed[i];
-                const size_t offset = Dimensions * index;
+            // Single-column primitives for predetermined prefetch dispatch
+            auto pf_col = [&](IndexType index) {
+                prefetch<PrefetchRw::READ, PrefetchLoc::HIGH>(
+                  &threatWeights[Dimensions * std::size_t(index)]);
+            };
+
+            auto add_col = [&](IndexType index) {
+                const size_t offset = Dimensions * std::size_t(index);
                 auto*        column = reinterpret_cast<const vec_i8_t*>(&threatWeights[offset]);
-
-    #ifdef USE_NEON
-                for (IndexType k = 0; k < Tiling::NumRegs; k += 2)
-                {
-                    acc[k]     = vsubw_s8(acc[k], vget_low_s8(column[k / 2]));
-                    acc[k + 1] = vsubw_high_s8(acc[k + 1], column[k / 2]);
-                }
-    #else
-                for (IndexType k = 0; k < Tiling::NumRegs; ++k)
-                    acc[k] = vec_sub_16(acc[k], vec_convert_8_16(column[k]));
-    #endif
-            }
-
-            for (int i = 0; i < added.ssize(); ++i)
-            {
-                size_t       index  = added[i];
-                const size_t offset = Dimensions * index;
-                auto*        column = reinterpret_cast<const vec_i8_t*>(&threatWeights[offset]);
-
     #ifdef USE_NEON
                 for (IndexType k = 0; k < Tiling::NumRegs; k += 2)
                 {
@@ -403,6 +388,240 @@ struct AccumulatorUpdateContext {
                 for (IndexType k = 0; k < Tiling::NumRegs; ++k)
                     acc[k] = vec_add_16(acc[k], vec_convert_8_16(column[k]));
     #endif
+            };
+
+            auto sub_col = [&](IndexType index) {
+                const size_t offset = Dimensions * std::size_t(index);
+                auto*        column = reinterpret_cast<const vec_i8_t*>(&threatWeights[offset]);
+    #ifdef USE_NEON
+                for (IndexType k = 0; k < Tiling::NumRegs; k += 2)
+                {
+                    acc[k]     = vsubw_s8(acc[k], vget_low_s8(column[k / 2]));
+                    acc[k + 1] = vsubw_high_s8(acc[k + 1], column[k / 2]);
+                }
+    #else
+                for (IndexType k = 0; k < Tiling::NumRegs; ++k)
+                    acc[k] = vec_sub_16(acc[k], vec_convert_8_16(column[k]));
+    #endif
+            };
+
+            const int A = added.ssize();
+            const int R = removed.ssize();
+
+            // Counted loop for one direction (add or remove), prefetch 2 ahead
+            auto counted_loop = [&](auto op, auto const& list, int N) {
+                // N >= 4 guaranteed by caller
+                pf_col(list[1]);
+                int i       = 0;
+                int counter = N - 2;
+                do
+                {
+                    op(list[i]);
+                    pf_col(list[i + 2]);  // always valid: i+2 in [2, N-1]
+                    ++i;
+                } while (--counter);  // dec+jnz, no cmp
+                op(list[N - 2]);
+                op(list[N - 1]);
+            };
+
+            // Fast path: A in [0,3] and R in [0,3] -- covers 93% of calls.
+            // All prefetches are predetermined: no conditionals around any prefetch.
+            // Removes execute before adds (matching master order); add prefetches
+            // are interleaved during remove processing for maximum lead time.
+            if (A <= 3 && R <= 3)
+            {
+                switch (A * 4 + R)
+                {
+                // R=0: pure adds
+                case 0 :  // (0,0)
+                    break;
+                case 4 :  // (1,0)
+                    add_col(added[0]);
+                    break;
+                case 8 :  // (2,0)
+                    pf_col(added[1]);
+                    add_col(added[0]);
+                    add_col(added[1]);
+                    break;
+                case 12 :  // (3,0)
+                    pf_col(added[1]);
+                    add_col(added[0]);
+                    pf_col(added[2]);
+                    add_col(added[1]);
+                    add_col(added[2]);
+                    break;
+
+                // R=1: one remove, then adds
+                case 1 :  // (0,1)
+                    sub_col(removed[0]);
+                    break;
+                case 5 :  // (1,1)
+                    pf_col(added[0]);
+                    sub_col(removed[0]);
+                    add_col(added[0]);
+                    break;
+                case 9 :  // (2,1)
+                    pf_col(added[0]);
+                    sub_col(removed[0]);
+                    pf_col(added[1]);
+                    add_col(added[0]);
+                    add_col(added[1]);
+                    break;
+                case 13 :  // (3,1)
+                    pf_col(added[0]);
+                    sub_col(removed[0]);
+                    pf_col(added[1]);
+                    add_col(added[0]);
+                    pf_col(added[2]);
+                    add_col(added[1]);
+                    add_col(added[2]);
+                    break;
+
+                // R=2: two removes, then adds
+                case 2 :  // (0,2)
+                    pf_col(removed[1]);
+                    sub_col(removed[0]);
+                    sub_col(removed[1]);
+                    break;
+                case 6 :  // (1,2)
+                    pf_col(removed[1]);
+                    sub_col(removed[0]);
+                    pf_col(added[0]);
+                    sub_col(removed[1]);
+                    add_col(added[0]);
+                    break;
+                case 10 :  // (2,2)
+                    pf_col(removed[1]);
+                    sub_col(removed[0]);
+                    pf_col(added[0]);
+                    sub_col(removed[1]);
+                    pf_col(added[1]);
+                    add_col(added[0]);
+                    add_col(added[1]);
+                    break;
+                case 14 :  // (3,2)
+                    pf_col(removed[1]);
+                    sub_col(removed[0]);
+                    pf_col(added[0]);
+                    sub_col(removed[1]);
+                    pf_col(added[1]);
+                    add_col(added[0]);
+                    pf_col(added[2]);
+                    add_col(added[1]);
+                    add_col(added[2]);
+                    break;
+
+                // R=3: three removes, then adds
+                case 3 :  // (0,3)
+                    pf_col(removed[1]);
+                    sub_col(removed[0]);
+                    pf_col(removed[2]);
+                    sub_col(removed[1]);
+                    sub_col(removed[2]);
+                    break;
+                case 7 :  // (1,3)
+                    pf_col(removed[1]);
+                    sub_col(removed[0]);
+                    pf_col(removed[2]);
+                    sub_col(removed[1]);
+                    pf_col(added[0]);
+                    sub_col(removed[2]);
+                    add_col(added[0]);
+                    break;
+                case 11 :  // (2,3)
+                    pf_col(removed[1]);
+                    sub_col(removed[0]);
+                    pf_col(removed[2]);
+                    sub_col(removed[1]);
+                    pf_col(added[0]);
+                    sub_col(removed[2]);
+                    pf_col(added[1]);
+                    add_col(added[0]);
+                    add_col(added[1]);
+                    break;
+                case 15 :  // (3,3)
+                    pf_col(removed[1]);
+                    sub_col(removed[0]);
+                    pf_col(removed[2]);
+                    sub_col(removed[1]);
+                    pf_col(added[0]);
+                    sub_col(removed[2]);
+                    pf_col(added[1]);
+                    add_col(added[0]);
+                    pf_col(added[2]);
+                    add_col(added[1]);
+                    add_col(added[2]);
+                    break;
+                }
+            }
+            else
+            {
+                // General path: removes first with bridge prefetch, then adds.
+                // Handles A>3 or R>3 (7% of calls).
+
+                // Remove phase with bridge prefetch into add phase
+                if (R == 0)
+                    pf_col(added[0]);
+                else if (R == 1)
+                {
+                    pf_col(added[0]);
+                    sub_col(removed[0]);
+                }
+                else if (R == 2)
+                {
+                    pf_col(removed[1]);
+                    sub_col(removed[0]);
+                    pf_col(added[0]);
+                    sub_col(removed[1]);
+                    pf_col(added[1]);
+                }
+                else if (R == 3)
+                {
+                    pf_col(removed[1]);
+                    sub_col(removed[0]);
+                    pf_col(removed[2]);
+                    sub_col(removed[1]);
+                    pf_col(added[0]);
+                    sub_col(removed[2]);
+                    pf_col(added[1]);
+                }
+                else
+                {
+                    // R >= 4: counted loop with bridge in tail
+                    pf_col(removed[1]);
+                    int i       = 0;
+                    int counter = R - 2;
+                    do
+                    {
+                        sub_col(removed[i]);
+                        pf_col(removed[i + 2]);
+                        ++i;
+                    } while (--counter);
+                    pf_col(added[0]);
+                    sub_col(removed[R - 2]);
+                    pf_col(added[1]);
+                    sub_col(removed[R - 1]);
+                }
+
+                // Add phase (a[0], a[1] already prefetched by remove bridge)
+                if (A == 1)
+                    add_col(added[0]);
+                else if (A == 2)
+                {
+                    pf_col(added[1]);
+                    add_col(added[0]);
+                    add_col(added[1]);
+                }
+                else if (A == 3)
+                {
+                    pf_col(added[1]);
+                    add_col(added[0]);
+                    pf_col(added[2]);
+                    add_col(added[1]);
+                    add_col(added[2]);
+                }
+                else if (A >= 4)
+                    counted_loop(add_col, added, A);
             }
 
             for (IndexType k = 0; k < Tiling::NumRegs; k++)
