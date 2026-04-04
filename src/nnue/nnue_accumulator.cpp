@@ -369,10 +369,45 @@ struct AccumulatorUpdateContext {
             for (IndexType k = 0; k < Tiling::NumRegs; ++k)
                 acc[k] = fromTile[k];
 
-            for (int i = 0; i < removed.ssize(); ++i)
+            // Process removed columns two at a time with L2 prefetch of next pair
+            int i = 0;
+            for (; i + 1 < removed.ssize(); i += 2)
             {
-                size_t       index  = removed[i];
-                const size_t offset = Dimensions * index;
+                const size_t off0 = Dimensions * size_t(removed[i]);
+                const size_t off1 = Dimensions * size_t(removed[i + 1]);
+                auto*        col0 = reinterpret_cast<const vec_i8_t*>(&threatWeights[off0]);
+                auto*        col1 = reinterpret_cast<const vec_i8_t*>(&threatWeights[off1]);
+
+                // Prefetch next pair's columns into L2
+                if (i + 2 < removed.ssize())
+                    prefetch<PrefetchRw::READ, PrefetchLoc::LOW>(
+                      &threatWeights[Dimensions * size_t(removed[i + 2])]);
+                if (i + 3 < removed.ssize())
+                    prefetch<PrefetchRw::READ, PrefetchLoc::LOW>(
+                      &threatWeights[Dimensions * size_t(removed[i + 3])]);
+
+    #ifdef USE_NEON
+                for (IndexType k = 0; k < Tiling::NumRegs; k += 2)
+                {
+                    auto w0lo  = vmovl_s8(vget_low_s8(col0[k / 2]));
+                    auto w1lo  = vmovl_s8(vget_low_s8(col1[k / 2]));
+                    acc[k]     = vec_sub_16(vec_sub_16(acc[k], w0lo), w1lo);
+                    auto w0hi  = vmovl_high_s8(col0[k / 2]);
+                    auto w1hi  = vmovl_high_s8(col1[k / 2]);
+                    acc[k + 1] = vec_sub_16(vec_sub_16(acc[k + 1], w0hi), w1hi);
+                }
+    #else
+                for (IndexType k = 0; k < Tiling::NumRegs; ++k)
+                {
+                    auto w0 = vec_convert_8_16(col0[k]);
+                    auto w1 = vec_convert_8_16(col1[k]);
+                    acc[k]  = vec_sub_16(vec_sub_16(acc[k], w0), w1);
+                }
+    #endif
+            }
+            for (; i < removed.ssize(); ++i)
+            {
+                const size_t offset = Dimensions * size_t(removed[i]);
                 auto*        column = reinterpret_cast<const vec_i8_t*>(&threatWeights[offset]);
 
     #ifdef USE_NEON
@@ -387,10 +422,53 @@ struct AccumulatorUpdateContext {
     #endif
             }
 
-            for (int i = 0; i < added.ssize(); ++i)
+            // Prefetch first added columns into L2
+            if (added.ssize() > 0)
+                prefetch<PrefetchRw::READ, PrefetchLoc::LOW>(
+                  &threatWeights[Dimensions * size_t(added[0])]);
+            if (added.ssize() > 1)
+                prefetch<PrefetchRw::READ, PrefetchLoc::LOW>(
+                  &threatWeights[Dimensions * size_t(added[1])]);
+
+            // Process added columns two at a time with L2 prefetch of next pair
+            i = 0;
+            for (; i + 1 < added.ssize(); i += 2)
             {
-                size_t       index  = added[i];
-                const size_t offset = Dimensions * index;
+                const size_t off0 = Dimensions * size_t(added[i]);
+                const size_t off1 = Dimensions * size_t(added[i + 1]);
+                auto*        col0 = reinterpret_cast<const vec_i8_t*>(&threatWeights[off0]);
+                auto*        col1 = reinterpret_cast<const vec_i8_t*>(&threatWeights[off1]);
+
+                // Prefetch next pair's columns into L2
+                if (i + 2 < added.ssize())
+                    prefetch<PrefetchRw::READ, PrefetchLoc::LOW>(
+                      &threatWeights[Dimensions * size_t(added[i + 2])]);
+                if (i + 3 < added.ssize())
+                    prefetch<PrefetchRw::READ, PrefetchLoc::LOW>(
+                      &threatWeights[Dimensions * size_t(added[i + 3])]);
+
+    #ifdef USE_NEON
+                for (IndexType k = 0; k < Tiling::NumRegs; k += 2)
+                {
+                    auto w0lo  = vmovl_s8(vget_low_s8(col0[k / 2]));
+                    auto w1lo  = vmovl_s8(vget_low_s8(col1[k / 2]));
+                    acc[k]     = vec_add_16(vec_add_16(acc[k], w0lo), w1lo);
+                    auto w0hi  = vmovl_high_s8(col0[k / 2]);
+                    auto w1hi  = vmovl_high_s8(col1[k / 2]);
+                    acc[k + 1] = vec_add_16(vec_add_16(acc[k + 1], w0hi), w1hi);
+                }
+    #else
+                for (IndexType k = 0; k < Tiling::NumRegs; ++k)
+                {
+                    auto w0 = vec_convert_8_16(col0[k]);
+                    auto w1 = vec_convert_8_16(col1[k]);
+                    acc[k]  = vec_add_16(vec_add_16(acc[k], w0), w1);
+                }
+    #endif
+            }
+            for (; i < added.ssize(); ++i)
+            {
+                const size_t offset = Dimensions * size_t(added[i]);
                 auto*        column = reinterpret_cast<const vec_i8_t*>(&threatWeights[offset]);
 
     #ifdef USE_NEON
@@ -421,21 +499,48 @@ struct AccumulatorUpdateContext {
             for (IndexType k = 0; k < Tiling::NumPsqtRegs; ++k)
                 psqt[k] = fromTilePsqt[k];
 
-            for (int i = 0; i < removed.ssize(); ++i)
+            int pi = 0;
+            for (; pi + 1 < removed.ssize(); pi += 2)
             {
-                size_t       index      = removed[i];
-                const size_t offset     = PSQTBuckets * index + j * Tiling::PsqtTileHeight;
-                auto*        columnPsqt = reinterpret_cast<const psqt_vec_t*>(
+                const size_t off0 = PSQTBuckets * size_t(removed[pi]) + j * Tiling::PsqtTileHeight;
+                const size_t off1 =
+                  PSQTBuckets * size_t(removed[pi + 1]) + j * Tiling::PsqtTileHeight;
+                auto* pCol0 =
+                  reinterpret_cast<const psqt_vec_t*>(&featureTransformer.threatPsqtWeights[off0]);
+                auto* pCol1 =
+                  reinterpret_cast<const psqt_vec_t*>(&featureTransformer.threatPsqtWeights[off1]);
+
+                for (std::size_t k = 0; k < Tiling::NumPsqtRegs; ++k)
+                    psqt[k] = vec_sub_psqt_32(vec_sub_psqt_32(psqt[k], pCol0[k]), pCol1[k]);
+            }
+            for (; pi < removed.ssize(); ++pi)
+            {
+                const size_t offset =
+                  PSQTBuckets * size_t(removed[pi]) + j * Tiling::PsqtTileHeight;
+                auto* columnPsqt = reinterpret_cast<const psqt_vec_t*>(
                   &featureTransformer.threatPsqtWeights[offset]);
 
                 for (std::size_t k = 0; k < Tiling::NumPsqtRegs; ++k)
                     psqt[k] = vec_sub_psqt_32(psqt[k], columnPsqt[k]);
             }
 
-            for (int i = 0; i < added.ssize(); ++i)
+            pi = 0;
+            for (; pi + 1 < added.ssize(); pi += 2)
             {
-                size_t       index      = added[i];
-                const size_t offset     = PSQTBuckets * index + j * Tiling::PsqtTileHeight;
+                const size_t off0 = PSQTBuckets * size_t(added[pi]) + j * Tiling::PsqtTileHeight;
+                const size_t off1 =
+                  PSQTBuckets * size_t(added[pi + 1]) + j * Tiling::PsqtTileHeight;
+                auto* pCol0 =
+                  reinterpret_cast<const psqt_vec_t*>(&featureTransformer.threatPsqtWeights[off0]);
+                auto* pCol1 =
+                  reinterpret_cast<const psqt_vec_t*>(&featureTransformer.threatPsqtWeights[off1]);
+
+                for (std::size_t k = 0; k < Tiling::NumPsqtRegs; ++k)
+                    psqt[k] = vec_add_psqt_32(vec_add_psqt_32(psqt[k], pCol0[k]), pCol1[k]);
+            }
+            for (; pi < added.ssize(); ++pi)
+            {
+                const size_t offset = PSQTBuckets * size_t(added[pi]) + j * Tiling::PsqtTileHeight;
                 auto*        columnPsqt = reinterpret_cast<const psqt_vec_t*>(
                   &featureTransformer.threatPsqtWeights[offset]);
 
