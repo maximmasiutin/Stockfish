@@ -26,6 +26,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
+#include <iomanip>
 #include <initializer_list>
 #include <iostream>
 #include <list>
@@ -66,6 +67,33 @@ namespace {
 
 constexpr int SEARCHEDLIST_CAPACITY = 32;
 using SearchedList                  = ValueList<Move, SEARCHEDLIST_CAPACITY>;
+
+// NMP depth instrumentation: global atomic counters for NMP entries by depth
+constexpr int                                    NMP_MAX_DEPTH = 128;
+std::array<std::atomic<uint64_t>, NMP_MAX_DEPTH> nmpDepthCount{};
+
+void print_nmp_depth_report() {
+    uint64_t total = 0;
+    for (int d = 0; d < NMP_MAX_DEPTH; d++)
+        total += nmpDepthCount[d].load(std::memory_order_relaxed);
+    if (total == 0)
+        return;
+    std::cout << "NMP depth distribution (total=" << total << "):" << std::endl;
+    for (int d = 0; d < NMP_MAX_DEPTH; d++)
+    {
+        uint64_t cnt = nmpDepthCount[d].load(std::memory_order_relaxed);
+        if (cnt == 0)
+            continue;
+        double pct = 100.0 * double(cnt) / double(total);
+        std::cout << "  d" << d << ": " << cnt << " (" << std::fixed << std::setprecision(2) << pct
+                  << "%)" << std::endl;
+    }
+}
+
+void reset_nmp_depth_counters() {
+    for (int d = 0; d < NMP_MAX_DEPTH; d++)
+        nmpDepthCount[d].store(0, std::memory_order_relaxed);
+}
 
 // (*Scalers):
 // The values with Scaler asterisks have proven non-linear scaling.
@@ -183,6 +211,7 @@ void Search::Worker::start_searching() {
 
     accumulatorStack.reset();
     lastIterationPV.clear();
+    reset_nmp_depth_counters();
 
     // Non-main threads go directly to iterative_deepening()
     if (!is_mainthread())
@@ -252,6 +281,9 @@ void Search::Worker::start_searching() {
     // In rare cases, pv() may change the ponder move through syzygy_extend_pv().
     if (bestThread->rootMoves[0].pv.size() > 1)
         ponder = UCIEngine::move(bestThread->rootMoves[0].pv[1], rootPos.is_chess960());
+
+    // NMP depth instrumentation: print report before bestmove
+    print_nmp_depth_report();
 
     auto bestmove = UCIEngine::move(bestThread->rootMoves[0].pv[0], rootPos.is_chess960());
     main_manager()->updates.onBestmove(bestmove, ponder);
@@ -911,6 +943,10 @@ Value Search::Worker::search(
         && pos.non_pawn_material(us) && ss->ply >= nmpMinPly && !is_loss(beta))
     {
         assert((ss - 1)->currentMove != Move::null());
+
+        // NMP depth instrumentation
+        if (depth >= 0 && depth < NMP_MAX_DEPTH)
+            nmpDepthCount[size_t(depth)].fetch_add(1, std::memory_order_relaxed);
 
         // Null move dynamic reduction based on depth
         Depth R = 7 + depth / 3;
