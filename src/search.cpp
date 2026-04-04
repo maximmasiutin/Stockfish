@@ -46,6 +46,7 @@
 #include "thread.h"
 #include "timeman.h"
 #include "tt.h"
+#include "tune.h"
 #include "types.h"
 #include "uci.h"
 #include "ucioption.h"
@@ -66,6 +67,11 @@ namespace {
 
 constexpr int SEARCHEDLIST_CAPACITY = 32;
 using SearchedList                  = ValueList<Move, SEARCHEDLIST_CAPACITY>;
+
+// NMP depth-lookup: SPSA-tunable reductions for depths 6-7
+int nmpR6 = 9;
+int nmpR7 = 9;
+TUNE(SetRange(3, 18), nmpR6, nmpR7, SetDefaultRange);
 
 // (*Scalers):
 // The values with Scaler asterisks have proven non-linear scaling.
@@ -912,8 +918,15 @@ Value Search::Worker::search(
     {
         assert((ss - 1)->currentMove != Move::null());
 
-        // Null move dynamic reduction based on depth
-        Depth R = 7 + depth / 3;
+        // Null move dynamic reduction based on depth (d6-26 lookup, d6-7 SPSA-tunable)
+        Depth R;
+        {
+            constexpr int               offs = 6;
+            const std::array<Depth, 21> rv   = {nmpR6, nmpR7, 9,  11, 10, 10, 11, 11, 11, 12, 12,
+                                                12,    14,    14, 14, 13, 14, 15, 12, 14, 13};
+            R = (depth >= offs && depth < offs + int(rv.size())) ? rv[size_t(depth - offs)]
+                                                                 : 7 + depth / 3;
+        }
         do_null_move(pos, st, ss);
 
         Value nullValue = -search<NonPV>(pos, ss + 1, -beta, -beta + 1, depth - R, false);
