@@ -912,8 +912,12 @@ Value Search::Worker::search(
     {
         assert((ss - 1)->currentMove != Move::null());
 
-        // Null move dynamic reduction based on depth
-        Depth R = 7 + depth / 3;
+        // Null move dynamic reduction based on depth (per-depth lookup for d0-27)
+        assert(depth >= 0);
+        constexpr std::array<Depth, 28> rv = {7,  7,  6,  8,  8,  8,  9,  9,  9,  11,
+                                              10, 10, 11, 11, 11, 12, 12, 12, 14, 14,
+                                              14, 13, 14, 15, 12, 14, 13, 15};
+        Depth R = (depth < int(rv.size())) ? rv[size_t(depth)] : 7 + depth / 3;
         do_null_move(pos, st, ss);
 
         Value nullValue = -search<NonPV>(pos, ss + 1, -beta, -beta + 1, depth - R, false);
