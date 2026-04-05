@@ -307,6 +307,44 @@ void fused_row_reduce(const ElementType* in, ElementType* out, const Ts* const..
           vecIn[i], reinterpret_cast<const typename VectorWrapper::type*>(rows)[i]...);
 }
 
+// Noinline column add/sub for threat accumulator to prevent code bloat
+// from lambda inlining in the predetermined dispatch switch.
+template<int NumRegs>
+sf_noinline void
+threat_sub_column(vec_t* acc, const int8_t* threatWeights, IndexType index, IndexType dims) {
+    const std::size_t offset = dims * std::size_t(index);
+    auto*             column = reinterpret_cast<const vec_i8_t*>(&threatWeights[offset]);
+
+#ifdef USE_NEON
+    for (IndexType k = 0; k < NumRegs; k += 2)
+    {
+        acc[k]     = vsubw_s8(acc[k], vget_low_s8(column[k / 2]));
+        acc[k + 1] = vsubw_high_s8(acc[k + 1], column[k / 2]);
+    }
+#else
+    for (int k = 0; k < NumRegs; ++k)
+        acc[k] = vec_sub_16(acc[k], vec_convert_8_16(column[k]));
+#endif
+}
+
+template<int NumRegs>
+sf_noinline void
+threat_add_column(vec_t* acc, const int8_t* threatWeights, IndexType index, IndexType dims) {
+    const std::size_t offset = dims * std::size_t(index);
+    auto*             column = reinterpret_cast<const vec_i8_t*>(&threatWeights[offset]);
+
+#ifdef USE_NEON
+    for (IndexType k = 0; k < NumRegs; k += 2)
+    {
+        acc[k]     = vaddw_s8(acc[k], vget_low_s8(column[k / 2]));
+        acc[k + 1] = vaddw_high_s8(acc[k + 1], column[k / 2]);
+    }
+#else
+    for (int k = 0; k < NumRegs; ++k)
+        acc[k] = vec_add_16(acc[k], vec_convert_8_16(column[k]));
+#endif
+}
+
 template<typename FeatureSet, IndexType Dimensions>
 struct AccumulatorUpdateContext {
     Color                                 perspective;
@@ -346,8 +384,8 @@ struct AccumulatorUpdateContext {
           to_psqt_weight_vector(indices)...);
     }
 
-    void apply(const typename FeatureSet::IndexList& added,
-               const typename FeatureSet::IndexList& removed) {
+    sf_noinline void apply(const typename FeatureSet::IndexList& added,
+                           const typename FeatureSet::IndexList& removed) {
         const auto& fromAcc = from.template acc<Dimensions>().accumulation[perspective];
         auto&       toAcc   = to.template acc<Dimensions>().accumulation[perspective];
 
@@ -369,40 +407,161 @@ struct AccumulatorUpdateContext {
             for (IndexType k = 0; k < Tiling::NumRegs; ++k)
                 acc[k] = fromTile[k];
 
-            for (int i = 0; i < removed.ssize(); ++i)
-            {
-                size_t       index  = removed[i];
-                const size_t offset = Dimensions * index;
-                auto*        column = reinterpret_cast<const vec_i8_t*>(&threatWeights[offset]);
+            constexpr int NR = Tiling::NumRegs;
 
-    #ifdef USE_NEON
-                for (IndexType k = 0; k < Tiling::NumRegs; k += 2)
+            auto sub = [&](IndexType idx) {
+                threat_sub_column<NR>(acc, threatWeights, idx, Dimensions);
+            };
+            auto add = [&](IndexType idx) {
+                threat_add_column<NR>(acc, threatWeights, idx, Dimensions);
+            };
+            auto pf = [&](IndexType idx) {
+                prefetch(&threatWeights[Dimensions * std::size_t(idx)]);
+            };
+
+            const int A = added.ssize();
+            const int R = removed.ssize();
+
+            if (A <= 3 && R <= 3)
+            {
+                switch (A * 4 + R)
                 {
-                    acc[k]     = vsubw_s8(acc[k], vget_low_s8(column[k / 2]));
-                    acc[k + 1] = vsubw_high_s8(acc[k + 1], column[k / 2]);
+                case 0 :
+                    break;
+                case 4 :  // (1,0)
+                    add(added[0]);
+                    break;
+                case 8 :  // (2,0)
+                    pf(added[1]);
+                    add(added[0]);
+                    add(added[1]);
+                    break;
+                case 12 :  // (3,0)
+                    pf(added[1]);
+                    add(added[0]);
+                    pf(added[2]);
+                    add(added[1]);
+                    add(added[2]);
+                    break;
+                case 1 :  // (0,1)
+                    sub(removed[0]);
+                    break;
+                case 5 :  // (1,1)
+                    pf(added[0]);
+                    sub(removed[0]);
+                    add(added[0]);
+                    break;
+                case 9 :  // (2,1)
+                    pf(added[0]);
+                    sub(removed[0]);
+                    pf(added[1]);
+                    add(added[0]);
+                    add(added[1]);
+                    break;
+                case 13 :  // (3,1)
+                    pf(added[0]);
+                    sub(removed[0]);
+                    pf(added[1]);
+                    add(added[0]);
+                    pf(added[2]);
+                    add(added[1]);
+                    add(added[2]);
+                    break;
+                case 2 :  // (0,2)
+                    pf(removed[1]);
+                    sub(removed[0]);
+                    sub(removed[1]);
+                    break;
+                case 6 :  // (1,2)
+                    pf(removed[1]);
+                    sub(removed[0]);
+                    pf(added[0]);
+                    sub(removed[1]);
+                    add(added[0]);
+                    break;
+                case 10 :  // (2,2)
+                    pf(removed[1]);
+                    sub(removed[0]);
+                    pf(added[0]);
+                    sub(removed[1]);
+                    pf(added[1]);
+                    add(added[0]);
+                    add(added[1]);
+                    break;
+                case 14 :  // (3,2)
+                    pf(removed[1]);
+                    sub(removed[0]);
+                    pf(added[0]);
+                    sub(removed[1]);
+                    pf(added[1]);
+                    add(added[0]);
+                    pf(added[2]);
+                    add(added[1]);
+                    add(added[2]);
+                    break;
+                case 3 :  // (0,3)
+                    pf(removed[1]);
+                    sub(removed[0]);
+                    pf(removed[2]);
+                    sub(removed[1]);
+                    sub(removed[2]);
+                    break;
+                case 7 :  // (1,3)
+                    pf(removed[1]);
+                    sub(removed[0]);
+                    pf(removed[2]);
+                    sub(removed[1]);
+                    pf(added[0]);
+                    sub(removed[2]);
+                    add(added[0]);
+                    break;
+                case 11 :  // (2,3)
+                    pf(removed[1]);
+                    sub(removed[0]);
+                    pf(removed[2]);
+                    sub(removed[1]);
+                    pf(added[0]);
+                    sub(removed[2]);
+                    pf(added[1]);
+                    add(added[0]);
+                    add(added[1]);
+                    break;
+                case 15 :  // (3,3)
+                    pf(removed[1]);
+                    sub(removed[0]);
+                    pf(removed[2]);
+                    sub(removed[1]);
+                    pf(added[0]);
+                    sub(removed[2]);
+                    pf(added[1]);
+                    add(added[0]);
+                    pf(added[2]);
+                    add(added[1]);
+                    add(added[2]);
+                    break;
                 }
-    #else
-                for (IndexType k = 0; k < Tiling::NumRegs; ++k)
-                    acc[k] = vec_sub_16(acc[k], vec_convert_8_16(column[k]));
-    #endif
             }
-
-            for (int i = 0; i < added.ssize(); ++i)
+            else
             {
-                size_t       index  = added[i];
-                const size_t offset = Dimensions * index;
-                auto*        column = reinterpret_cast<const vec_i8_t*>(&threatWeights[offset]);
-
-    #ifdef USE_NEON
-                for (IndexType k = 0; k < Tiling::NumRegs; k += 2)
+                // Remove phase: branch-free loop body
+                for (int i = 0; i + 1 < R; ++i)
                 {
-                    acc[k]     = vaddw_s8(acc[k], vget_low_s8(column[k / 2]));
-                    acc[k + 1] = vaddw_high_s8(acc[k + 1], column[k / 2]);
+                    pf(removed[i + 1]);
+                    sub(removed[i]);
                 }
-    #else
-                for (IndexType k = 0; k < Tiling::NumRegs; ++k)
-                    acc[k] = vec_add_16(acc[k], vec_convert_8_16(column[k]));
-    #endif
+                if (A > 0)
+                    pf(added[0]);
+                if (R > 0)
+                    sub(removed[R - 1]);
+
+                // Add phase: branch-free loop body
+                for (int i = 0; i + 1 < A; ++i)
+                {
+                    pf(added[i + 1]);
+                    add(added[i]);
+                }
+                if (A > 0)
+                    add(added[A - 1]);
             }
 
             for (IndexType k = 0; k < Tiling::NumRegs; k++)
