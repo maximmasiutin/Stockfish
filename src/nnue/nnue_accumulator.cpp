@@ -361,6 +361,99 @@ struct AccumulatorUpdateContext {
 
         const auto* threatWeights = &featureTransformer.threatWeights[0];
 
+        prefetch(fromAcc.data());
+
+        if (added.ssize() <= 3 && removed.ssize() <= 3)
+        {
+            auto pf = [&](IndexType idx) {
+                prefetch(&threatWeights[Dimensions * std::size_t(idx)]);
+            };
+
+            switch (added.ssize() * 4 + removed.ssize())
+            {
+            case 0 :
+                break;
+            case 1 :
+                pf(removed[0]);
+                break;
+            case 2 :
+                pf(removed[0]);
+                pf(removed[1]);
+                break;
+            case 3 :
+                pf(removed[0]);
+                pf(removed[1]);
+                pf(removed[2]);
+                break;
+            case 4 :
+                pf(added[0]);
+                break;
+            case 5 :
+                pf(removed[0]);
+                pf(added[0]);
+                break;
+            case 6 :
+                pf(removed[0]);
+                pf(removed[1]);
+                pf(added[0]);
+                break;
+            case 7 :
+                pf(removed[0]);
+                pf(removed[1]);
+                pf(removed[2]);
+                pf(added[0]);
+                break;
+            case 8 :
+                pf(added[0]);
+                pf(added[1]);
+                break;
+            case 9 :
+                pf(removed[0]);
+                pf(added[0]);
+                pf(added[1]);
+                break;
+            case 10 :
+                pf(removed[0]);
+                pf(removed[1]);
+                pf(added[0]);
+                pf(added[1]);
+                break;
+            case 11 :
+                pf(removed[0]);
+                pf(removed[1]);
+                pf(removed[2]);
+                pf(added[0]);
+                pf(added[1]);
+                break;
+            case 12 :
+                pf(added[0]);
+                pf(added[1]);
+                pf(added[2]);
+                break;
+            case 13 :
+                pf(removed[0]);
+                pf(added[0]);
+                pf(added[1]);
+                pf(added[2]);
+                break;
+            case 14 :
+                pf(removed[0]);
+                pf(removed[1]);
+                pf(added[0]);
+                pf(added[1]);
+                pf(added[2]);
+                break;
+            case 15 :
+                pf(removed[0]);
+                pf(removed[1]);
+                pf(removed[2]);
+                pf(added[0]);
+                pf(added[1]);
+                pf(added[2]);
+                break;
+            }
+        }
+
         for (IndexType j = 0; j < Dimensions / Tiling::TileHeight; ++j)
         {
             auto* fromTile = reinterpret_cast<const vec_t*>(&fromAcc[j * Tiling::TileHeight]);
