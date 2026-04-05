@@ -524,10 +524,17 @@ void double_inc_update(Color                                                   p
 
     if (removedSize == 2)
     {
+        prefetch(&featureTransformer.weights[added[0] * TransformedFeatureDimensions]);
+        prefetch(&featureTransformer.weights[removed[0] * TransformedFeatureDimensions]);
+        prefetch(&featureTransformer.weights[removed[1] * TransformedFeatureDimensions]);
         updateContext.template apply<Add, Sub, Sub>(added[0], removed[0], removed[1]);
     }
     else
     {
+        prefetch(&featureTransformer.weights[added[0] * TransformedFeatureDimensions]);
+        prefetch(&featureTransformer.weights[removed[0] * TransformedFeatureDimensions]);
+        prefetch(&featureTransformer.weights[removed[1] * TransformedFeatureDimensions]);
+        prefetch(&featureTransformer.weights[removed[2] * TransformedFeatureDimensions]);
         updateContext.template apply<Add, Sub, Sub, Sub>(added[0], removed[0], removed[1],
                                                          removed[2]);
     }
@@ -632,21 +639,33 @@ void update_accumulator_incremental(
         if ((Forward && removedSize == 1) || (!Forward && addedSize == 1))
         {
             assert(addedSize == 1 && removedSize == 1);
+            prefetch(&featureTransformer.weights[added[0] * TransformedFeatureDimensions]);
+            prefetch(&featureTransformer.weights[removed[0] * TransformedFeatureDimensions]);
             updateContext.template apply<Add, Sub>(added[0], removed[0]);
         }
         else if (Forward && addedSize == 1)
         {
             assert(removedSize == 2);
+            prefetch(&featureTransformer.weights[added[0] * TransformedFeatureDimensions]);
+            prefetch(&featureTransformer.weights[removed[0] * TransformedFeatureDimensions]);
+            prefetch(&featureTransformer.weights[removed[1] * TransformedFeatureDimensions]);
             updateContext.template apply<Add, Sub, Sub>(added[0], removed[0], removed[1]);
         }
         else if (!Forward && removedSize == 1)
         {
             assert(addedSize == 2);
+            prefetch(&featureTransformer.weights[added[0] * TransformedFeatureDimensions]);
+            prefetch(&featureTransformer.weights[added[1] * TransformedFeatureDimensions]);
+            prefetch(&featureTransformer.weights[removed[0] * TransformedFeatureDimensions]);
             updateContext.template apply<Add, Add, Sub>(added[0], added[1], removed[0]);
         }
         else
         {
             assert(addedSize == 2 && removedSize == 2);
+            prefetch(&featureTransformer.weights[added[0] * TransformedFeatureDimensions]);
+            prefetch(&featureTransformer.weights[added[1] * TransformedFeatureDimensions]);
+            prefetch(&featureTransformer.weights[removed[0] * TransformedFeatureDimensions]);
+            prefetch(&featureTransformer.weights[removed[1] * TransformedFeatureDimensions]);
             updateContext.template apply<Add, Add, Sub, Sub>(added[0], added[1], removed[0],
                                                              removed[1]);
         }
