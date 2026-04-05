@@ -491,11 +491,14 @@ void move_to_front(std::vector<T>& vec, Predicate pred) {
 
 #if defined(__GNUC__)
     #define sf_always_inline __attribute__((always_inline))
+    #define sf_noinline __attribute__((noinline))
 #elif defined(_MSC_VER)
     #define sf_always_inline __forceinline
+    #define sf_noinline __declspec(noinline)
 #else
     // do nothing for other compilers
     #define sf_always_inline
+    #define sf_noinline
 #endif
 
 #if defined(__clang__)

@@ -346,6 +346,107 @@ struct AccumulatorUpdateContext {
           to_psqt_weight_vector(indices)...);
     }
 
+    sf_noinline void prefetch_columns(const typename FeatureSet::IndexList& added,
+                                      const typename FeatureSet::IndexList& removed,
+                                      const int8_t*                         threatWeights) {
+        const auto& ad = added;
+        const auto& rm = removed;
+        const int   A  = ad.ssize();
+        const int   R  = rm.ssize();
+
+        prefetch(from.template acc<Dimensions>().accumulation[perspective].data());
+
+        if (A <= 3 && R <= 3)
+        {
+            auto pf = [&](IndexType idx) {
+                prefetch(&threatWeights[Dimensions * std::size_t(idx)]);
+            };
+            switch (A * 4 + R)
+            {
+            case 0 :
+                break;
+            case 1 :
+                pf(rm[0]);
+                break;
+            case 2 :
+                pf(rm[0]);
+                pf(rm[1]);
+                break;
+            case 3 :
+                pf(rm[0]);
+                pf(rm[1]);
+                pf(rm[2]);
+                break;
+            case 4 :
+                pf(ad[0]);
+                break;
+            case 5 :
+                pf(rm[0]);
+                pf(ad[0]);
+                break;
+            case 6 :
+                pf(rm[0]);
+                pf(rm[1]);
+                pf(ad[0]);
+                break;
+            case 7 :
+                pf(rm[0]);
+                pf(rm[1]);
+                pf(rm[2]);
+                pf(ad[0]);
+                break;
+            case 8 :
+                pf(ad[0]);
+                pf(ad[1]);
+                break;
+            case 9 :
+                pf(rm[0]);
+                pf(ad[0]);
+                pf(ad[1]);
+                break;
+            case 10 :
+                pf(rm[0]);
+                pf(rm[1]);
+                pf(ad[0]);
+                pf(ad[1]);
+                break;
+            case 11 :
+                pf(rm[0]);
+                pf(rm[1]);
+                pf(rm[2]);
+                pf(ad[0]);
+                pf(ad[1]);
+                break;
+            case 12 :
+                pf(ad[0]);
+                pf(ad[1]);
+                pf(ad[2]);
+                break;
+            case 13 :
+                pf(rm[0]);
+                pf(ad[0]);
+                pf(ad[1]);
+                pf(ad[2]);
+                break;
+            case 14 :
+                pf(rm[0]);
+                pf(rm[1]);
+                pf(ad[0]);
+                pf(ad[1]);
+                pf(ad[2]);
+                break;
+            case 15 :
+                pf(rm[0]);
+                pf(rm[1]);
+                pf(rm[2]);
+                pf(ad[0]);
+                pf(ad[1]);
+                pf(ad[2]);
+                break;
+            }
+        }
+    }
+
     void apply(const typename FeatureSet::IndexList& added,
                const typename FeatureSet::IndexList& removed) {
         const auto& fromAcc = from.template acc<Dimensions>().accumulation[perspective];
@@ -360,6 +461,12 @@ struct AccumulatorUpdateContext {
         psqt_vec_t psqt[Tiling::NumPsqtRegs];
 
         const auto* threatWeights = &featureTransformer.threatWeights[0];
+        const auto& ad            = added;
+        const auto& rm            = removed;
+        const int   A             = ad.ssize();
+        const int   R             = rm.ssize();
+
+        prefetch_columns(added, removed, threatWeights);
 
         for (IndexType j = 0; j < Dimensions / Tiling::TileHeight; ++j)
         {
@@ -369,9 +476,9 @@ struct AccumulatorUpdateContext {
             for (IndexType k = 0; k < Tiling::NumRegs; ++k)
                 acc[k] = fromTile[k];
 
-            for (int i = 0; i < removed.ssize(); ++i)
+            for (int i = 0; i < R; ++i)
             {
-                size_t       index  = removed[i];
+                size_t       index  = rm[i];
                 const size_t offset = Dimensions * index;
                 auto*        column = reinterpret_cast<const vec_i8_t*>(&threatWeights[offset]);
 
@@ -387,9 +494,9 @@ struct AccumulatorUpdateContext {
     #endif
             }
 
-            for (int i = 0; i < added.ssize(); ++i)
+            for (int i = 0; i < A; ++i)
             {
-                size_t       index  = added[i];
+                size_t       index  = ad[i];
                 const size_t offset = Dimensions * index;
                 auto*        column = reinterpret_cast<const vec_i8_t*>(&threatWeights[offset]);
 
@@ -421,9 +528,9 @@ struct AccumulatorUpdateContext {
             for (IndexType k = 0; k < Tiling::NumPsqtRegs; ++k)
                 psqt[k] = fromTilePsqt[k];
 
-            for (int i = 0; i < removed.ssize(); ++i)
+            for (int i = 0; i < R; ++i)
             {
-                size_t       index      = removed[i];
+                size_t       index      = rm[i];
                 const size_t offset     = PSQTBuckets * index + j * Tiling::PsqtTileHeight;
                 auto*        columnPsqt = reinterpret_cast<const psqt_vec_t*>(
                   &featureTransformer.threatPsqtWeights[offset]);
@@ -432,9 +539,9 @@ struct AccumulatorUpdateContext {
                     psqt[k] = vec_sub_psqt_32(psqt[k], columnPsqt[k]);
             }
 
-            for (int i = 0; i < added.ssize(); ++i)
+            for (int i = 0; i < A; ++i)
             {
-                size_t       index      = added[i];
+                size_t       index      = ad[i];
                 const size_t offset     = PSQTBuckets * index + j * Tiling::PsqtTileHeight;
                 auto*        columnPsqt = reinterpret_cast<const psqt_vec_t*>(
                   &featureTransformer.threatPsqtWeights[offset]);
