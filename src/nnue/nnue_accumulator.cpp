@@ -369,6 +369,42 @@ struct AccumulatorUpdateContext {
             for (IndexType k = 0; k < Tiling::NumRegs; ++k)
                 acc[k] = fromTile[k];
 
+            const int A = added.ssize();
+            const int R = removed.ssize();
+
+            // Burst prefetch: issue all prefetches upfront before column processing.
+            // Each prefetch targets the first cache line of a weight column; the HW
+            // adjacent-line prefetcher covers the remaining lines within the column.
+            // Later columns get progressively more lead time (one column op ~16 cycles).
+            if (A <= 3 && R <= 3)
+            {
+                auto pf = [&](IndexType idx) {
+                    prefetch(&threatWeights[Dimensions * std::size_t(idx)]);
+                };
+
+                switch (A * 4 + R)
+                {
+                    // clang-format off
+                case 0:                                                              break;
+                case 1:                                                              break;
+                case 2:  pf(removed[1]);                                             break;
+                case 3:  pf(removed[1]); pf(removed[2]);                            break;
+                case 4:                                                              break;
+                case 5:  pf(added[0]);                                               break;
+                case 6:  pf(removed[1]); pf(added[0]);                              break;
+                case 7:  pf(removed[1]); pf(removed[2]); pf(added[0]);              break;
+                case 8:  pf(added[1]);                                               break;
+                case 9:  pf(added[0]); pf(added[1]);                                break;
+                case 10: pf(removed[1]); pf(added[0]); pf(added[1]);                break;
+                case 11: pf(removed[1]); pf(removed[2]); pf(added[0]); pf(added[1]); break;
+                case 12: pf(added[1]); pf(added[2]);                                break;
+                case 13: pf(added[0]); pf(added[1]); pf(added[2]);                  break;
+                case 14: pf(removed[1]); pf(added[0]); pf(added[1]); pf(added[2]); break;
+                case 15: pf(removed[1]); pf(removed[2]); pf(added[0]); pf(added[1]); pf(added[2]); break;
+                    // clang-format on
+                }
+            }
+
             for (int i = 0; i < removed.ssize(); ++i)
             {
                 size_t       index  = removed[i];
