@@ -500,11 +500,15 @@ void double_inc_update(Color                                                   p
     assert(!target_state.acc<TransformedFeatureDimensions>().computed[perspective]);
 
     PSQFeatureSet::IndexList removed, added;
-    PSQFeatureSet::append_changed_indices(perspective, ksq, middle_state.diff, removed, added);
+    const auto*              pfBase = static_cast<const void*>(&featureTransformer.weights[0]);
+    auto pfStride = static_cast<IndexType>(TransformedFeatureDimensions * sizeof(WeightType));
+    PSQFeatureSet::append_changed_indices(perspective, ksq, middle_state.diff, removed, added,
+                                          pfBase, pfStride);
     // you can't capture a piece that was just involved in castling since the rook ends up
     // in a square that the king passed
     assert(added.size() < 2);
-    PSQFeatureSet::append_changed_indices(perspective, ksq, target_state.diff, removed, added);
+    PSQFeatureSet::append_changed_indices(perspective, ksq, target_state.diff, removed, added,
+                                          pfBase, pfStride);
 
     [[maybe_unused]] const int addedSize   = added.ssize();
     [[maybe_unused]] const int removedSize = removed.ssize();
@@ -599,10 +603,14 @@ void update_accumulator_incremental(
     }
     else
     {
+        const auto* pfBase = static_cast<const void*>(&featureTransformer.weights[0]);
+        auto pfStride = static_cast<IndexType>(TransformedFeatureDimensions * sizeof(WeightType));
         if constexpr (Forward)
-            FeatureSet::append_changed_indices(perspective, ksq, target_state.diff, removed, added);
+            FeatureSet::append_changed_indices(perspective, ksq, target_state.diff, removed, added,
+                                               pfBase, pfStride);
         else
-            FeatureSet::append_changed_indices(perspective, ksq, computed.diff, added, removed);
+            FeatureSet::append_changed_indices(perspective, ksq, computed.diff, added, removed,
+                                               pfBase, pfStride);
     }
 
     auto updateContext =
