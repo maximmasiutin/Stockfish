@@ -82,6 +82,14 @@ struct StatsEntry {
 
         assert(std::abs(T(*this)) <= D);
     }
+
+    // Gravity update with pre-read value to avoid redundant memory load
+    void update(int bonus, int val) {
+        int clampedBonus = std::clamp(bonus, -D, D);
+        *this            = val + clampedBonus - val * std::abs(clampedBonus) / D;
+
+        assert(std::abs(T(*this)) <= D);
+    }
 };
 
 enum StatsType {
