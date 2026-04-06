@@ -361,7 +361,97 @@ struct AccumulatorUpdateContext {
 
         const auto* threatWeights = &featureTransformer.threatWeights[0];
 
-        for (IndexType j = 0; j < Dimensions / Tiling::TileHeight; ++j)
+        // Ring buffer for L1 prefetch pipeline
+        constexpr int PF_N    = 8;
+        constexpr int PF_SIZE = 1 << PF_N;
+        constexpr int PF_MASK = PF_SIZE - 1;
+        const void*   pfAddrs[PF_SIZE];
+        int           pfIdx = 0;
+
+        auto consumePrefetch = [&]() {
+            const char* addr = static_cast<const char*>(pfAddrs[pfIdx++ & PF_MASK]);
+            prefetch(addr);
+            prefetch(addr + 64);
+            if constexpr (Dimensions > 128)
+            {
+                prefetch(addr + 128);
+                prefetch(addr + 192);
+            }
+        };
+
+        // Fill ring buffer with column start addresses (once, before tile loop)
+        {
+            int         wIdx     = 0;
+            const void* lastAddr = threatWeights;
+            for (int i = 0; i < removed.ssize(); ++i)
+            {
+                lastAddr                  = &threatWeights[Dimensions * removed[i]];
+                pfAddrs[wIdx++ & PF_MASK] = lastAddr;
+            }
+            for (int i = 0; i < added.ssize(); ++i)
+            {
+                lastAddr                  = &threatWeights[Dimensions * added[i]];
+                pfAddrs[wIdx++ & PF_MASK] = lastAddr;
+            }
+            pfAddrs[wIdx & PF_MASK] = lastAddr;
+        }
+
+        consumePrefetch();  // Prime: prefetch first column
+
+        // Tile 0: process with 1-column-ahead prefetch
+        {
+            auto* fromTile = reinterpret_cast<const vec_t*>(&fromAcc[0]);
+            auto* toTile   = reinterpret_cast<vec_t*>(&toAcc[0]);
+
+            for (IndexType k = 0; k < Tiling::NumRegs; ++k)
+                acc[k] = fromTile[k];
+
+            for (int i = 0; i < removed.ssize(); ++i)
+            {
+                consumePrefetch();
+                size_t       index  = removed[i];
+                const size_t offset = Dimensions * index;
+                auto*        column = reinterpret_cast<const vec_i8_t*>(&threatWeights[offset]);
+
+    #ifdef USE_NEON
+                for (IndexType k = 0; k < Tiling::NumRegs; k += 2)
+                {
+                    acc[k]     = vsubw_s8(acc[k], vget_low_s8(column[k / 2]));
+                    acc[k + 1] = vsubw_high_s8(acc[k + 1], column[k / 2]);
+                }
+    #else
+                for (IndexType k = 0; k < Tiling::NumRegs; ++k)
+                    acc[k] = vec_sub_16(acc[k], vec_convert_8_16(column[k]));
+    #endif
+            }
+
+            for (int i = 0; i < added.ssize(); ++i)
+            {
+                consumePrefetch();
+                size_t       index  = added[i];
+                const size_t offset = Dimensions * index;
+                auto*        column = reinterpret_cast<const vec_i8_t*>(&threatWeights[offset]);
+
+    #ifdef USE_NEON
+                for (IndexType k = 0; k < Tiling::NumRegs; k += 2)
+                {
+                    acc[k]     = vaddw_s8(acc[k], vget_low_s8(column[k / 2]));
+                    acc[k + 1] = vaddw_high_s8(acc[k + 1], column[k / 2]);
+                }
+    #else
+                for (IndexType k = 0; k < Tiling::NumRegs; ++k)
+                    acc[k] = vec_add_16(acc[k], vec_convert_8_16(column[k]));
+    #endif
+            }
+
+            for (IndexType k = 0; k < Tiling::NumRegs; k++)
+                vec_store(&toTile[k], acc[k]);
+
+            threatWeights += Tiling::TileHeight;
+        }
+
+        // Tiles 1+: no prefetch needed
+        for (IndexType j = 1; j < Dimensions / Tiling::TileHeight; ++j)
         {
             auto* fromTile = reinterpret_cast<const vec_t*>(&fromAcc[j * Tiling::TileHeight]);
             auto* toTile   = reinterpret_cast<vec_t*>(&toAcc[j * Tiling::TileHeight]);
@@ -500,11 +590,15 @@ void double_inc_update(Color                                                   p
     assert(!target_state.acc<TransformedFeatureDimensions>().computed[perspective]);
 
     PSQFeatureSet::IndexList removed, added;
-    PSQFeatureSet::append_changed_indices(perspective, ksq, middle_state.diff, removed, added);
+    const auto*              pfBase = static_cast<const void*>(&featureTransformer.weights[0]);
+    auto pfStride = static_cast<IndexType>(TransformedFeatureDimensions * sizeof(WeightType));
+    PSQFeatureSet::append_changed_indices(perspective, ksq, middle_state.diff, removed, added,
+                                          pfBase, pfStride);
     // you can't capture a piece that was just involved in castling since the rook ends up
     // in a square that the king passed
     assert(added.size() < 2);
-    PSQFeatureSet::append_changed_indices(perspective, ksq, target_state.diff, removed, added);
+    PSQFeatureSet::append_changed_indices(perspective, ksq, target_state.diff, removed, added,
+                                          pfBase, pfStride);
 
     [[maybe_unused]] const int addedSize   = added.ssize();
     [[maybe_unused]] const int removedSize = removed.ssize();
@@ -599,10 +693,14 @@ void update_accumulator_incremental(
     }
     else
     {
+        const auto* pfBase = static_cast<const void*>(&featureTransformer.weights[0]);
+        auto pfStride = static_cast<IndexType>(TransformedFeatureDimensions * sizeof(WeightType));
         if constexpr (Forward)
-            FeatureSet::append_changed_indices(perspective, ksq, target_state.diff, removed, added);
+            FeatureSet::append_changed_indices(perspective, ksq, target_state.diff, removed, added,
+                                               pfBase, pfStride);
         else
-            FeatureSet::append_changed_indices(perspective, ksq, computed.diff, added, removed);
+            FeatureSet::append_changed_indices(perspective, ksq, computed.diff, added, removed,
+                                               pfBase, pfStride);
     }
 
     auto updateContext =
