@@ -443,6 +443,9 @@ void Search::Worker::iterative_deepening() {
         {
             completedDepth = rootDepth;
 
+            if (rootDepth > maxRootDepth)
+                maxRootDepth = rootDepth;
+
             if (lastIterationPV.empty() || rootMoves[0].pv[0] != lastIterationPV[0])
                 lastBestMoveDepth = rootDepth;
 
@@ -605,6 +608,8 @@ void Search::Worker::clear() {
     sharedHistory.pawnHistory.clear_range(-1238, numaThreadIdx, numaTotal);
 
     ttMoveHistory = 0;
+
+    maxRootDepth = 0;
 
     for (auto& to : continuationCorrectionHistory)
         for (auto& h : to)
@@ -912,8 +917,9 @@ Value Search::Worker::search(
     {
         assert((ss - 1)->currentMove != Move::null());
 
-        // Null move dynamic reduction based on depth
-        Depth R = 7 + depth / 3;
+        // Null move dynamic reduction, rebalanced by TC-adaptive midpoint
+        int   mid = int(maxRootDepth) * 2 / 3;
+        Depth R   = 7 + depth / 3 + (depth < mid) - (depth > mid + 1);
         do_null_move(pos, st, ss);
 
         Value nullValue = -search<NonPV>(pos, ss + 1, -beta, -beta + 1, depth - R, false);
