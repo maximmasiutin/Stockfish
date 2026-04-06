@@ -341,6 +341,7 @@ class Worker {
     StateInfo rootState;
     RootMoves rootMoves;
     Depth     rootDepth, completedDepth;
+    Depth     maxRootDepth;
     Value     rootDelta;
 
     std::vector<Move> lastIterationPV;
