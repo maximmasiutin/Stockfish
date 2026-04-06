@@ -25,6 +25,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <initializer_list>
 #include <iostream>
@@ -64,6 +65,36 @@ using namespace Search;
 
 namespace {
 
+// Instrumentation: record maxRootDepth and entry values at correction writes
+struct CorrWriteCounters {
+    // Entry abs value bins: [0,100), [100,200), ..., [900,1000), [1000,1024]
+    uint64_t entryBins[11] = {};
+    // maxRootDepth histogram (0..63)
+    uint64_t mrdHist[64] = {};
+    uint64_t totalWrites = 0;
+};
+static constexpr int                  INSTR_MAX_THREADS = 256;
+static CorrWriteCounters              threadCW[INSTR_MAX_THREADS];
+static std::atomic<int>               cwSlot{0};
+static thread_local int               myCwSlot = -1;
+static thread_local CorrWriteCounters tlCW;
+
+void record_corr_write(int entryVal, int mrd) {
+    int absVal = std::abs(entryVal);
+    int bin    = std::min(absVal / 100, 10);
+    tlCW.entryBins[bin]++;
+    if (mrd >= 0 && mrd < 64)
+        tlCW.mrdHist[mrd]++;
+    tlCW.totalWrites++;
+}
+
+void flush_cw_counters() {
+    if (myCwSlot < 0)
+        myCwSlot = cwSlot.fetch_add(1, std::memory_order_relaxed);
+    if (myCwSlot < INSTR_MAX_THREADS)
+        threadCW[myCwSlot] = tlCW;
+}
+
 constexpr int SEARCHEDLIST_CAPACITY = 32;
 using SearchedList                  = ValueList<Move, SEARCHEDLIST_CAPACITY>;
 
@@ -102,11 +133,18 @@ void update_correction_history(const Position& pos,
                                Stack* const    ss,
                                Search::Worker& workerThread,
                                const int       bonus) {
-    const Move  m  = (ss - 1)->currentMove;
-    const Color us = pos.side_to_move();
+    const Move  m   = (ss - 1)->currentMove;
+    const Color us  = pos.side_to_move();
+    const int   mrd = int(workerThread.maxRootDepth);
 
     constexpr int nonPawnWeight = 187;
     auto&         shared        = workerThread.sharedHistory;
+
+    // Record entry values before writes
+    record_corr_write(int(shared.pawn_correction_entry(pos).at(us).pawn), mrd);
+    record_corr_write(int(shared.minor_piece_correction_entry(pos).at(us).minor), mrd);
+    record_corr_write(int(shared.nonpawn_correction_entry<WHITE>(pos).at(us).nonPawnWhite), mrd);
+    record_corr_write(int(shared.nonpawn_correction_entry<BLACK>(pos).at(us).nonPawnBlack), mrd);
 
     shared.pawn_correction_entry(pos).at(us).pawn << bonus;
     shared.minor_piece_correction_entry(pos).at(us).minor << bonus * 153 / 128;
@@ -119,6 +157,10 @@ void update_correction_history(const Position& pos,
     const Piece  pc     = pos.piece_on(to);
     const int    bonus2 = (bonus * 126 / 128) * mask;
     const int    bonus4 = (bonus * 63 / 128) * mask;
+
+    record_corr_write(int((*(ss - 2)->continuationCorrectionHistory)[pc][to]), mrd);
+    record_corr_write(int((*(ss - 4)->continuationCorrectionHistory)[pc][to]), mrd);
+
     (*(ss - 2)->continuationCorrectionHistory)[pc][to] << bonus2;
     (*(ss - 4)->continuationCorrectionHistory)[pc][to] << bonus4;
 }
@@ -151,6 +193,63 @@ bool is_shuffling(Move move, Stack* const ss, const Position& pos) {
 }
 
 }  // namespace
+
+void print_corr_saturation_report();
+
+void print_corr_saturation_report() {
+    // Aggregate all thread slots
+    CorrWriteCounters agg    = {};
+    int               nSlots = cwSlot.load(std::memory_order_relaxed);
+    if (nSlots > INSTR_MAX_THREADS)
+        nSlots = INSTR_MAX_THREADS;
+    for (int s = 0; s < nSlots; s++)
+    {
+        agg.totalWrites += threadCW[s].totalWrites;
+        for (int b = 0; b < 11; b++)
+            agg.entryBins[b] += threadCW[s].entryBins[b];
+        for (int m = 0; m < 64; m++)
+            agg.mrdHist[m] += threadCW[s].mrdHist[m];
+    }
+
+    std::cout << "CORR_SATURATION_CSV_START" << std::endl;
+
+    // Entry value distribution
+    std::cout << "section,entry_value_bins" << std::endl;
+    std::cout << "bin,count,pct" << std::endl;
+    const char* binLabels[] = {"0-99",    "100-199", "200-299", "300-399", "400-499",  "500-599",
+                               "600-699", "700-799", "800-899", "900-999", "1000-1024"};
+    for (int b = 0; b < 11; b++)
+    {
+        double pct = agg.totalWrites > 0 ? 100.0 * agg.entryBins[b] / agg.totalWrites : 0;
+        char   buf[128];
+        snprintf(buf, sizeof(buf), "%s,%llu,%.4f", binLabels[b],
+                 (unsigned long long) agg.entryBins[b], pct);
+        std::cout << buf << std::endl;
+    }
+
+    // maxRootDepth histogram
+    std::cout << "section,mrd_histogram" << std::endl;
+    std::cout << "mrd,count,pct" << std::endl;
+    for (int m = 0; m < 64; m++)
+    {
+        if (agg.mrdHist[m] == 0)
+            continue;
+        double pct = agg.totalWrites > 0 ? 100.0 * agg.mrdHist[m] / agg.totalWrites : 0;
+        char   buf[64];
+        snprintf(buf, sizeof(buf), "%d,%llu,%.4f", m, (unsigned long long) agg.mrdHist[m], pct);
+        std::cout << buf << std::endl;
+    }
+
+    std::cout << "total_writes," << agg.totalWrites << std::endl;
+    std::cout << "CORR_SATURATION_CSV_END" << std::endl;
+
+    // Reset
+    for (int s = 0; s < nSlots; s++)
+        threadCW[s] = CorrWriteCounters{};
+    tlCW     = CorrWriteCounters{};
+    myCwSlot = -1;
+    cwSlot.store(0, std::memory_order_relaxed);
+}
 
 Search::Worker::Worker(SharedState&                    sharedState,
                        std::unique_ptr<ISearchManager> sm,
@@ -188,6 +287,7 @@ void Search::Worker::start_searching() {
     if (!is_mainthread())
     {
         iterative_deepening();
+        flush_cw_counters();
         return;
     }
 
@@ -205,6 +305,7 @@ void Search::Worker::start_searching() {
     {
         threads.start_searching();  // start non-main threads
         iterative_deepening();      // main thread start searching
+        flush_cw_counters();
     }
 
     // When we reach the maximum depth, we can arrive here without a raise of
@@ -443,6 +544,9 @@ void Search::Worker::iterative_deepening() {
         {
             completedDepth = rootDepth;
 
+            if (rootDepth > maxRootDepth)
+                maxRootDepth = rootDepth;
+
             if (lastIterationPV.empty() || rootMoves[0].pv[0] != lastIterationPV[0])
                 lastBestMoveDepth = rootDepth;
 
@@ -615,6 +719,8 @@ void Search::Worker::clear() {
             for (auto& to : continuationHistory[inCheck][c])
                 for (auto& h : to)
                     h.fill(-523);
+
+    maxRootDepth = 0;
 
     for (size_t i = 1; i < reductions.size(); ++i)
         reductions[i] = int(2763 / 128.0 * std::log(i));

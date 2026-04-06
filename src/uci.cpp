@@ -42,6 +42,8 @@
 
 namespace Stockfish {
 
+void print_corr_saturation_report();
+
 constexpr auto BenchmarkCommand = "speedtest";
 
 template<typename... Ts>
@@ -176,6 +178,8 @@ void UCIEngine::loop() {
                       << sync_endl;
 
     } while (token != "quit" && cli.argc == 1);  // The command-line arguments are one-shot
+
+    print_corr_saturation_report();
 }
 
 Search::LimitsType UCIEngine::parse_limits(std::istream& is) {

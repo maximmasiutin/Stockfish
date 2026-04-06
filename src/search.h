@@ -298,6 +298,8 @@ class Worker {
     TTMoveHistory    ttMoveHistory;
     SharedHistories& sharedHistory;
 
+    Depth maxRootDepth;
+
    private:
     void iterative_deepening();
 
