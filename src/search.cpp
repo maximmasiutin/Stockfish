@@ -62,6 +62,35 @@ void syzygy_extend_pv(const OptionsMap&            options,
 
 using namespace Search;
 
+// NMP rootDepth instrumentation counters
+constexpr int         NMP_RD_MAX = 128;
+std::atomic<uint64_t> nmpRootDepthCount[NMP_RD_MAX];
+
+void nmp_rootdepth_reset() {
+    for (int i = 0; i < NMP_RD_MAX; ++i)
+        nmpRootDepthCount[i].store(0, std::memory_order_relaxed);
+}
+
+void nmp_rootdepth_print() {
+    uint64_t total = 0;
+    for (int i = 0; i < NMP_RD_MAX; ++i)
+        total += nmpRootDepthCount[i].load(std::memory_order_relaxed);
+
+    std::cerr << "NMP_ROOTDEPTH_CSV_BEGIN" << std::endl;
+    std::cerr << "rootDepth,count,pct" << std::endl;
+    for (int i = 0; i < NMP_RD_MAX; ++i)
+    {
+        uint64_t c = nmpRootDepthCount[i].load(std::memory_order_relaxed);
+        if (c > 0)
+        {
+            double pct = total > 0 ? 100.0 * double(c) / double(total) : 0.0;
+            std::cerr << i << "," << c << "," << pct << std::endl;
+        }
+    }
+    std::cerr << "NMP_ROOTDEPTH_CSV_END" << std::endl;
+    std::cerr << "NMP_ROOTDEPTH_TOTAL," << total << std::endl;
+}
+
 namespace {
 
 constexpr int SEARCHEDLIST_CAPACITY = 32;
@@ -911,6 +940,10 @@ Value Search::Worker::search(
         && pos.non_pawn_material(us) && ss->ply >= nmpMinPly && !is_loss(beta))
     {
         assert((ss - 1)->currentMove != Move::null());
+
+        // Instrumentation: record rootDepth at NMP entry
+        if (rootDepth >= 0 && rootDepth < NMP_RD_MAX)
+            nmpRootDepthCount[rootDepth].fetch_add(1, std::memory_order_relaxed);
 
         // Null move dynamic reduction based on depth
         Depth R = 7 + depth / 3;

@@ -38,6 +38,12 @@
 #include "score.h"
 #include "search.h"
 #include "types.h"
+
+namespace Stockfish {
+// NMP rootDepth instrumentation
+void nmp_rootdepth_reset();
+void nmp_rootdepth_print();
+}
 #include "ucioption.h"
 
 namespace Stockfish {
@@ -162,6 +168,10 @@ void UCIEngine::loop() {
 
             engine.save_network(files);
         }
+        else if (token == "nmpstats")
+            nmp_rootdepth_print();
+        else if (token == "nmpreset")
+            nmp_rootdepth_reset();
         else if (token == "--help" || token == "help" || token == "--license" || token == "license")
             sync_cout
               << "\nStockfish is a powerful chess engine for playing and analyzing."
