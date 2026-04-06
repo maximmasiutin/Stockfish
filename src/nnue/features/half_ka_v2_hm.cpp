@@ -21,6 +21,7 @@
 #include "half_ka_v2_hm.h"
 
 #include "../../bitboard.h"
+#include "../../misc.h"
 #include "../../position.h"
 #include "../../types.h"
 #include "../nnue_common.h"
@@ -118,17 +119,37 @@ void HalfKAv2_hm::append_active_indices(Color perspective, const Position& pos, 
 
 // Get a list of indices for recently changed features
 
-void HalfKAv2_hm::append_changed_indices(
-  Color perspective, Square ksq, const DiffType& diff, IndexList& removed, IndexList& added) {
-    removed.push_back(make_index(perspective, diff.from, diff.pc, ksq));
+void HalfKAv2_hm::append_changed_indices(Color           perspective,
+                                         Square          ksq,
+                                         const DiffType& diff,
+                                         IndexList&      removed,
+                                         IndexList&      added,
+                                         const void*     prefetchBase,
+                                         IndexType       prefetchStride) {
+    assert(!prefetchBase || prefetchStride != 0);
+
+    auto emit = [&](Square s, Piece pc, IndexList& list) {
+        auto idx = make_index(perspective, s, pc, ksq);
+        if (prefetchBase)
+        {
+            const char* base = static_cast<const char*>(prefetchBase)
+                             + static_cast<std::ptrdiff_t>(idx) * prefetchStride;
+            for (int i = 0; i < 8; ++i)
+                prefetch<PrefetchRw::READ, PrefetchLoc::LOW>(base + i * 64);
+        }
+        list.push_back(idx);
+    };
+
+    emit(diff.from, diff.pc, removed);
+
     if (diff.to != SQ_NONE)
-        added.push_back(make_index(perspective, diff.to, diff.pc, ksq));
+        emit(diff.to, diff.pc, added);
 
     if (diff.remove_sq != SQ_NONE)
-        removed.push_back(make_index(perspective, diff.remove_sq, diff.remove_pc, ksq));
+        emit(diff.remove_sq, diff.remove_pc, removed);
 
     if (diff.add_sq != SQ_NONE)
-        added.push_back(make_index(perspective, diff.add_sq, diff.add_pc, ksq));
+        emit(diff.add_sq, diff.add_pc, added);
 }
 
 bool HalfKAv2_hm::requires_refresh(const DiffType& diff, Color perspective) {
