@@ -215,6 +215,25 @@ using CorrectionHistory = typename Detail::CorrHistTypedef<T>::type;
 
 using TTMoveHistory = StatsEntry<std::int16_t, 8192>;
 
+// Shared continuation correction history (atomic, D=1024)
+using AtomicPieceToCorrHist =
+  AtomicStats<std::int16_t, CORRECTION_HISTORY_LIMIT, PIECE_NB, SQUARE_NB>;
+// Cache-line aligned to avoid false sharing at outer entry boundaries
+struct alignas(64) AlignedPieceToCorrHist: AtomicPieceToCorrHist {};
+
+// Quadratic dampening for shared contcorr writes.
+// Factor k = headroom^2/D^2 freezes entries near saturation,
+// filtering multi-thread noise while preserving fast convergence near zero.
+static void contcorr_update(AlignedPieceToCorrHist& hist, Piece pc, Square to, int bonus) {
+    constexpr int D  = CORRECTION_HISTORY_LIMIT;
+    auto&         e  = hist[pc][to];
+    const int     v  = int(e);
+    const int     h  = D - std::abs(v);
+    const int     dB = std::clamp(int(int64_t(bonus) * h * h / (int64_t(D) * D)), -D, D);
+    const int     g  = v * std::abs(dB) / D;
+    e                = std::int16_t(std::clamp(v + dB - g, -D, D));
+}
+
 // Set of histories shared between groups of threads. To avoid excessive
 // cross-node data transfer, histories are shared only between threads
 // on a given NUMA node. The passed size must be a power of two to make
@@ -260,8 +279,18 @@ struct SharedHistories {
         return correctionHistory[pos.non_pawn_key(c) & sizeMinus1];
     }
 
-    UnifiedCorrectionHistory correctionHistory;
-    PawnHistory              pawnHistory;
+    void clear_contcorr_range(size_t threadIdx, size_t numaTotal) {
+        constexpr size_t total = PIECE_NB * SQUARE_NB;
+        size_t           start = uint64_t(threadIdx) * total / numaTotal;
+        size_t           end =
+          threadIdx + 1 == numaTotal ? total : uint64_t(threadIdx + 1) * total / numaTotal;
+        for (size_t i = start; i < end; ++i)
+            continuationCorrectionHistory[i / SQUARE_NB][i % SQUARE_NB].fill(6);
+    }
+
+    UnifiedCorrectionHistory                                correctionHistory;
+    PawnHistory                                             pawnHistory;
+    MultiArray<AlignedPieceToCorrHist, PIECE_NB, SQUARE_NB> continuationCorrectionHistory;
 
 
    private:
