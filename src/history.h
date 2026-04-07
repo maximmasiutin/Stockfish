@@ -263,6 +263,33 @@ struct SharedHistories {
     UnifiedCorrectionHistory correctionHistory;
     PawnHistory              pawnHistory;
 
+    // Shared continuationCorrectionHistory with atomic entries.
+    using AtomicPieceToCorrHist =
+      AtomicStats<std::int16_t, CORRECTION_HISTORY_LIMIT, PIECE_NB, SQUARE_NB>;
+
+    struct alignas(64) AlignedPieceToCorrHist: AtomicPieceToCorrHist {};
+
+    MultiArray<AlignedPieceToCorrHist, PIECE_NB, SQUARE_NB> continuationCorrectionHistory;
+
+    void clear_contcorr_range(size_t threadIdx, size_t numaTotal) {
+        constexpr size_t total = PIECE_NB * SQUARE_NB;
+        size_t           start = uint64_t(threadIdx) * total / numaTotal;
+        size_t           end =
+          threadIdx + 1 == numaTotal ? total : uint64_t(threadIdx + 1) * total / numaTotal;
+        for (size_t i = start; i < end; i++)
+            continuationCorrectionHistory[i / SQUARE_NB][i % SQUARE_NB].fill(6);
+    }
+
+    // Quadratic dampening of contcorr writes.
+    static void contcorr_update(AtomicPieceToCorrHist& hist, Piece pc, Square to, int bonus) {
+        constexpr int D           = CORRECTION_HISTORY_LIMIT;
+        auto&         e           = hist[pc][to];
+        const int     v           = int(e);
+        const int     head        = D - std::abs(v);
+        const int     damp        = int(int64_t(bonus) * head * head / (int64_t(D) * D));
+        const int     dampedBonus = std::clamp(damp, -D, D);
+        e = std::int16_t(std::clamp(v + dampedBonus - v * std::abs(dampedBonus) / D, -D, D));
+    }
 
    private:
     size_t sizeMinus1, pawnHistSizeMinus1;
