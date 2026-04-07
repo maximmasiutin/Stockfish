@@ -220,12 +220,19 @@ using TTMoveHistory = StatsEntry<std::int16_t, 8192>;
 // on a given NUMA node. The passed size must be a power of two to make
 // the indexing more efficient.
 struct SharedHistories {
-    SharedHistories(size_t threadCount) :
+    SharedHistories(size_t threadCount, size_t actualThreads = 0) :
         correctionHistory(threadCount),
         pawnHistory(threadCount) {
         assert((threadCount & (threadCount - 1)) == 0 && threadCount != 0);
         sizeMinus1         = correctionHistory.get_size() - 1;
         pawnHistSizeMinus1 = pawnHistory.get_size() - 1;
+        // Coefficient scaling by floor(sqrt(actualThreads))
+        size_t t     = actualThreads > 0 ? actualThreads : threadCount;
+        int    sqrtT = 1;
+        while (size_t(sqrtT + 1) * size_t(sqrtT + 1) <= t)
+            sqrtT++;
+        contcorWriteS2 = std::max(1, 8064 / sqrtT);
+        contcorWriteS4 = std::max(1, 4032 / sqrtT);
     }
 
     size_t get_size() const { return sizeMinus1 + 1; }
@@ -263,6 +270,25 @@ struct SharedHistories {
     UnifiedCorrectionHistory correctionHistory;
     PawnHistory              pawnHistory;
 
+    // Shared continuationCorrectionHistory with atomic entries.
+    using AtomicPieceToCorrHist =
+      AtomicStats<std::int16_t, CORRECTION_HISTORY_LIMIT, PIECE_NB, SQUARE_NB>;
+
+    struct alignas(64) AlignedPieceToCorrHist: AtomicPieceToCorrHist {};
+
+    MultiArray<AlignedPieceToCorrHist, PIECE_NB, SQUARE_NB> continuationCorrectionHistory;
+
+    void clear_contcorr_range(size_t threadIdx, size_t numaTotal) {
+        constexpr size_t total = PIECE_NB * SQUARE_NB;
+        size_t           start = uint64_t(threadIdx) * total / numaTotal;
+        size_t           end =
+          threadIdx + 1 == numaTotal ? total : uint64_t(threadIdx + 1) * total / numaTotal;
+        for (size_t i = start; i < end; i++)
+            continuationCorrectionHistory[i / SQUARE_NB][i % SQUARE_NB].fill(6);
+    }
+
+    int contcorWriteS2;
+    int contcorWriteS4;
 
    private:
     size_t sizeMinus1, pawnHistSizeMinus1;
