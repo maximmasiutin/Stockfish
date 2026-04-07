@@ -33,6 +33,9 @@
 #include <string>
 #include <utility>
 
+#include <fstream>
+#include <mutex>
+
 #include "bitboard.h"
 #include "evaluate.h"
 #include "history.h"
@@ -66,6 +69,25 @@ namespace {
 
 constexpr int SEARCHEDLIST_CAPACITY = 32;
 using SearchedList                  = ValueList<Move, SEARCHEDLIST_CAPACITY>;
+
+std::mutex  mrd_mtx;
+std::string mrd_path;
+
+const std::string& mrd_get_path() {
+    if (mrd_path.empty())
+    {
+        const char* env = std::getenv("MRD_OUTPUT");
+        mrd_path        = env ? env : "/tmp/mrd-instrument.csv";
+    }
+    return mrd_path;
+}
+
+void mrd_log(size_t threadIdx, int depth, uint64_t nodeCount) {
+    std::lock_guard<std::mutex> lock(mrd_mtx);
+    std::ofstream               f(mrd_get_path(), std::ios::app);
+    if (f)
+        f << threadIdx << "," << depth << "," << nodeCount << "\n";
+}
 
 // (*Scalers):
 // The values with Scaler asterisks have proven non-linear scaling.
@@ -543,6 +565,8 @@ void Search::Worker::iterative_deepening() {
         mainThread->iterValue[iterIdx] = bestValue;
         iterIdx                        = (iterIdx + 1) & 3;
     }
+
+    mrd_log(threadIdx, completedDepth, nodes.load(std::memory_order_relaxed));
 
     if (!mainThread)
         return;
