@@ -572,11 +572,15 @@ void Search::Worker::do_move(
 
     if (ss != nullptr)
     {
-        ss->currentMove = move;
-        ss->continuationHistory =
-          &continuationHistory[ss->inCheck][capture][dirtyPiece.pc][move.to_sq()];
-        ss->continuationCorrectionHistory =
-          &continuationCorrectionHistory[dirtyPiece.pc][move.to_sq()];
+        const Piece  pc = dirtyPiece.pc;
+        const Square to = move.to_sq();
+
+        ss->currentMove                   = move;
+        ss->continuationHistory           = &continuationHistory[ss->inCheck][capture][pc][to];
+        ss->continuationCorrectionHistory = &continuationCorrectionHistory[pc][to];
+
+        prefetch(&(*(ss - 1)->continuationCorrectionHistory)[pc][to]);
+        prefetch(&(*(ss - 3)->continuationCorrectionHistory)[pc][to]);
     }
 }
 
