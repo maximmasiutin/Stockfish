@@ -38,7 +38,7 @@ namespace Stockfish {
 constexpr int PAWN_HISTORY_BASE_SIZE   = 8192;  // has to be a power of 2
 constexpr int UINT_16_HISTORY_SIZE     = std::numeric_limits<uint16_t>::max() + 1;
 constexpr int CORRHIST_BASE_SIZE       = UINT_16_HISTORY_SIZE;
-constexpr int CORRECTION_HISTORY_LIMIT = 1024;
+constexpr int CORRECTION_HISTORY_LIMIT = 16384;
 constexpr int LOW_PLY_HISTORY_SIZE     = 5;
 
 static_assert((PAWN_HISTORY_BASE_SIZE & (PAWN_HISTORY_BASE_SIZE - 1)) == 0,
@@ -76,9 +76,15 @@ struct StatsEntry {
 
     void operator<<(int bonus) {
         // Make sure that bonus is in range [-D, D]
-        int clampedBonus = std::clamp(bonus, -D, D);
-        T   val          = *this;
-        *this            = val + clampedBonus - val * std::abs(clampedBonus) / D;
+        const int clampedBonus = std::clamp(bonus, -D, D);
+        const T   val          = *this;
+
+        // Quadratic headroom dampening: slows convergence near saturation
+        const int headroom    = D - std::abs(val);
+        const int damp        = int(int64_t(clampedBonus) * headroom * headroom / (int64_t(D) * D));
+        const int dampedBonus = std::clamp(damp, -D, D);
+
+        *this = val + dampedBonus - val * std::abs(dampedBonus) / D;
 
         assert(std::abs(T(*this)) <= D);
     }
