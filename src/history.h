@@ -38,7 +38,7 @@ namespace Stockfish {
 constexpr int PAWN_HISTORY_BASE_SIZE   = 8192;  // has to be a power of 2
 constexpr int UINT_16_HISTORY_SIZE     = std::numeric_limits<uint16_t>::max() + 1;
 constexpr int CORRHIST_BASE_SIZE       = UINT_16_HISTORY_SIZE;
-constexpr int CORRECTION_HISTORY_LIMIT = 1024;
+constexpr int CORRECTION_HISTORY_LIMIT = 16384;  // has to be a power of 2
 constexpr int LOW_PLY_HISTORY_SIZE     = 5;
 
 static_assert((PAWN_HISTORY_BASE_SIZE & (PAWN_HISTORY_BASE_SIZE - 1)) == 0,
@@ -47,12 +47,17 @@ static_assert((PAWN_HISTORY_BASE_SIZE & (PAWN_HISTORY_BASE_SIZE - 1)) == 0,
 static_assert((CORRHIST_BASE_SIZE & (CORRHIST_BASE_SIZE - 1)) == 0,
               "CORRHIST_BASE_SIZE has to be a power of 2");
 
+enum class CorrUpdate {
+    DEFAULT,
+    QUADRATIC
+};
+
 // StatsEntry is the container of various numerical statistics. We use a class
 // instead of a naked value to directly call history update operator<<() on
 // the entry. The first template parameter T is the base type of the array,
 // and the second template parameter D limits the range of updates in [-D, D]
 // when we update values with the << operator
-template<typename T, int D, bool Atomic = false>
+template<typename T, int D, bool Atomic = false, CorrUpdate Mode = CorrUpdate::DEFAULT>
 struct StatsEntry {
     static_assert(std::is_arithmetic_v<T>, "Not an arithmetic type");
 
@@ -75,10 +80,15 @@ struct StatsEntry {
     }
 
     void operator<<(int bonus) {
-        // Make sure that bonus is in range [-D, D]
         int clampedBonus = std::clamp(bonus, -D, D);
         T   val          = *this;
-        *this            = val + clampedBonus - val * std::abs(clampedBonus) / D;
+        if constexpr (Mode == CorrUpdate::QUADRATIC)
+        {
+            const int headroom = D - std::abs(int(val));
+            const int damp = int(int64_t(clampedBonus) * headroom * headroom / (int64_t(D) * D));
+            clampedBonus   = std::clamp(damp, -D, D);
+        }
+        *this = val + clampedBonus - val * std::abs(clampedBonus) / D;
 
         assert(std::abs(T(*this)) <= D);
     }
@@ -94,6 +104,12 @@ using Stats = MultiArray<StatsEntry<T, D>, Sizes...>;
 
 template<typename T, int D, std::size_t... Sizes>
 using AtomicStats = MultiArray<StatsEntry<T, D, true>, Sizes...>;
+
+template<typename T, int D, std::size_t... Sizes>
+using QuadraticStats = MultiArray<StatsEntry<T, D, false, CorrUpdate::QUADRATIC>, Sizes...>;
+
+template<typename T, int D, std::size_t... Sizes>
+using QuadraticAtomicStats = MultiArray<StatsEntry<T, D, true, CorrUpdate::QUADRATIC>, Sizes...>;
 
 // DynStats is a dynamically sized array of Stats, used for thread-shared histories
 // which should scale with the total number of threads. The SizeMultiplier gives
@@ -167,10 +183,10 @@ enum CorrHistType {
 
 template<typename T, int D>
 struct CorrectionBundle {
-    StatsEntry<T, D, true> pawn;
-    StatsEntry<T, D, true> minor;
-    StatsEntry<T, D, true> nonPawnWhite;
-    StatsEntry<T, D, true> nonPawnBlack;
+    StatsEntry<T, D, true, CorrUpdate::QUADRATIC> pawn;
+    StatsEntry<T, D, true, CorrUpdate::QUADRATIC> minor;
+    StatsEntry<T, D, true, CorrUpdate::QUADRATIC> nonPawnWhite;
+    StatsEntry<T, D, true, CorrUpdate::QUADRATIC> nonPawnBlack;
 
     void operator=(T val) {
         pawn         = val;
@@ -184,13 +200,13 @@ namespace Detail {
 
 template<CorrHistType>
 struct CorrHistTypedef {
-    using type =
-      DynStats<Stats<std::int16_t, CORRECTION_HISTORY_LIMIT, COLOR_NB>, CORRHIST_BASE_SIZE>;
+    using type = DynStats<QuadraticStats<std::int16_t, CORRECTION_HISTORY_LIMIT, COLOR_NB>,
+                          CORRHIST_BASE_SIZE>;
 };
 
 template<>
 struct CorrHistTypedef<PieceTo> {
-    using type = Stats<std::int16_t, CORRECTION_HISTORY_LIMIT, PIECE_NB, SQUARE_NB>;
+    using type = QuadraticStats<std::int16_t, CORRECTION_HISTORY_LIMIT, PIECE_NB, SQUARE_NB>;
 };
 
 template<>
@@ -200,8 +216,9 @@ struct CorrHistTypedef<Continuation> {
 
 template<>
 struct CorrHistTypedef<NonPawn> {
-    using type = DynStats<Stats<std::int16_t, CORRECTION_HISTORY_LIMIT, COLOR_NB, COLOR_NB>,
-                          CORRHIST_BASE_SIZE>;
+    using type =
+      DynStats<QuadraticStats<std::int16_t, CORRECTION_HISTORY_LIMIT, COLOR_NB, COLOR_NB>,
+               CORRHIST_BASE_SIZE>;
 };
 
 }
