@@ -100,10 +100,10 @@ Value to_corrected_static_eval(const Value v, const int cv) {
     return std::clamp(v + cv / 131072, VALUE_TB_LOSS_IN_MAX_PLY + 1, VALUE_TB_WIN_IN_MAX_PLY - 1);
 }
 
-void update_correction_history(const Position& pos,
-                               Stack* const    ss,
-                               Search::Worker& workerThread,
-                               const int       bonus) {
+inline sf_always_inline void update_correction_history(const Position& pos,
+                                                       Stack* const    ss,
+                                                       Search::Worker& workerThread,
+                                                       const int       bonus) {
     const Move  m  = (ss - 1)->currentMove;
     const Color us = pos.side_to_move();
 
