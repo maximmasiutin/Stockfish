@@ -104,8 +104,15 @@ void update_correction_history(const Position& pos,
                                Stack* const    ss,
                                Search::Worker& workerThread,
                                const int       bonus) {
-    const Move  m  = (ss - 1)->currentMove;
-    const Color us = pos.side_to_move();
+    const Move   m  = (ss - 1)->currentMove;
+    const Square to = m.to_sq_unchecked();
+    const Piece  pc = pos.piece_on(to);
+    const Color  us = pos.side_to_move();
+
+    auto& a2 = (*(ss - 2)->continuationCorrectionHistory)[pc][to];
+    auto& a4 = (*(ss - 4)->continuationCorrectionHistory)[pc][to];
+    prefetch<PrefetchRw::WRITE, PrefetchLoc::HIGH>(&a2);
+    prefetch<PrefetchRw::WRITE, PrefetchLoc::HIGH>(&a4);
 
     constexpr int nonPawnWeight = 187;
     auto&         shared        = workerThread.sharedHistory;
@@ -115,13 +122,9 @@ void update_correction_history(const Position& pos,
     shared.nonpawn_correction_entry<WHITE>(pos).at(us).nonPawnWhite << bonus * nonPawnWeight / 128;
     shared.nonpawn_correction_entry<BLACK>(pos).at(us).nonPawnBlack << bonus * nonPawnWeight / 128;
 
-    if (m.is_ok())
-    {
-        const Square to = m.to_sq();
-        const Piece  pc = pos.piece_on(to);
-        (*(ss - 2)->continuationCorrectionHistory)[pc][to] << bonus * 126 / 128;
-        (*(ss - 4)->continuationCorrectionHistory)[pc][to] << bonus * 63 / 128;
-    }
+    const int maskedBonus = m.is_ok() * bonus;
+    a2 << maskedBonus * 126 / 128;
+    a4 << maskedBonus * 63 / 128;
 }
 
 // Add a small random component to draw evaluations to avoid 3-fold blindness
@@ -570,11 +573,17 @@ void Search::Worker::do_move(
 
     if (ss != nullptr)
     {
-        ss->currentMove = move;
-        ss->continuationHistory =
-          &continuationHistory[ss->inCheck][capture][dirtyPiece.pc][move.to_sq()];
-        ss->continuationCorrectionHistory =
-          &continuationCorrectionHistory[dirtyPiece.pc][move.to_sq()];
+        const Piece  pc = dirtyPiece.pc;
+        const Square to = move.to_sq();
+
+        ss->currentMove                   = move;
+        ss->continuationHistory           = &continuationHistory[ss->inCheck][capture][pc][to];
+        ss->continuationCorrectionHistory = &continuationCorrectionHistory[pc][to];
+
+        prefetch<PrefetchRw::READ, PrefetchLoc::LOW>(
+          &(*(ss - 1)->continuationCorrectionHistory)[pc][to]);
+        prefetch<PrefetchRw::READ, PrefetchLoc::LOW>(
+          &(*(ss - 3)->continuationCorrectionHistory)[pc][to]);
     }
 }
 
