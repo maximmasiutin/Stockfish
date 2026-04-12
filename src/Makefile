@@ -778,6 +778,46 @@ ifeq ($(sse2),yes)
 	endif
 endif
 
+### 3.6a -mtune scheduling for Skylake-and-older x86-64 ARCH tiers
+# Without -mtune, GCC picks a default that tracks the most common CPUs
+# at the time each GCC version is released, so older-tier binaries drift
+# silently across compiler upgrades. Locking -mtune keeps codegen
+# predictable. Intel and AMD cores of the same release era are closer to
+# each other in scheduling characteristics than to a modern default.
+#
+# Each ARCH declares its own TUNE via exact-match block. Empty TUNE
+# skips -mtune for that ARCH.
+ifeq ($(ARCH),x86-64)
+    TUNE := nocona
+endif
+ifeq ($(ARCH),x86-64-ssse3)
+    TUNE := core2
+endif
+ifeq ($(ARCH),x86-64-sse3-popcnt)
+    TUNE := nehalem
+endif
+ifeq ($(ARCH),x86-64-sse41-popcnt)
+    TUNE := nehalem
+endif
+ifeq ($(ARCH),x86-64-modern)
+    TUNE := nehalem
+endif
+ifeq ($(ARCH),x86-64-avx2)
+    TUNE := haswell
+endif
+ifeq ($(ARCH),x86-64-bmi2)
+    TUNE := haswell
+endif
+ifeq ($(ARCH),x86-64-avx512)
+    TUNE := skylake-avx512
+endif
+
+ifneq ($(TUNE),)
+    ifeq ($(comp),$(filter $(comp),gcc clang mingw icx))
+        CXXFLAGS += -mtune=$(TUNE)
+    endif
+endif
+
 ifeq ($(mmx),yes)
 	ifeq ($(comp),$(filter $(comp),gcc clang mingw icx))
 		CXXFLAGS += -mmmx
