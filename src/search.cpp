@@ -25,8 +25,10 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <initializer_list>
+#include <numeric>
 #include <iostream>
 #include <list>
 #include <ratio>
@@ -602,8 +604,180 @@ void Search::Worker::undo_move(Position& pos, const Move move) {
 void Search::Worker::undo_null_move(Position& pos) { pos.undo_null_move(); }
 
 
+// Variant-local typedef for the contcorr table type. In shared-contcorr
+// variants (w1069, nogravity) the table lives in SharedHistories and uses
+// atomic entries; in master it is a per-worker CorrectionHistory<Continuation>.
+using ContCorrInstrumentTable =
+  MultiArray<SharedHistories::AlignedPieceToCorrHist, PIECE_NB, SQUARE_NB>;
+
+// Forward declaration for atexit handler.
+static void
+dump_contcorr_snapshot(const ContCorrInstrumentTable& table, const char* path, int gameNum);
+
+// Global state for atexit handler to dump last game snapshot.
+static const ContCorrInstrumentTable* g_contcorrTable = nullptr;
+static const char*                    g_contcorrPath  = nullptr;
+static int                            g_contcorrGame  = 0;
+
+static void dump_contcorr_on_exit() {
+    if (g_contcorrTable && g_contcorrPath)
+        dump_contcorr_snapshot(*g_contcorrTable, g_contcorrPath, g_contcorrGame);
+}
+
+// Dump contcorr entry value snapshot before clearing.
+// Activated by CONTCORR_OUTPUT environment variable.
+static void
+dump_contcorr_snapshot(const ContCorrInstrumentTable& table, const char* path, int gameNum) {
+    constexpr int FILL = 6;
+    constexpr int D    = CORRECTION_HISTORY_LIMIT;
+
+    // Collect non-default entries
+    int  total    = 0;
+    int  capacity = 256 * 1024;
+    int* vals     = new int[capacity];
+
+    for (const auto& outer : table)
+        for (const auto& inner : outer)
+            for (int p = 0; p < PIECE_NB; p++)
+                for (int s = 0; s < SQUARE_NB; s++)
+                {
+                    int v = int(inner[p][s]);
+                    if (v != FILL)
+                    {
+                        if (total >= capacity)
+                        {
+                            capacity *= 2;
+                            int* tmp = new int[capacity];
+                            std::copy(vals, vals + total, tmp);
+                            delete[] vals;
+                            vals = tmp;
+                        }
+                        vals[total++] = v;
+                    }
+                }
+
+    std::FILE* f = std::fopen(path, "a");
+    if (!f)
+    {
+        delete[] vals;
+        return;
+    }
+
+    std::fprintf(f, "GAME,%d\n", gameNum);
+
+    if (total == 0)
+    {
+        std::fprintf(f, "STATS,1048576,0,0,0.0,0,0.0\n---\n");
+        std::fclose(f);
+        delete[] vals;
+        return;
+    }
+
+    std::sort(vals, vals + total);
+
+    long long sumPos = 0, sumNeg = 0;
+    int       countPos = 0, countNeg = 0;
+    int       countEq0 = 0, countEqNegD = 0, countEqPosD = 0;
+    long long headroomSum = 0;
+
+    // 2048 signed bins spanning [-D, +D]; bin 1024 straddles val=0.
+    constexpr int NBINS       = 2048;
+    int           hist[NBINS] = {};
+
+    for (int i = 0; i < total; i++)
+    {
+        int v  = vals[i];
+        int av = std::abs(v);
+        if (v > FILL)
+        {
+            sumPos += v;
+            countPos++;
+        }
+        else if (v < FILL)
+        {
+            sumNeg += v;
+            countNeg++;
+        }
+        if (v == 0)
+            countEq0++;
+        if (v == -D)
+            countEqNegD++;
+        else if (v == D)
+            countEqPosD++;
+        long long biasIdx = (static_cast<long long>(v) + D) * NBINS / (2LL * D);
+        int       idx     = int(std::clamp(biasIdx, 0LL, static_cast<long long>(NBINS - 1)));
+        hist[idx]++;
+        headroomSum += D - av;
+    }
+
+    double meanPos = countPos > 0 ? double(sumPos) / countPos : 0.0;
+    double meanNeg = countNeg > 0 ? double(sumNeg) / countNeg : 0.0;
+    double meanHR  = 100.0 * double(headroomSum) / (double(total) * D);
+
+    // Percentiles of |val|
+    int* absv = new int[total];
+    for (int i = 0; i < total; i++)
+        absv[i] = std::abs(vals[i]);
+    std::sort(absv, absv + total);
+    auto pctl = [&](int pct) {
+        int idx = int(int64_t(total) * pct / 100);
+        return absv[std::min(idx, total - 1)];
+    };
+
+    std::fprintf(f, "STATS,%d,%d,%d,%.1f,%d,%.1f\n", PIECE_NB * SQUARE_NB * PIECE_NB * SQUARE_NB,
+                 total, countPos, meanPos, countNeg, meanNeg);
+    std::fprintf(f, "PCTLS,%d,%d,%d,%d,%d\n", pctl(50), pctl(75), pctl(90), pctl(95), pctl(99));
+    std::fprintf(f, "VALSENT,%d,%d,%d,%d\n", total, countEq0, countEqNegD, countEqPosD);
+    std::fprintf(f, "VALHIST");
+    for (int i = 0; i < NBINS; i++)
+        std::fprintf(f, ",%d", hist[i]);
+    std::fprintf(f, "\n");
+    std::fprintf(f, "HEADROOM,%.1f\n", meanHR);
+
+    // 16 lowest
+    std::fprintf(f, "LOW16");
+    for (int i = 0; i < std::min(16, total); i++)
+        std::fprintf(f, ",%d", vals[i]);
+    std::fprintf(f, "\n");
+
+    // 16 highest
+    std::fprintf(f, "HIGH16");
+    for (int i = std::max(0, total - 16); i < total; i++)
+        std::fprintf(f, ",%d", vals[i]);
+    std::fprintf(f, "\n");
+
+    std::fprintf(f, "---\n");
+    std::fclose(f);
+    delete[] absv;
+    delete[] vals;
+}
+
 // Reset histories, usually before a new game
 void Search::Worker::clear() {
+
+    // Snapshot contcorr entries before clearing (instrumentation).
+    // First clear() fires at engine startup on an empty table: skip the
+    // snapshot so only end-of-game states are recorded. Register atexit
+    // once so the final game's state is flushed on shutdown.
+    const char* ccOut = std::getenv("CONTCORR_OUTPUT");
+    if (ccOut && is_mainthread())
+    {
+        static bool first_clear = true;
+        if (first_clear)
+        {
+            g_contcorrPath  = ccOut;
+            g_contcorrTable = &sharedHistory.continuationCorrectionHistory;
+            std::atexit(dump_contcorr_on_exit);
+            first_clear = false;
+        }
+        else
+        {
+            dump_contcorr_snapshot(sharedHistory.continuationCorrectionHistory, ccOut,
+                                   g_contcorrGame++);
+            g_contcorrTable = &sharedHistory.continuationCorrectionHistory;
+        }
+    }
+
     mainHistory.fill(0);
     captureHistory.fill(-678);
 
