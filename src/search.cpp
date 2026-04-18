@@ -262,6 +262,8 @@ bool Search::Worker::iterative_deepening() {
 
     SearchManager* mainThread = (is_mainthread() ? main_manager() : nullptr);
 
+    completedMoveCount++;
+
     PVMoves pv;
 
     Depth lastBestMoveDepth = 0;
@@ -440,6 +442,9 @@ bool Search::Worker::iterative_deepening() {
         {
             completedDepth = rootDepth;
 
+            if (rootDepth > maxRootDepth)
+                maxRootDepth = rootDepth;
+
             if (lastIterationPV.empty() || rootMoves[0].pv[0] != lastIterationPV[0])
                 lastBestMoveDepth = rootDepth;
 
@@ -596,6 +601,9 @@ void Search::Worker::undo_null_move(Position& pos) { pos.undo_null_move(); }
 
 // Reset histories, usually before a new game
 void Search::Worker::clear() {
+    maxRootDepth       = 0;
+    completedMoveCount = 0;
+
     mainHistory.fill(0);
     captureHistory.fill(-678);
 
@@ -1207,6 +1215,8 @@ moves_loop:  // When in check, search starts here
         if (ss->ttPv)
             r -= 2819 + PvNode * 973 + (ttData.value > alpha) * 905
                + (ttData.depth >= depth) * (935 + cutNode * 959);
+
+        r -= 1024 * (depth > 15 && completedMoveCount > 20 && maxRootDepth >= 24);
 
         r += 691;  // Base reduction offset to compensate for other tweaks
         r -= moveCount * 65;
