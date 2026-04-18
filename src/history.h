@@ -38,7 +38,7 @@ namespace Stockfish {
 constexpr int PAWN_HISTORY_BASE_SIZE   = 8192;  // has to be a power of 2
 constexpr int UINT_16_HISTORY_SIZE     = std::numeric_limits<uint16_t>::max() + 1;
 constexpr int CORRHIST_BASE_SIZE       = UINT_16_HISTORY_SIZE;
-constexpr int CORRECTION_HISTORY_LIMIT = 1024;
+constexpr int CORRECTION_HISTORY_LIMIT = 16384;  // has to be a power of 2
 constexpr int LOW_PLY_HISTORY_SIZE     = 5;
 
 static_assert((PAWN_HISTORY_BASE_SIZE & (PAWN_HISTORY_BASE_SIZE - 1)) == 0,
@@ -47,12 +47,20 @@ static_assert((PAWN_HISTORY_BASE_SIZE & (PAWN_HISTORY_BASE_SIZE - 1)) == 0,
 static_assert((CORRHIST_BASE_SIZE & (CORRHIST_BASE_SIZE - 1)) == 0,
               "CORRHIST_BASE_SIZE has to be a power of 2");
 
+static_assert((CORRECTION_HISTORY_LIMIT & (CORRECTION_HISTORY_LIMIT - 1)) == 0,
+              "CORRECTION_HISTORY_LIMIT has to be a power of 2");
+
+enum class CorrFormula {
+    GRAVITY,
+    QUADFWD_LINBWD
+};
+
 // StatsEntry is the container of various numerical statistics. We use a class
 // instead of a naked value to directly call history update operator<<() on
 // the entry. The first template parameter T is the base type of the array,
 // and the second template parameter D limits the range of updates in [-D, D]
 // when we update values with the << operator
-template<typename T, int D, bool Atomic = false>
+template<typename T, int D, bool Atomic = false, CorrFormula Formula = CorrFormula::GRAVITY>
 struct StatsEntry {
     static_assert(std::is_arithmetic_v<T>, "Not an arithmetic type");
 
@@ -75,12 +83,27 @@ struct StatsEntry {
     }
 
     void operator<<(int bonus) {
-        // Make sure that bonus is in range [-D, D]
-        int clampedBonus = std::clamp(bonus, -D, D);
-        T   val          = *this;
-        *this            = val + clampedBonus - val * std::abs(clampedBonus) / D;
+        int val = T(*this);
+        if constexpr (Formula == CorrFormula::GRAVITY)
+        {
+            int clampedBonus = std::clamp(bonus, -D, D);
+            *this            = val + clampedBonus - val * std::abs(clampedBonus) / D;
+        }
+        else if constexpr (Formula == CorrFormula::QUADFWD_LINBWD)
+        {
+            static_assert((D & (D - 1)) == 0, "D must be a power of 2 for QUADFWD_LINBWD");
+            constexpr unsigned LOG2_D       = ilog2(unsigned(D));
+            int                absVal       = std::min(std::abs(val), D);
+            int                diffSignMask = (val ^ bonus) >> 31;
+            int                hSame        = D - absVal;
+            int                hOpp         = D + absVal;
+            int                headroom     = (hSame & ~diffSignMask) | (hOpp & diffSignMask);
+            int                extraFactor  = (headroom & ~diffSignMask) | (D & diffSignMask);
+            int dampened = int(int64_t(bonus) * headroom * extraFactor >> (2 * LOG2_D));
+            *this        = val + dampened;
+        }
 
-        assert(std::abs(T(*this)) <= D);
+        assert(std::abs(int(T(*this))) <= D);
     }
 };
 
@@ -94,6 +117,15 @@ using Stats = MultiArray<StatsEntry<T, D>, Sizes...>;
 
 template<typename T, int D, std::size_t... Sizes>
 using AtomicStats = MultiArray<StatsEntry<T, D, true>, Sizes...>;
+
+template<typename T, int D, bool Atomic = false>
+using AsymStatsEntry = StatsEntry<T, D, Atomic, CorrFormula::QUADFWD_LINBWD>;
+
+template<typename T, int D, std::size_t... Sizes>
+using AsymStats = MultiArray<AsymStatsEntry<T, D, false>, Sizes...>;
+
+template<typename T, int D, std::size_t... Sizes>
+using AsymAtomicStats = MultiArray<AsymStatsEntry<T, D, true>, Sizes...>;
 
 // DynStats is a dynamically sized array of Stats, used for thread-shared histories
 // which should scale with the total number of threads. The SizeMultiplier gives
@@ -167,10 +199,10 @@ enum CorrHistType {
 
 template<typename T, int D>
 struct CorrectionBundle {
-    StatsEntry<T, D, true> pawn;
-    StatsEntry<T, D, true> minor;
-    StatsEntry<T, D, true> nonPawnWhite;
-    StatsEntry<T, D, true> nonPawnBlack;
+    AsymStatsEntry<T, D, true> pawn;
+    AsymStatsEntry<T, D, true> minor;
+    AsymStatsEntry<T, D, true> nonPawnWhite;
+    AsymStatsEntry<T, D, true> nonPawnBlack;
 
     void operator=(T val) {
         pawn         = val;
@@ -185,12 +217,12 @@ namespace Detail {
 template<CorrHistType>
 struct CorrHistTypedef {
     using type =
-      DynStats<Stats<std::int16_t, CORRECTION_HISTORY_LIMIT, COLOR_NB>, CORRHIST_BASE_SIZE>;
+      DynStats<AsymStats<std::int16_t, CORRECTION_HISTORY_LIMIT, COLOR_NB>, CORRHIST_BASE_SIZE>;
 };
 
 template<>
 struct CorrHistTypedef<PieceTo> {
-    using type = Stats<std::int16_t, CORRECTION_HISTORY_LIMIT, PIECE_NB, SQUARE_NB>;
+    using type = AsymStats<std::int16_t, CORRECTION_HISTORY_LIMIT, PIECE_NB, SQUARE_NB>;
 };
 
 template<>
@@ -200,7 +232,7 @@ struct CorrHistTypedef<Continuation> {
 
 template<>
 struct CorrHistTypedef<NonPawn> {
-    using type = DynStats<Stats<std::int16_t, CORRECTION_HISTORY_LIMIT, COLOR_NB, COLOR_NB>,
+    using type = DynStats<AsymStats<std::int16_t, CORRECTION_HISTORY_LIMIT, COLOR_NB, COLOR_NB>,
                           CORRHIST_BASE_SIZE>;
 };
 
@@ -220,12 +252,28 @@ using TTMoveHistory = StatsEntry<std::int16_t, 8192>;
 // on a given NUMA node. The passed size must be a power of two to make
 // the indexing more efficient.
 struct SharedHistories {
+    using AtomicPieceToCorrHist =
+      AsymAtomicStats<std::int16_t, CORRECTION_HISTORY_LIMIT, PIECE_NB, SQUARE_NB>;
+
+    struct alignas(64) AlignedPieceToCorrHist: AtomicPieceToCorrHist {};
+
     SharedHistories(size_t threadCount) :
         correctionHistory(threadCount),
         pawnHistory(threadCount) {
         assert((threadCount & (threadCount - 1)) == 0 && threadCount != 0);
         sizeMinus1         = correctionHistory.get_size() - 1;
         pawnHistSizeMinus1 = pawnHistory.get_size() - 1;
+    }
+
+    void clear_contcorr_range(size_t threadIdx, size_t numaTotal) {
+        assert(numaTotal > 0 && threadIdx < numaTotal);
+        constexpr size_t total                 = PIECE_NB * SQUARE_NB;
+        constexpr int    correctionHistoryFill = 96;
+        size_t           start                 = uint64_t(threadIdx) * total / numaTotal;
+        size_t           end =
+          threadIdx + 1 == numaTotal ? total : uint64_t(threadIdx + 1) * total / numaTotal;
+        for (size_t i = start; i < end; i++)
+            continuationCorrectionHistory[i / SQUARE_NB][i % SQUARE_NB].fill(correctionHistoryFill);
     }
 
     size_t get_size() const { return sizeMinus1 + 1; }
@@ -260,8 +308,9 @@ struct SharedHistories {
         return correctionHistory[pos.non_pawn_key(c) & sizeMinus1];
     }
 
-    UnifiedCorrectionHistory correctionHistory;
-    PawnHistory              pawnHistory;
+    UnifiedCorrectionHistory                                correctionHistory;
+    PawnHistory                                             pawnHistory;
+    MultiArray<AlignedPieceToCorrHist, PIECE_NB, SQUARE_NB> continuationCorrectionHistory;
 
 
    private:

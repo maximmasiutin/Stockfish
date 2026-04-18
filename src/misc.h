@@ -50,6 +50,16 @@ std::string engine_version_info();
 std::string engine_info(bool to_uci = false);
 std::string compiler_info();
 
+constexpr unsigned ilog2(unsigned n) {
+    unsigned c = 0;
+    while (n > 1)
+    {
+        n >>= 1;
+        ++c;
+    }
+    return c;
+}
+
 // Prefetch hint enums for explicit call-site control.
 enum class PrefetchRw {
     READ,
