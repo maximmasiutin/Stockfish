@@ -25,11 +25,15 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
+#include <fstream>
 #include <initializer_list>
 #include <iostream>
 #include <list>
+#include <process.h>
 #include <ratio>
+#include <sstream>
 #include <string>
 #include <utility>
 
@@ -51,6 +55,59 @@
 #include "ucioption.h"
 
 namespace Stockfish {
+
+namespace {
+constexpr int INSTR_WRITE_BUCKETS = 128;
+constexpr int INSTR_MRD_BUCKETS   = 256;
+
+std::array<std::atomic<uint64_t>, INSTR_WRITE_BUCKETS> instrWriteHist{};
+std::array<std::atomic<uint64_t>, INSTR_MRD_BUCKETS>   instrMrdHist{};
+
+inline void instr_log_write(Depth depth) {
+    int d = int(depth);
+    if (d < 0)
+        d = 0;
+    else if (d >= INSTR_WRITE_BUCKETS)
+        d = INSTR_WRITE_BUCKETS - 1;
+    instrWriteHist[d].fetch_add(1, std::memory_order_relaxed);
+}
+
+inline void instr_record_mrd(Depth maxRootDepth) {
+    int d = int(maxRootDepth);
+    if (d < 0)
+        d = 0;
+    else if (d >= INSTR_MRD_BUCKETS)
+        d = INSTR_MRD_BUCKETS - 1;
+    instrMrdHist[d].fetch_add(1, std::memory_order_relaxed);
+}
+
+struct InstrDumper {
+    ~InstrDumper() {
+        const char* dir = std::getenv("INSTR_DIR");
+        if (!dir)
+            return;
+        std::ostringstream path;
+        path << dir << "/inst-" << ::_getpid() << ".csv";
+        std::ofstream f(path.str(), std::ios::out | std::ios::trunc);
+        if (!f)
+            return;
+        f << "metric,bucket,count\n";
+        for (int i = 0; i < INSTR_WRITE_BUCKETS; i++)
+        {
+            uint64_t c = instrWriteHist[i].load(std::memory_order_relaxed);
+            if (c)
+                f << "w," << i << ',' << c << '\n';
+        }
+        for (int i = 0; i < INSTR_MRD_BUCKETS; i++)
+        {
+            uint64_t c = instrMrdHist[i].load(std::memory_order_relaxed);
+            if (c)
+                f << "m," << i << ',' << c << '\n';
+        }
+    }
+};
+InstrDumper instrDumper;
+}  // namespace
 
 namespace TB = Tablebases;
 
@@ -552,6 +609,7 @@ bool Search::Worker::iterative_deepening() {
                   *std::find(rootMoves.begin(), rootMoves.end(),
                              skill.best ? skill.best : skill.pick_best(rootMoves, multiPV)));
 
+    instr_record_mrd(completedDepth);
     return uciPvSent;
 }
 
@@ -1495,6 +1553,7 @@ moves_loop:  // When in check, search starts here
           std::clamp(int(bestValue - ss->staticEval) * depth * (bestMove ? 12 : 17) / 128,
                      -CORRECTION_HISTORY_LIMIT / 4, CORRECTION_HISTORY_LIMIT / 4);
         update_correction_history(pos, ss, *this, 1069 * bonus / 1024);
+        instr_log_write(depth);
     }
 
     assert(bestValue > -VALUE_INFINITE && bestValue < VALUE_INFINITE);
