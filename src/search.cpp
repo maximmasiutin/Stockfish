@@ -26,9 +26,11 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
+#include <fstream>
 #include <initializer_list>
 #include <iostream>
 #include <list>
+#include <mutex>
 #include <ratio>
 #include <string>
 #include <utility>
@@ -51,6 +53,42 @@
 #include "ucioption.h"
 
 namespace Stockfish {
+
+namespace {
+std::mutex       instrMutex;
+std::ofstream    instrFile;
+std::atomic<int> instrGameCounter{0};
+thread_local int instrGameId = -1;
+
+void instr_log(int threadIdx, Depth rootDepth, Depth completedDepth, int moveIdx) {
+    std::lock_guard<std::mutex> lock(instrMutex);
+    if (!instrFile.is_open())
+    {
+        const char* path = std::getenv("INSTR_CSV");
+        instrFile.open(path ? path : "instrument-rootdepth.csv", std::ios::out | std::ios::app);
+        if (instrFile.tellp() == 0)
+            instrFile << "game,thread,move,rootDepth,completedDepth\n";
+    }
+    instrFile << instrGameId << ',' << threadIdx << ',' << moveIdx << ',' << int(rootDepth) << ','
+              << int(completedDepth) << '\n';
+    instrFile.flush();
+}
+
+std::mutex    instrWriteMutex;
+std::ofstream instrWriteFile;
+
+void instr_log_write(int threadIdx, Depth depth, int bonus) {
+    std::lock_guard<std::mutex> lock(instrWriteMutex);
+    if (!instrWriteFile.is_open())
+    {
+        const char* path = std::getenv("INSTR_WRITES_CSV");
+        instrWriteFile.open(path ? path : "instrument-writes.csv", std::ios::out | std::ios::app);
+        if (instrWriteFile.tellp() == 0)
+            instrWriteFile << "game,thread,depth,bonus\n";
+    }
+    instrWriteFile << instrGameId << ',' << threadIdx << ',' << int(depth) << ',' << bonus << '\n';
+}
+}  // namespace
 
 namespace TB = Tablebases;
 
@@ -262,6 +300,8 @@ bool Search::Worker::iterative_deepening() {
 
     SearchManager* mainThread = (is_mainthread() ? main_manager() : nullptr);
 
+    instrGameId = instrGameCounter.fetch_add(1);
+
     PVMoves pv;
 
     Depth lastBestMoveDepth = 0;
@@ -439,6 +479,8 @@ bool Search::Worker::iterative_deepening() {
         if (!threads.stop)
         {
             completedDepth = rootDepth;
+
+            instr_log(int(threadIdx), rootDepth, completedDepth, rootPos.game_ply());
 
             if (lastIterationPV.empty() || rootMoves[0].pv[0] != lastIterationPV[0])
                 lastBestMoveDepth = rootDepth;
@@ -1495,6 +1537,7 @@ moves_loop:  // When in check, search starts here
           std::clamp(int(bestValue - ss->staticEval) * depth * (bestMove ? 12 : 17) / 128,
                      -CORRECTION_HISTORY_LIMIT / 4, CORRECTION_HISTORY_LIMIT / 4);
         update_correction_history(pos, ss, *this, 1069 * bonus / 1024);
+        instr_log_write(int(threadIdx), depth, bonus);
     }
 
     assert(bestValue > -VALUE_INFINITE && bestValue < VALUE_INFINITE);
