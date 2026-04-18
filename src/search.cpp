@@ -25,13 +25,20 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <initializer_list>
 #include <iostream>
 #include <list>
 #include <ratio>
 #include <string>
 #include <utility>
+#if defined(_WIN32)
+    #include <process.h>
+#else
+    #include <unistd.h>
+#endif
 
 #include "bitboard.h"
 #include "evaluate.h"
@@ -100,6 +107,80 @@ Value to_corrected_static_eval(const Value v, const int cv) {
     return std::clamp(v + cv / 131072, VALUE_TB_LOSS_IN_MAX_PLY + 1, VALUE_TB_WIN_IN_MAX_PLY - 1);
 }
 
+// === Mechanism instrumentation (shared contcorr dilution hypothesis) ===
+// Counts discriminate: cross-thread overwrite vs integer-rounding floor vs clamp.
+// Two slots: s2 = (ss-2) writes, s4 = (ss-4) writes.
+namespace ContCorrInstr {
+
+struct Counters {
+    std::atomic<uint64_t> writes{0};
+    std::atomic<uint64_t> cross_thread{0};
+    std::atomic<uint64_t> same_sign{0};
+    std::atomic<uint64_t> rounded_to_zero{0};
+    std::atomic<uint64_t> clamp_hit{0};
+    std::atomic<uint64_t> abs_bonus_lt_8{0};
+    std::atomic<uint64_t> abs_bonus_lt_32{0};
+    std::atomic<uint64_t> abs_before_lt_1024{0};
+    std::atomic<uint64_t> abs_before_lt_4096{0};
+    std::atomic<uint64_t> abs_before_ge_12288{0};
+};
+
+inline Counters c2{}, c4{};
+
+// Per-entry last-writer table, shared across all threads.
+// Non-atomic; races accepted (statistical signal only).
+// 0xFF sentinel = no prior writer yet.
+struct LastWriterTable {
+    uint8_t data[PIECE_NB][SQUARE_NB];
+    LastWriterTable() { std::memset(data, 0xFF, sizeof(data)); }
+};
+inline LastWriterTable   last_writer_s2{};
+inline LastWriterTable   last_writer_s4{};
+inline std::atomic<bool> dumped{false};
+
+inline void dump() {
+    bool expected = false;
+    if (!dumped.compare_exchange_strong(expected, true))
+        return;
+    const char* dir = std::getenv("STOCKFISH_INSTR_DIR");
+    char        path[512];
+#if defined(_WIN32)
+    int pid = ::_getpid();
+#else
+    int pid = ::getpid();
+#endif
+    std::snprintf(path, sizeof(path), "%s/inst-ccm-%d.csv", dir ? dir : ".", pid);
+    std::FILE* f = std::fopen(path, "w");
+    if (!f)
+        return;
+    std::fprintf(f, "slot,metric,value\n");
+    auto row = [&](const char* slot, Counters& c) {
+        std::fprintf(f, "%s,writes,%llu\n", slot, (unsigned long long) c.writes);
+        std::fprintf(f, "%s,cross_thread,%llu\n", slot, (unsigned long long) c.cross_thread);
+        std::fprintf(f, "%s,same_sign,%llu\n", slot, (unsigned long long) c.same_sign);
+        std::fprintf(f, "%s,rounded_to_zero,%llu\n", slot, (unsigned long long) c.rounded_to_zero);
+        std::fprintf(f, "%s,clamp_hit,%llu\n", slot, (unsigned long long) c.clamp_hit);
+        std::fprintf(f, "%s,abs_bonus_lt_8,%llu\n", slot, (unsigned long long) c.abs_bonus_lt_8);
+        std::fprintf(f, "%s,abs_bonus_lt_32,%llu\n", slot, (unsigned long long) c.abs_bonus_lt_32);
+        std::fprintf(f, "%s,abs_before_lt_1024,%llu\n", slot,
+                     (unsigned long long) c.abs_before_lt_1024);
+        std::fprintf(f, "%s,abs_before_lt_4096,%llu\n", slot,
+                     (unsigned long long) c.abs_before_lt_4096);
+        std::fprintf(f, "%s,abs_before_ge_12288,%llu\n", slot,
+                     (unsigned long long) c.abs_before_ge_12288);
+    };
+    row("s2", c2);
+    row("s4", c4);
+    std::fclose(f);
+}
+
+struct DumpOnExit {
+    ~DumpOnExit() { dump(); }
+};
+inline DumpOnExit dump_on_exit_instance{};
+
+}  // namespace ContCorrInstr
+
 void update_correction_history(const Position& pos,
                                Stack* const    ss,
                                Search::Worker& workerThread,
@@ -119,8 +200,52 @@ void update_correction_history(const Position& pos,
     {
         const Square to = m.to_sq();
         const Piece  pc = pos.piece_on(to);
-        (*(ss - 2)->continuationCorrectionHistory)[pc][to] << bonus * 126 / 128;
-        (*(ss - 4)->continuationCorrectionHistory)[pc][to] << bonus * 63 / 128;
+
+        const int     bonus2     = bonus * 126 / 128;
+        const int     bonus4     = bonus * 63 / 128;
+        const auto    my_tid     = uint8_t((reinterpret_cast<uintptr_t>(&workerThread) >> 6)
+                                           & 0xFE);  // stable per-worker, != 0xFF
+        const auto&   e2         = (*(ss - 2)->continuationCorrectionHistory)[pc][to];
+        const auto&   e4         = (*(ss - 4)->continuationCorrectionHistory)[pc][to];
+        const int16_t v2_before  = int16_t(e2);
+        const int16_t v4_before  = int16_t(e4);
+        const uint8_t prev_tid_2 = ContCorrInstr::last_writer_s2.data[pc][to];
+        const uint8_t prev_tid_4 = ContCorrInstr::last_writer_s4.data[pc][to];
+        ContCorrInstr::last_writer_s2.data[pc][to] = my_tid;
+        ContCorrInstr::last_writer_s4.data[pc][to] = my_tid;
+
+        (*(ss - 2)->continuationCorrectionHistory)[pc][to] << bonus2;
+        (*(ss - 4)->continuationCorrectionHistory)[pc][to] << bonus4;
+
+        const int16_t v2_after = int16_t(e2);
+        const int16_t v4_after = int16_t(e4);
+
+        auto tally = [&](ContCorrInstr::Counters& c, int bn, int16_t vb, int16_t va,
+                         uint8_t prev_tid) {
+            c.writes.fetch_add(1, std::memory_order_relaxed);
+            if (prev_tid != 0xFF && prev_tid != my_tid)
+                c.cross_thread.fetch_add(1, std::memory_order_relaxed);
+            if ((vb >= 0) == (bn >= 0))
+                c.same_sign.fetch_add(1, std::memory_order_relaxed);
+            if (va == vb && bn != 0)
+                c.rounded_to_zero.fetch_add(1, std::memory_order_relaxed);
+            if (std::abs(int(va)) >= CORRECTION_HISTORY_LIMIT - 1)
+                c.clamp_hit.fetch_add(1, std::memory_order_relaxed);
+            int ab = std::abs(bn);
+            if (ab < 8)
+                c.abs_bonus_lt_8.fetch_add(1, std::memory_order_relaxed);
+            if (ab < 32)
+                c.abs_bonus_lt_32.fetch_add(1, std::memory_order_relaxed);
+            int av = std::abs(int(vb));
+            if (av < 1024)
+                c.abs_before_lt_1024.fetch_add(1, std::memory_order_relaxed);
+            if (av < 4096)
+                c.abs_before_lt_4096.fetch_add(1, std::memory_order_relaxed);
+            if (av >= 12288)
+                c.abs_before_ge_12288.fetch_add(1, std::memory_order_relaxed);
+        };
+        tally(ContCorrInstr::c2, bonus2, v2_before, v2_after, prev_tid_2);
+        tally(ContCorrInstr::c4, bonus4, v4_before, v4_after, prev_tid_4);
     }
 }
 
@@ -282,8 +407,9 @@ bool Search::Worker::iterative_deepening() {
     {
         (ss - i)->continuationHistory =
           &continuationHistory[0][0][NO_PIECE][0];  // Use as a sentinel
-        (ss - i)->continuationCorrectionHistory = &continuationCorrectionHistory[NO_PIECE][0];
-        (ss - i)->staticEval                    = VALUE_NONE;
+        (ss - i)->continuationCorrectionHistory =
+          &sharedHistory.continuationCorrectionHistory[NO_PIECE][0];
+        (ss - i)->staticEval = VALUE_NONE;
     }
 
     for (int i = 0; i <= MAX_PLY + 2; ++i)
@@ -575,7 +701,7 @@ void Search::Worker::do_move(
         ss->continuationHistory =
           &continuationHistory[ss->inCheck][capture][dirtyPiece.pc][move.to_sq()];
         ss->continuationCorrectionHistory =
-          &continuationCorrectionHistory[dirtyPiece.pc][move.to_sq()];
+          &sharedHistory.continuationCorrectionHistory[dirtyPiece.pc][move.to_sq()];
     }
 }
 
@@ -583,7 +709,7 @@ void Search::Worker::do_null_move(Position& pos, StateInfo& st, Stack* const ss)
     pos.do_null_move(st);
     ss->currentMove                   = Move::null();
     ss->continuationHistory           = &continuationHistory[0][0][NO_PIECE][0];
-    ss->continuationCorrectionHistory = &continuationCorrectionHistory[NO_PIECE][0];
+    ss->continuationCorrectionHistory = &sharedHistory.continuationCorrectionHistory[NO_PIECE][0];
 }
 
 void Search::Worker::undo_move(Position& pos, const Move move) {
@@ -605,9 +731,7 @@ void Search::Worker::clear() {
 
     ttMoveHistory = 0;
 
-    for (auto& to : continuationCorrectionHistory)
-        for (auto& h : to)
-            h.fill(6);
+    sharedHistory.clear_contcorr_range(numaThreadIdx, numaTotal);
 
     for (bool inCheck : {false, true})
         for (StatsType c : {NoCaptures, Captures})
