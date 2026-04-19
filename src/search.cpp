@@ -81,20 +81,37 @@ using SearchedList                  = ValueList<Move, SEARCHEDLIST_CAPACITY>;
 // (*Scaler) All tuned parameters at time controls shorter than
 // optimized for require verifications at longer time controls
 
+// Encode a (piece, square) pair into a 10-bit contcorrIndex for the
+// joint correction hash. Layout:
+//   bit   9    : color       (0 = white, 1 = black)
+//   bits  6..8 : piece type  (PAWN..KING; NO_PIECE_TYPE = 0 for sentinel)
+//   bits  0..5 : square      (A1..H8)
+unsigned contcorr_index(Piece pc, Square sq) { return unsigned(pc) * 64 + unsigned(sq); }
+
+uint32_t contcorr_hash_4ply(unsigned idx1, unsigned idx2, unsigned idx3, unsigned idx4) {
+    // Three-prime Horner hash. Primes chosen by FFT enumeration over the
+    // Piece-based index domain ({0} U {pc*64+sq}, 769 values in [0,1024))
+    // to minimize chi2/mean across modulus N = T * 16384.
+    // Don't SPSA-tune: hash multipliers have no smooth optimum.
+    constexpr uint64_t primeHashMult2Ply = 383;
+    constexpr uint64_t primeHashMult3Ply = 1009;
+    constexpr uint64_t primeHashMult4Ply = 1129;
+    return uint32_t(
+      (((uint64_t(idx1) * primeHashMult2Ply + idx2) * primeHashMult3Ply + idx3) * primeHashMult4Ply
+       + idx4)
+      & 0xFFFFFFFFu);
+}
+
 int correction_value(const Worker& w, const Position& pos, const Stack* const ss) {
     const Color us     = pos.side_to_move();
-    const auto  m      = (ss - 1)->currentMove;
     const auto& shared = w.sharedHistory;
     const int   pcv    = shared.pawn_correction_entry(pos)[us].pawn;
     const int   micv   = shared.minor_piece_correction_entry(pos)[us].minor;
     const int   wnpcv  = shared.nonpawn_correction_entry<WHITE>(pos)[us].nonPawnWhite;
     const int   bnpcv  = shared.nonpawn_correction_entry<BLACK>(pos)[us].nonPawnBlack;
-    const int   cntcv =
-      m.is_ok() ? (*(ss - 2)->continuationCorrectionHistory)[pos.piece_on(m.to_sq())][m.to_sq()]
-                    + (*(ss - 4)->continuationCorrectionHistory)[pos.piece_on(m.to_sq())][m.to_sq()]
-                  : 8;
+    const int   jcv    = int(shared.joint_correction_entry(ss->contcorrHash));
 
-    return 12153 * pcv + 8620 * micv + 12355 * (wnpcv + bnpcv) + 7982 * cntcv;
+    return 12153 * pcv + 8620 * micv + 12355 * (wnpcv + bnpcv) + 11973 * jcv;
 }
 
 // Add correctionHistory value to raw staticEval and guarantee evaluation
@@ -107,7 +124,6 @@ void update_correction_history(const Position& pos,
                                Stack* const    ss,
                                Search::Worker& workerThread,
                                const int       bonus) {
-    const Move  m  = (ss - 1)->currentMove;
     const Color us = pos.side_to_move();
 
     constexpr int nonPawnWeight = 187;
@@ -118,13 +134,7 @@ void update_correction_history(const Position& pos,
     shared.nonpawn_correction_entry<WHITE>(pos)[us].nonPawnWhite << bonus * nonPawnWeight / 128;
     shared.nonpawn_correction_entry<BLACK>(pos)[us].nonPawnBlack << bonus * nonPawnWeight / 128;
 
-    if (m.is_ok())
-    {
-        const Square to = m.to_sq();
-        const Piece  pc = pos.piece_on(to);
-        (*(ss - 2)->continuationCorrectionHistory)[pc][to] << bonus * 126 / 128;
-        (*(ss - 4)->continuationCorrectionHistory)[pc][to] << bonus * 63 / 128;
-    }
+    shared.joint_correction_entry(ss->contcorrHash) << bonus;
 }
 
 // Add a small random component to draw evaluations to avoid 3-fold blindness
@@ -285,9 +295,11 @@ bool Search::Worker::iterative_deepening() {
     {
         (ss - i)->continuationHistory =
           &continuationHistory[0][0][NO_PIECE][0];  // Use as a sentinel
-        (ss - i)->continuationCorrectionHistory = &continuationCorrectionHistory[NO_PIECE][0];
-        (ss - i)->staticEval                    = VALUE_NONE;
+        (ss - i)->contcorrIndex = 0;
+        (ss - i)->contcorrHash  = 0;
+        (ss - i)->staticEval    = VALUE_NONE;
     }
+    ss->contcorrHash = 0;
 
     for (int i = 0; i <= MAX_PLY + 2; ++i)
         (ss + i)->ply = i;
@@ -577,16 +589,20 @@ void Search::Worker::do_move(
         ss->currentMove = move;
         ss->continuationHistory =
           &continuationHistory[ss->inCheck][capture][dirtyPiece.pc][move.to_sq()];
-        ss->continuationCorrectionHistory =
-          &continuationCorrectionHistory[dirtyPiece.pc][move.to_sq()];
+        ss->contcorrIndex = contcorr_index(pos.piece_on(move.to_sq()), move.to_sq());
+        (ss + 1)->contcorrHash =
+          contcorr_hash_4ply(ss->contcorrIndex, (ss - 1)->contcorrIndex, (ss - 2)->contcorrIndex,
+                             (ss - 3)->contcorrIndex);
     }
 }
 
 void Search::Worker::do_null_move(Position& pos, StateInfo& st, Stack* const ss) {
     pos.do_null_move(st);
-    ss->currentMove                   = Move::null();
-    ss->continuationHistory           = &continuationHistory[0][0][NO_PIECE][0];
-    ss->continuationCorrectionHistory = &continuationCorrectionHistory[NO_PIECE][0];
+    ss->currentMove         = Move::null();
+    ss->continuationHistory = &continuationHistory[0][0][NO_PIECE][0];
+    ss->contcorrIndex       = contcorr_index(NO_PIECE, SQ_A1);
+    (ss + 1)->contcorrHash  = contcorr_hash_4ply(ss->contcorrIndex, (ss - 1)->contcorrIndex,
+                                                 (ss - 2)->contcorrIndex, (ss - 3)->contcorrIndex);
 }
 
 void Search::Worker::undo_move(Position& pos, const Move move) {
@@ -605,12 +621,9 @@ void Search::Worker::clear() {
     // Each thread is responsible for clearing their part of shared history
     sharedHistory.correctionHistory.clear_range(0, numaThreadIdx, numaTotal);
     sharedHistory.pawnHistory.clear_range(-1238, numaThreadIdx, numaTotal);
+    sharedHistory.jointCorrectionHistory.clear_range(0, numaThreadIdx, numaTotal);
 
     ttMoveHistory = 0;
-
-    for (auto& to : continuationCorrectionHistory)
-        for (auto& h : to)
-            h.fill(6);
 
     for (bool inCheck : {false, true})
         for (StatsType c : {NoCaptures, Captures})
