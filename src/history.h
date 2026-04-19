@@ -263,6 +263,7 @@ struct SharedHistories {
     UnifiedCorrectionHistory correctionHistory;
     PawnHistory              pawnHistory;
 
+    AtomicStats<std::int16_t, CORRECTION_HISTORY_LIMIT, 768, 768> jointCorrectionHistory;
 
    private:
     size_t sizeMinus1, pawnHistSizeMinus1;

@@ -94,7 +94,12 @@ int correction_value(const Worker& w, const Position& pos, const Stack* const ss
                     + (*(ss - 4)->continuationCorrectionHistory)[pos.piece_on(m.to_sq())][m.to_sq()]
                   : 8;
 
-    return 12153 * pcv + 8620 * micv + 12355 * (wnpcv + bnpcv) + 7982 * cntcv;
+    const int jcv =
+      (ss - 2)->currentMove.is_ok() && (ss - 3)->currentMove.is_ok() && ss->ply >= 3
+        ? int(shared.jointCorrectionHistory[(ss - 2)->contcorrIndex][(ss - 3)->contcorrIndex])
+        : 0;
+
+    return 12153 * pcv + 8620 * micv + 12355 * (wnpcv + bnpcv) + 7982 * cntcv + 4000 * jcv;
 }
 
 // Add correctionHistory value to raw staticEval and guarantee evaluation
@@ -124,6 +129,11 @@ void update_correction_history(const Position& pos,
         const Piece  pc = pos.piece_on(to);
         (*(ss - 2)->continuationCorrectionHistory)[pc][to] << bonus * 126 / 128;
         (*(ss - 4)->continuationCorrectionHistory)[pc][to] << bonus * 63 / 128;
+    }
+
+    if ((ss - 2)->currentMove.is_ok() && (ss - 3)->currentMove.is_ok() && ss->ply >= 3)
+    {
+        shared.jointCorrectionHistory[(ss - 2)->contcorrIndex][(ss - 3)->contcorrIndex] << bonus;
     }
 }
 
@@ -287,6 +297,7 @@ bool Search::Worker::iterative_deepening() {
           &continuationHistory[0][0][NO_PIECE][0];  // Use as a sentinel
         (ss - i)->continuationCorrectionHistory = &continuationCorrectionHistory[NO_PIECE][0];
         (ss - i)->staticEval                    = VALUE_NONE;
+        (ss - i)->contcorrIndex                 = 0;
     }
 
     for (int i = 0; i <= MAX_PLY + 2; ++i)
@@ -579,6 +590,7 @@ void Search::Worker::do_move(
           &continuationHistory[ss->inCheck][capture][dirtyPiece.pc][move.to_sq()];
         ss->continuationCorrectionHistory =
           &continuationCorrectionHistory[dirtyPiece.pc][move.to_sq()];
+        ss->contcorrIndex = int(type_of(dirtyPiece.pc)) * 64 + int(move.to_sq());
     }
 }
 
@@ -587,6 +599,7 @@ void Search::Worker::do_null_move(Position& pos, StateInfo& st, Stack* const ss)
     ss->currentMove                   = Move::null();
     ss->continuationHistory           = &continuationHistory[0][0][NO_PIECE][0];
     ss->continuationCorrectionHistory = &continuationCorrectionHistory[NO_PIECE][0];
+    ss->contcorrIndex                 = 0;
 }
 
 void Search::Worker::undo_move(Position& pos, const Move move) {
@@ -605,6 +618,9 @@ void Search::Worker::clear() {
     // Each thread is responsible for clearing their part of shared history
     sharedHistory.correctionHistory.clear_range(0, numaThreadIdx, numaTotal);
     sharedHistory.pawnHistory.clear_range(-1238, numaThreadIdx, numaTotal);
+
+    if (numaThreadIdx == 0)
+        sharedHistory.jointCorrectionHistory.fill(0);
 
     ttMoveHistory = 0;
 
