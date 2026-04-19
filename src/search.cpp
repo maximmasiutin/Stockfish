@@ -443,6 +443,9 @@ bool Search::Worker::iterative_deepening() {
         {
             completedDepth = rootDepth;
 
+            if (rootDepth > maxRootDepth)
+                maxRootDepth = rootDepth;
+
             if (lastIterationPV.empty() || rootMoves[0].pv[0] != lastIterationPV[0])
                 lastBestMoveDepth = rootDepth;
 
@@ -544,6 +547,15 @@ bool Search::Worker::iterative_deepening() {
         iterIdx                        = (iterIdx + 1) & 3;
     }
 
+    completedDepthHistory[completedMoveCount & 63] = completedDepth;
+    completedMoveCount++;
+
+    int   count = std::min(completedMoveCount, 64);
+    Depth sorted[64];
+    std::copy_n(completedDepthHistory, count, sorted);
+    std::sort(sorted, sorted + count);
+    medianRootDepth = sorted[count / 2];
+
     if (!mainThread)
         return false;
 
@@ -620,6 +632,11 @@ void Search::Worker::clear() {
 
     for (size_t i = 1; i < reductions.size(); ++i)
         reductions[i] = int(2763 / 128.0 * std::log(i));
+
+    maxRootDepth       = 0;
+    completedMoveCount = 0;
+    medianRootDepth    = 0;
+    std::fill(std::begin(completedDepthHistory), std::end(completedDepthHistory), Depth(0));
 
     refreshTable.clear(networks[numaAccessToken]);
 }
@@ -952,7 +969,8 @@ Value Search::Worker::search(
     // Step 11. ProbCut
     // If we have a good enough capture (or queen promotion) and a reduced search
     // returns a value much above beta, we can (almost) safely prune the previous move.
-    probCutBeta = beta + 224 - 61 * improving;
+    probCutBeta =
+      beta + 224 - 61 * improving - 20 * (completedMoveCount > 20 && depth > medianRootDepth + 3);
     if (depth >= 3
         && !is_decisive(beta)
         // If value from transposition table is lower than probCutBeta, don't attempt
