@@ -81,6 +81,8 @@ using SearchedList                  = ValueList<Move, SEARCHEDLIST_CAPACITY>;
 // (*Scaler) All tuned parameters at time controls shorter than
 // optimized for require verifications at longer time controls
 
+constexpr int CONTCORR_HASH_MULT = 911;
+
 int correction_value(const Worker& w, const Position& pos, const Stack* const ss) {
     const Color us     = pos.side_to_move();
     const auto  m      = (ss - 1)->currentMove;
@@ -94,7 +96,16 @@ int correction_value(const Worker& w, const Position& pos, const Stack* const ss
                     + (*(ss - 4)->continuationCorrectionHistory)[pos.piece_on(m.to_sq())][m.to_sq()]
                   : 8;
 
-    return 12153 * pcv + 8620 * micv + 12355 * (wnpcv + bnpcv) + 7982 * cntcv;
+    const int jcv =
+      ss->ply >= 4 && (ss - 2)->currentMove.is_ok() && (ss - 3)->currentMove.is_ok()
+          && (ss - 4)->currentMove.is_ok()
+        ? int(shared.joint_correction_entry(
+            pos.pawn_key()
+            ^ size_t(((ss - 2)->contcorrIndex * CONTCORR_HASH_MULT + (ss - 3)->contcorrIndex) * 768
+                     + (ss - 4)->contcorrIndex)))
+        : 0;
+
+    return 12153 * pcv + 8620 * micv + 12355 * (wnpcv + bnpcv) + 7982 * cntcv + 4000 * jcv;
 }
 
 // Add correctionHistory value to raw staticEval and guarantee evaluation
@@ -124,6 +135,16 @@ void update_correction_history(const Position& pos,
         const Piece  pc = pos.piece_on(to);
         (*(ss - 2)->continuationCorrectionHistory)[pc][to] << bonus * 126 / 128;
         (*(ss - 4)->continuationCorrectionHistory)[pc][to] << bonus * 63 / 128;
+    }
+
+    if (ss->ply >= 4 && (ss - 2)->currentMove.is_ok() && (ss - 3)->currentMove.is_ok()
+        && (ss - 4)->currentMove.is_ok())
+    {
+        shared.joint_correction_entry(
+          pos.pawn_key()
+          ^ size_t(((ss - 2)->contcorrIndex * CONTCORR_HASH_MULT + (ss - 3)->contcorrIndex) * 768
+                   + (ss - 4)->contcorrIndex))
+          << bonus;
     }
 }
 
@@ -286,6 +307,7 @@ bool Search::Worker::iterative_deepening() {
         (ss - i)->continuationHistory =
           &continuationHistory[0][0][NO_PIECE][0];  // Use as a sentinel
         (ss - i)->continuationCorrectionHistory = &continuationCorrectionHistory[NO_PIECE][0];
+        (ss - i)->contcorrIndex                 = 0;
         (ss - i)->staticEval                    = VALUE_NONE;
     }
 
@@ -579,6 +601,7 @@ void Search::Worker::do_move(
           &continuationHistory[ss->inCheck][capture][dirtyPiece.pc][move.to_sq()];
         ss->continuationCorrectionHistory =
           &continuationCorrectionHistory[dirtyPiece.pc][move.to_sq()];
+        ss->contcorrIndex = int(type_of(dirtyPiece.pc)) * 64 + int(move.to_sq());
     }
 }
 
@@ -587,6 +610,7 @@ void Search::Worker::do_null_move(Position& pos, StateInfo& st, Stack* const ss)
     ss->currentMove                   = Move::null();
     ss->continuationHistory           = &continuationHistory[0][0][NO_PIECE][0];
     ss->continuationCorrectionHistory = &continuationCorrectionHistory[NO_PIECE][0];
+    ss->contcorrIndex                 = 0;
 }
 
 void Search::Worker::undo_move(Position& pos, const Move move) {
@@ -605,6 +629,7 @@ void Search::Worker::clear() {
     // Each thread is responsible for clearing their part of shared history
     sharedHistory.correctionHistory.clear_range(0, numaThreadIdx, numaTotal);
     sharedHistory.pawnHistory.clear_range(-1238, numaThreadIdx, numaTotal);
+    sharedHistory.jointCorrectionHistory.clear_range(0, numaThreadIdx, numaTotal);
 
     ttMoveHistory = 0;
 
