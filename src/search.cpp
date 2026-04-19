@@ -443,6 +443,9 @@ bool Search::Worker::iterative_deepening() {
         {
             completedDepth = rootDepth;
 
+            if (rootDepth > maxRootDepth)
+                maxRootDepth = rootDepth;
+
             if (lastIterationPV.empty() || rootMoves[0].pv[0] != lastIterationPV[0])
                 lastBestMoveDepth = rootDepth;
 
@@ -544,6 +547,15 @@ bool Search::Worker::iterative_deepening() {
         iterIdx                        = (iterIdx + 1) & 3;
     }
 
+    completedDepthHistory[completedMoveCount & 63] = completedDepth;
+    completedMoveCount++;
+
+    int   count = std::min(completedMoveCount, 64);
+    Depth sorted[64];
+    std::copy_n(completedDepthHistory, count, sorted);
+    std::sort(sorted, sorted + count);
+    medianRootDepth = sorted[count / 2];
+
     if (!mainThread)
         return false;
 
@@ -620,6 +632,11 @@ void Search::Worker::clear() {
 
     for (size_t i = 1; i < reductions.size(); ++i)
         reductions[i] = int(2763 / 128.0 * std::log(i));
+
+    maxRootDepth       = 0;
+    completedMoveCount = 0;
+    medianRootDepth    = 0;
+    std::fill(std::begin(completedDepthHistory), std::end(completedDepthHistory), Depth(0));
 
     refreshTable.clear(networks[numaAccessToken]);
 }
@@ -1148,7 +1165,8 @@ moves_loop:  // When in check, search starts here
             && is_valid(ttData.value) && !is_decisive(ttData.value) && (ttData.bound & BOUND_LOWER)
             && ttData.depth >= depth - 3 && !is_shuffling(move, ss, pos))
         {
-            Value singularBeta  = ttData.value - (60 + 66 * (ss->ttPv && !PvNode)) * depth / 55;
+            Value singularBeta = ttData.value - (60 + 66 * (ss->ttPv && !PvNode)) * depth / 55
+                               - 15 * (completedMoveCount > 20 && depth > medianRootDepth + 3);
             Depth singularDepth = newDepth / 2;
 
             ss->excludedMove = move;
