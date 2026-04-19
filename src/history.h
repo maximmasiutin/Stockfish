@@ -40,12 +40,16 @@ constexpr int UINT_16_HISTORY_SIZE     = std::numeric_limits<uint16_t>::max() + 
 constexpr int CORRHIST_BASE_SIZE       = UINT_16_HISTORY_SIZE;
 constexpr int CORRECTION_HISTORY_LIMIT = 1024;
 constexpr int LOW_PLY_HISTORY_SIZE     = 5;
+constexpr int JOINT_CORR_BASE_SIZE     = 16384;
 
 static_assert((PAWN_HISTORY_BASE_SIZE & (PAWN_HISTORY_BASE_SIZE - 1)) == 0,
               "PAWN_HISTORY_BASE_SIZE has to be a power of 2");
 
 static_assert((CORRHIST_BASE_SIZE & (CORRHIST_BASE_SIZE - 1)) == 0,
               "CORRHIST_BASE_SIZE has to be a power of 2");
+
+static_assert((JOINT_CORR_BASE_SIZE & (JOINT_CORR_BASE_SIZE - 1)) == 0,
+              "JOINT_CORR_BASE_SIZE has to be a power of 2");
 
 // StatsEntry is the container of various numerical statistics. We use a class
 // instead of a naked value to directly call history update operator<<() on
@@ -215,6 +219,9 @@ using CorrectionHistory = typename Detail::CorrHistTypedef<T>::type;
 
 using TTMoveHistory = StatsEntry<std::int16_t, 8192>;
 
+using JointCorrectionHistory =
+  DynStats<AtomicStats<std::int16_t, CORRECTION_HISTORY_LIMIT, 1>, JOINT_CORR_BASE_SIZE>;
+
 // Set of histories shared between groups of threads. To avoid excessive
 // cross-node data transfer, histories are shared only between threads
 // on a given NUMA node. The passed size must be a power of two to make
@@ -222,10 +229,12 @@ using TTMoveHistory = StatsEntry<std::int16_t, 8192>;
 struct SharedHistories {
     SharedHistories(size_t threadCount) :
         correctionHistory(threadCount),
-        pawnHistory(threadCount) {
+        pawnHistory(threadCount),
+        jointCorrectionHistory(threadCount) {
         assert((threadCount & (threadCount - 1)) == 0 && threadCount != 0);
-        sizeMinus1         = correctionHistory.get_size() - 1;
-        pawnHistSizeMinus1 = pawnHistory.get_size() - 1;
+        sizeMinus1          = correctionHistory.get_size() - 1;
+        pawnHistSizeMinus1  = pawnHistory.get_size() - 1;
+        jointCorrSizeMinus1 = jointCorrectionHistory.get_size() - 1;
     }
 
     size_t get_size() const { return sizeMinus1 + 1; }
@@ -260,12 +269,19 @@ struct SharedHistories {
         return correctionHistory[pos.non_pawn_key(c) & sizeMinus1];
     }
 
+    auto& joint_correction_entry(size_t hash) {
+        return jointCorrectionHistory[hash & jointCorrSizeMinus1][0];
+    }
+    const auto& joint_correction_entry(size_t hash) const {
+        return jointCorrectionHistory[hash & jointCorrSizeMinus1][0];
+    }
+
     UnifiedCorrectionHistory correctionHistory;
     PawnHistory              pawnHistory;
-
+    JointCorrectionHistory   jointCorrectionHistory;
 
    private:
-    size_t sizeMinus1, pawnHistSizeMinus1;
+    size_t sizeMinus1, pawnHistSizeMinus1, jointCorrSizeMinus1;
 };
 
 }  // namespace Stockfish
