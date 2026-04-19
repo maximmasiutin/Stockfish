@@ -118,6 +118,7 @@ struct Stack {
     bool                        followPV;
     int                         cutoffCnt;
     int                         reduction;
+    int                         contcorrIndex;
 };
 
 
@@ -334,6 +335,8 @@ class Worker {
     CapturePieceToHistory           captureHistory;
     ContinuationHistory             continuationHistory[2][2];
     CorrectionHistory<Continuation> continuationCorrectionHistory;
+
+    Stats<std::int16_t, CORRECTION_HISTORY_LIMIT, 16384> jointCorrectionHistory;
 
     TTMoveHistory    ttMoveHistory;
     SharedHistories& sharedHistory;
