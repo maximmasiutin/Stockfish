@@ -381,6 +381,10 @@ class Worker {
     StateInfo rootState;
     RootMoves rootMoves;
     Depth     rootDepth, completedDepth;
+    Depth     maxRootDepth;
+    Depth     completedDepthHistory[64];
+    int       completedMoveCount;
+    Depth     medianRootDepth;
     Value     rootDelta;
 
     PVMoves lastIterationPV;

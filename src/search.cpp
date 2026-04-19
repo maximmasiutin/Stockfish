@@ -443,6 +443,9 @@ bool Search::Worker::iterative_deepening() {
         {
             completedDepth = rootDepth;
 
+            if (rootDepth > maxRootDepth)
+                maxRootDepth = rootDepth;
+
             if (lastIterationPV.empty() || rootMoves[0].pv[0] != lastIterationPV[0])
                 lastBestMoveDepth = rootDepth;
 
@@ -544,6 +547,15 @@ bool Search::Worker::iterative_deepening() {
         iterIdx                        = (iterIdx + 1) & 3;
     }
 
+    completedDepthHistory[completedMoveCount & 63] = completedDepth;
+    completedMoveCount++;
+
+    int   count = std::min(completedMoveCount, 64);
+    Depth sorted[64];
+    std::copy_n(completedDepthHistory, count, sorted);
+    std::sort(sorted, sorted + count);
+    medianRootDepth = sorted[count / 2];
+
     if (!mainThread)
         return false;
 
@@ -620,6 +632,11 @@ void Search::Worker::clear() {
 
     for (size_t i = 1; i < reductions.size(); ++i)
         reductions[i] = int(2763 / 128.0 * std::log(i));
+
+    maxRootDepth       = 0;
+    completedMoveCount = 0;
+    medianRootDepth    = 0;
+    std::fill(std::begin(completedDepthHistory), std::end(completedDepthHistory), Depth(0));
 
     refreshTable.clear(networks[numaAccessToken]);
 }
@@ -1496,7 +1513,9 @@ moves_loop:  // When in check, search starts here
         auto bonus =
           std::clamp(int(bestValue - ss->staticEval) * depth * (bestMove ? 12 : 17) / 128,
                      -CORRECTION_HISTORY_LIMIT / 4, CORRECTION_HISTORY_LIMIT / 4);
-        update_correction_history(pos, ss, *this, 1069 * bonus / 1024);
+        int medWeight =
+          completedMoveCount > 20 && std::abs(depth - medianRootDepth) > 5 ? 535 : 1069;
+        update_correction_history(pos, ss, *this, medWeight * bonus / 1024);
     }
 
     assert(bestValue > -VALUE_INFINITE && bestValue < VALUE_INFINITE);
