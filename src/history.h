@@ -40,12 +40,23 @@ constexpr int UINT_16_HISTORY_SIZE     = std::numeric_limits<uint16_t>::max() + 
 constexpr int CORRHIST_BASE_SIZE       = UINT_16_HISTORY_SIZE;
 constexpr int CORRECTION_HISTORY_LIMIT = 1024;
 constexpr int LOW_PLY_HISTORY_SIZE     = 5;
+constexpr int JOINT_CORR_BASE_SIZE     = 16384;  // has to be a power of 2
+
+// Baseline fill value for the shared joint correction table. SPSA-tunable.
+constexpr int JOINT_CORR_INIT = 6;
+
+// Sentinel returned from correction_value when (ss-1)->currentMove is not ok
+// (e.g. at root or after null move). SPSA-tunable.
+constexpr int JOINT_CORR_NOK = 8;
 
 static_assert((PAWN_HISTORY_BASE_SIZE & (PAWN_HISTORY_BASE_SIZE - 1)) == 0,
               "PAWN_HISTORY_BASE_SIZE has to be a power of 2");
 
 static_assert((CORRHIST_BASE_SIZE & (CORRHIST_BASE_SIZE - 1)) == 0,
               "CORRHIST_BASE_SIZE has to be a power of 2");
+
+static_assert((JOINT_CORR_BASE_SIZE & (JOINT_CORR_BASE_SIZE - 1)) == 0,
+              "JOINT_CORR_BASE_SIZE has to be a power of 2");
 
 // StatsEntry is the container of various numerical statistics. We use a class
 // instead of a naked value to directly call history update operator<<() on
@@ -215,6 +226,9 @@ using CorrectionHistory = typename Detail::CorrHistTypedef<T>::type;
 
 using TTMoveHistory = StatsEntry<std::int16_t, 8192>;
 
+using JointCorrectionHistory =
+  DynStats<AtomicStats<std::int16_t, CORRECTION_HISTORY_LIMIT, 1>, JOINT_CORR_BASE_SIZE>;
+
 // Set of histories shared between groups of threads. To avoid excessive
 // cross-node data transfer, histories are shared only between threads
 // on a given NUMA node. The passed size must be a power of two to make
@@ -222,10 +236,15 @@ using TTMoveHistory = StatsEntry<std::int16_t, 8192>;
 struct SharedHistories {
     SharedHistories(size_t threadCount) :
         correctionHistory(threadCount),
-        pawnHistory(threadCount) {
+        pawnHistory(threadCount),
+        // Cap joint table at 32 * JOINT_CORR_BASE_SIZE entries as a
+        // memory footprint limit; beyond 32 shards per NUMA node
+        // returns little additional benefit.
+        jointCorrectionHistory(std::min(threadCount, size_t(32))) {
         assert((threadCount & (threadCount - 1)) == 0 && threadCount != 0);
-        sizeMinus1         = correctionHistory.get_size() - 1;
-        pawnHistSizeMinus1 = pawnHistory.get_size() - 1;
+        sizeMinus1          = correctionHistory.get_size() - 1;
+        pawnHistSizeMinus1  = pawnHistory.get_size() - 1;
+        jointCorrSizeMinus1 = jointCorrectionHistory.get_size() - 1;
     }
 
     size_t get_size() const { return sizeMinus1 + 1; }
@@ -260,12 +279,19 @@ struct SharedHistories {
         return correctionHistory[pos.non_pawn_key(c) & sizeMinus1];
     }
 
+    auto& joint_correction_entry(size_t hash) {
+        return jointCorrectionHistory[hash & jointCorrSizeMinus1][0];
+    }
+    const auto& joint_correction_entry(size_t hash) const {
+        return jointCorrectionHistory[hash & jointCorrSizeMinus1][0];
+    }
+
     UnifiedCorrectionHistory correctionHistory;
     PawnHistory              pawnHistory;
-
+    JointCorrectionHistory   jointCorrectionHistory;
 
    private:
-    size_t sizeMinus1, pawnHistSizeMinus1;
+    size_t sizeMinus1, pawnHistSizeMinus1, jointCorrSizeMinus1;
 };
 
 }  // namespace Stockfish
