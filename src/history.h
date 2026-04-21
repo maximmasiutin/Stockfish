@@ -41,11 +41,21 @@ constexpr int CORRHIST_BASE_SIZE       = UINT_16_HISTORY_SIZE;
 constexpr int CORRECTION_HISTORY_LIMIT = 1024;
 constexpr int LOW_PLY_HISTORY_SIZE     = 5;
 
+// Per-shard size of each of the three shared joint correction tables
+// (A, B, C). Actual allocation is threadCount * JOINT_CORR_BASE_SIZE with
+// threadCount capped at 32 per table.
+constexpr int JOINT_CORR_BASE_SIZE = 16384;  // has to be a power of 2
+constexpr int JOINT_CORR_INIT      = 6;
+constexpr int JOINT_CORR_NOK       = 8;
+
 static_assert((PAWN_HISTORY_BASE_SIZE & (PAWN_HISTORY_BASE_SIZE - 1)) == 0,
               "PAWN_HISTORY_BASE_SIZE has to be a power of 2");
 
 static_assert((CORRHIST_BASE_SIZE & (CORRHIST_BASE_SIZE - 1)) == 0,
               "CORRHIST_BASE_SIZE has to be a power of 2");
+
+static_assert((JOINT_CORR_BASE_SIZE & (JOINT_CORR_BASE_SIZE - 1)) == 0,
+              "JOINT_CORR_BASE_SIZE has to be a power of 2");
 
 // StatsEntry is the container of various numerical statistics. We use a class
 // instead of a naked value to directly call history update operator<<() on
@@ -215,6 +225,20 @@ using CorrectionHistory = typename Detail::CorrHistTypedef<T>::type;
 
 using TTMoveHistory = StatsEntry<std::int16_t, 8192>;
 
+// Three shared atomic joint correction tables (A, B, C), one per paired
+// stream:
+//   A : pair (ss-1, ss-2)
+//   B : pair (ss-1, ss-3)
+//   C : pair (ss-1, ss-4)
+// Same underlying type; distinct type aliases keep per-stream storage
+// visually separated.
+using JointCorrectionHistoryA =
+  DynStats<AtomicStats<std::int16_t, CORRECTION_HISTORY_LIMIT, 1>, JOINT_CORR_BASE_SIZE>;
+using JointCorrectionHistoryB =
+  DynStats<AtomicStats<std::int16_t, CORRECTION_HISTORY_LIMIT, 1>, JOINT_CORR_BASE_SIZE>;
+using JointCorrectionHistoryC =
+  DynStats<AtomicStats<std::int16_t, CORRECTION_HISTORY_LIMIT, 1>, JOINT_CORR_BASE_SIZE>;
+
 // Set of histories shared between groups of threads. To avoid excessive
 // cross-node data transfer, histories are shared only between threads
 // on a given NUMA node. The passed size must be a power of two to make
@@ -222,10 +246,19 @@ using TTMoveHistory = StatsEntry<std::int16_t, 8192>;
 struct SharedHistories {
     SharedHistories(size_t threadCount) :
         correctionHistory(threadCount),
-        pawnHistory(threadCount) {
+        pawnHistory(threadCount),
+        // Cap each joint table at 32 * JOINT_CORR_BASE_SIZE entries
+        // as a memory footprint limit; beyond 32 shards per NUMA node
+        // returns little additional benefit.
+        jointCorrectionHistoryA(std::min(threadCount, size_t(32))),
+        jointCorrectionHistoryB(std::min(threadCount, size_t(32))),
+        jointCorrectionHistoryC(std::min(threadCount, size_t(32))) {
         assert((threadCount & (threadCount - 1)) == 0 && threadCount != 0);
-        sizeMinus1         = correctionHistory.get_size() - 1;
-        pawnHistSizeMinus1 = pawnHistory.get_size() - 1;
+        sizeMinus1           = correctionHistory.get_size() - 1;
+        pawnHistSizeMinus1   = pawnHistory.get_size() - 1;
+        jointCorrSizeMinus1A = jointCorrectionHistoryA.get_size() - 1;
+        jointCorrSizeMinus1B = jointCorrectionHistoryB.get_size() - 1;
+        jointCorrSizeMinus1C = jointCorrectionHistoryC.get_size() - 1;
     }
 
     size_t get_size() const { return sizeMinus1 + 1; }
@@ -260,12 +293,36 @@ struct SharedHistories {
         return correctionHistory[pos.non_pawn_key(c) & sizeMinus1];
     }
 
+    auto& joint_correction_entry_a(size_t hash) {
+        return jointCorrectionHistoryA[hash & jointCorrSizeMinus1A][0];
+    }
+    const auto& joint_correction_entry_a(size_t hash) const {
+        return jointCorrectionHistoryA[hash & jointCorrSizeMinus1A][0];
+    }
+
+    auto& joint_correction_entry_b(size_t hash) {
+        return jointCorrectionHistoryB[hash & jointCorrSizeMinus1B][0];
+    }
+    const auto& joint_correction_entry_b(size_t hash) const {
+        return jointCorrectionHistoryB[hash & jointCorrSizeMinus1B][0];
+    }
+
+    auto& joint_correction_entry_c(size_t hash) {
+        return jointCorrectionHistoryC[hash & jointCorrSizeMinus1C][0];
+    }
+    const auto& joint_correction_entry_c(size_t hash) const {
+        return jointCorrectionHistoryC[hash & jointCorrSizeMinus1C][0];
+    }
+
     UnifiedCorrectionHistory correctionHistory;
     PawnHistory              pawnHistory;
-
+    JointCorrectionHistoryA  jointCorrectionHistoryA;
+    JointCorrectionHistoryB  jointCorrectionHistoryB;
+    JointCorrectionHistoryC  jointCorrectionHistoryC;
 
    private:
     size_t sizeMinus1, pawnHistSizeMinus1;
+    size_t jointCorrSizeMinus1A, jointCorrSizeMinus1B, jointCorrSizeMinus1C;
 };
 
 }  // namespace Stockfish

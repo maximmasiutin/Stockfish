@@ -81,18 +81,41 @@ using SearchedList                  = ValueList<Move, SEARCHEDLIST_CAPACITY>;
 // (*Scaler) All tuned parameters at time controls shorter than
 // optimized for require verifications at longer time controls
 
+// Encode a (piece, square) pair into a 10-bit contcorrIndex for the
+// joint correction hash. Layout:
+//   bits 6..9 : piece (Piece code; NO_PIECE = 0 sentinel)
+//   bits 0..5 : square (A1..H8)
+// Callers pair NO_PIECE with SQ_A1 for a canonical zero sentinel.
+unsigned contcorr_index(Piece pc, Square sq) { return unsigned(pc) * 64 + unsigned(sq); }
+
+// Horner: idxA * P + idxB. idxA is (ss-1), idxB is (ss-2)/(ss-3)/(ss-4)
+// for tables A/B/C respectively. Same P for all three because only the
+// paired second operand differs; the multiplier stress-tests the same
+// input domain.
+//
+// Prime selection: enumeration over odd primes in [5, 3000) across six
+// table sizes N = {1,2,4,8,16,32} * 16384 (matching DynStats scaling up
+// to the 32-thread cap). Metric: worst-case chi2/best_chi2_at_N across
+// all six N. P=941 minimizes this worst-case ratio (2.556x) and is the
+// smallest prime achieving that level. Don't SPSA-tune: hash multipliers
+// have no smooth optimum.
+uint32_t contcorr_hash_2ply(unsigned idxA, unsigned idxB) {
+    constexpr uint32_t primeHashMult2Ply = 941;
+    return idxA * primeHashMult2Ply + idxB;
+}
+
 int correction_value(const Worker& w, const Position& pos, const Stack* const ss) {
     const Color us     = pos.side_to_move();
-    const auto  m      = (ss - 1)->currentMove;
     const auto& shared = w.sharedHistory;
     const int   pcv    = shared.pawn_correction_entry(pos)[us].pawn;
     const int   micv   = shared.minor_piece_correction_entry(pos)[us].minor;
     const int   wnpcv  = shared.nonpawn_correction_entry<WHITE>(pos)[us].nonPawnWhite;
     const int   bnpcv  = shared.nonpawn_correction_entry<BLACK>(pos)[us].nonPawnBlack;
-    const int   cntcv =
-      m.is_ok() ? (*(ss - 2)->continuationCorrectionHistory)[pos.piece_on(m.to_sq())][m.to_sq()]
-                    + (*(ss - 4)->continuationCorrectionHistory)[pos.piece_on(m.to_sq())][m.to_sq()]
-                  : 8;
+    const int   cntcv  = (ss - 1)->currentMove.is_ok()
+                         ? int(shared.joint_correction_entry_a(ss->contcorrHashA))
+                          + int(shared.joint_correction_entry_b(ss->contcorrHashB))
+                          + int(shared.joint_correction_entry_c(ss->contcorrHashC))
+                         : JOINT_CORR_NOK;
 
     return 12153 * pcv + 8620 * micv + 12355 * (wnpcv + bnpcv) + 7982 * cntcv;
 }
@@ -107,7 +130,6 @@ void update_correction_history(const Position& pos,
                                Stack* const    ss,
                                Search::Worker& workerThread,
                                const int       bonus) {
-    const Move  m  = (ss - 1)->currentMove;
     const Color us = pos.side_to_move();
 
     constexpr int nonPawnWeight = 187;
@@ -118,12 +140,11 @@ void update_correction_history(const Position& pos,
     shared.nonpawn_correction_entry<WHITE>(pos)[us].nonPawnWhite << bonus * nonPawnWeight / 128;
     shared.nonpawn_correction_entry<BLACK>(pos)[us].nonPawnBlack << bonus * nonPawnWeight / 128;
 
-    if (m.is_ok())
+    if ((ss - 1)->currentMove.is_ok())
     {
-        const Square to = m.to_sq();
-        const Piece  pc = pos.piece_on(to);
-        (*(ss - 2)->continuationCorrectionHistory)[pc][to] << bonus * 126 / 128;
-        (*(ss - 4)->continuationCorrectionHistory)[pc][to] << bonus * 63 / 128;
+        shared.joint_correction_entry_a(ss->contcorrHashA) << bonus;
+        shared.joint_correction_entry_b(ss->contcorrHashB) << bonus / 2;
+        shared.joint_correction_entry_c(ss->contcorrHashC) << bonus / 2;
     }
 }
 
@@ -285,9 +306,15 @@ bool Search::Worker::iterative_deepening() {
     {
         (ss - i)->continuationHistory =
           &continuationHistory[0][0][NO_PIECE][0];  // Use as a sentinel
-        (ss - i)->continuationCorrectionHistory = &continuationCorrectionHistory[NO_PIECE][0];
-        (ss - i)->staticEval                    = VALUE_NONE;
+        (ss - i)->contcorrIndex = 0;
+        (ss - i)->contcorrHashA = 0;
+        (ss - i)->contcorrHashB = 0;
+        (ss - i)->contcorrHashC = 0;
+        (ss - i)->staticEval    = VALUE_NONE;
     }
+    ss->contcorrHashA = 0;
+    ss->contcorrHashB = 0;
+    ss->contcorrHashC = 0;
 
     for (int i = 0; i <= MAX_PLY + 2; ++i)
         (ss + i)->ply = i;
@@ -577,16 +604,29 @@ void Search::Worker::do_move(
         ss->currentMove = move;
         ss->continuationHistory =
           &continuationHistory[ss->inCheck][capture][dirtyPiece.pc][move.to_sq()];
-        ss->continuationCorrectionHistory =
-          &continuationCorrectionHistory[dirtyPiece.pc][move.to_sq()];
+
+        // dirtyPiece.pc is pre-move: promotions bucket as PAWN on the 8th
+        // rank, matching continuationHistory indexing above.
+        ss->contcorrIndex = contcorr_index(dirtyPiece.pc, move.to_sq());
+
+        // Seed child hashes for all three tables. At the read site ss
+        // becomes (ss-1); our (ss-k+1) becomes child (ss-k). Tables A/B/C
+        // pair (ss-1) with (ss-2)/(ss-3)/(ss-4) respectively.
+        (ss + 1)->contcorrHashA = contcorr_hash_2ply(ss->contcorrIndex, (ss - 1)->contcorrIndex);
+        (ss + 1)->contcorrHashB = contcorr_hash_2ply(ss->contcorrIndex, (ss - 2)->contcorrIndex);
+        (ss + 1)->contcorrHashC = contcorr_hash_2ply(ss->contcorrIndex, (ss - 3)->contcorrIndex);
     }
 }
 
 void Search::Worker::do_null_move(Position& pos, StateInfo& st, Stack* const ss) {
     pos.do_null_move(st);
-    ss->currentMove                   = Move::null();
-    ss->continuationHistory           = &continuationHistory[0][0][NO_PIECE][0];
-    ss->continuationCorrectionHistory = &continuationCorrectionHistory[NO_PIECE][0];
+    ss->currentMove         = Move::null();
+    ss->continuationHistory = &continuationHistory[0][0][NO_PIECE][0];
+    ss->contcorrIndex       = contcorr_index(NO_PIECE, SQ_A1);
+
+    (ss + 1)->contcorrHashA = contcorr_hash_2ply(ss->contcorrIndex, (ss - 1)->contcorrIndex);
+    (ss + 1)->contcorrHashB = contcorr_hash_2ply(ss->contcorrIndex, (ss - 2)->contcorrIndex);
+    (ss + 1)->contcorrHashC = contcorr_hash_2ply(ss->contcorrIndex, (ss - 3)->contcorrIndex);
 }
 
 void Search::Worker::undo_move(Position& pos, const Move move) {
@@ -605,12 +645,11 @@ void Search::Worker::clear() {
     // Each thread is responsible for clearing their part of shared history
     sharedHistory.correctionHistory.clear_range(0, numaThreadIdx, numaTotal);
     sharedHistory.pawnHistory.clear_range(-1238, numaThreadIdx, numaTotal);
+    sharedHistory.jointCorrectionHistoryA.clear_range(JOINT_CORR_INIT, numaThreadIdx, numaTotal);
+    sharedHistory.jointCorrectionHistoryB.clear_range(JOINT_CORR_INIT, numaThreadIdx, numaTotal);
+    sharedHistory.jointCorrectionHistoryC.clear_range(JOINT_CORR_INIT, numaThreadIdx, numaTotal);
 
     ttMoveHistory = 0;
-
-    for (auto& to : continuationCorrectionHistory)
-        for (auto& h : to)
-            h.fill(6);
 
     for (bool inCheck : {false, true})
         for (StatsType c : {NoCaptures, Captures})
