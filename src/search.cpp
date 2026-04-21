@@ -27,12 +27,21 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
 #include <initializer_list>
 #include <iostream>
 #include <list>
+#include <mutex>
 #include <ratio>
 #include <string>
 #include <utility>
+#include <vector>
+
+#ifdef _WIN32
+    #include <windows.h>
+#else
+    #include <unistd.h>
+#endif
 
 #include "bitboard.h"
 #include "evaluate.h"
@@ -109,6 +118,106 @@ uint32_t contcorr_tag_from(uint64_t h) {
     return t == 0 ? 1u : t;
 }
 
+// --- Instrumentation counters (contcorr-tag-local-128k-instr) ---------------
+// Thread-local tallies of per-access outcomes at the joint correction
+// history. Dumped once per process via atexit to a CSV under scratchpad/.
+struct CcInstr {
+    uint64_t reads_total    = 0;
+    uint64_t reads_hit      = 0;
+    uint64_t reads_empty    = 0;
+    uint64_t reads_miss     = 0;
+    uint64_t writes_total   = 0;
+    uint64_t writes_inplace = 0;
+    uint64_t writes_empty   = 0;
+    uint64_t writes_evict   = 0;
+};
+// Aggregate into a global, guarded by a mutex, at thread exit / quit.
+static std::mutex           ccInstrMx;
+static std::vector<CcInstr> ccInstrAll;
+
+// Self-flushing per-thread counter. Destructor fires at thread exit
+// (including worker-thread join) and pushes into the global vector
+// so the atexit dumper sees per-thread rows.
+struct CcInstrTL {
+    CcInstr c;
+    ~CcInstrTL() {
+        if (c.reads_total | c.writes_total)
+        {
+            std::lock_guard<std::mutex> lk(ccInstrMx);
+            ccInstrAll.push_back(c);
+        }
+    }
+};
+
+CcInstr& cc_instr_tls() {
+    thread_local CcInstrTL tl;
+    return tl.c;
+}
+
+// atexit handler: write per-thread CSV to scratchpad/.
+void cc_instr_dump() {
+    std::lock_guard<std::mutex> lk(ccInstrMx);
+    const char*                 dir = std::getenv("CC_INSTR_DIR");
+    std::string                 path =
+      (dir ? std::string(dir) : std::string("S:/q/stockfish-nnue/scratchpad/contcorr-tag-128k"))
+      + "/ccinstr-"
+      + std::to_string(
+#ifdef _WIN32
+        uint64_t(GetCurrentProcessId())
+#else
+        uint64_t(getpid())
+#endif
+          )
+      + ".csv";
+    std::ofstream f(path);
+    if (!f)
+        return;
+    f << "thread,reads_total,reads_hit,reads_empty,reads_miss,"
+         "writes_total,writes_inplace,writes_empty,writes_evict\n";
+    for (size_t i = 0; i < ccInstrAll.size(); ++i)
+    {
+        const auto& c = ccInstrAll[i];
+        f << i << ',' << c.reads_total << ',' << c.reads_hit << ',' << c.reads_empty << ','
+          << c.reads_miss << ',' << c.writes_total << ',' << c.writes_inplace << ','
+          << c.writes_empty << ',' << c.writes_evict << '\n';
+    }
+}
+
+struct CcInstrInit {
+    CcInstrInit() { std::atexit(cc_instr_dump); }
+};
+static CcInstrInit ccInstrInit;
+
+int cc_instr_read(const JointCorrSlot& s, uint32_t tag) {
+    CcInstr& ccInstr = cc_instr_tls();
+    ++ccInstr.reads_total;
+    if (s.tag == tag)
+    {
+        ++ccInstr.reads_hit;
+        return int(s.value);
+    }
+    if (s.tag == 0)
+        ++ccInstr.reads_empty;
+    else
+        ++ccInstr.reads_miss;
+    return int(JOINT_CORR_INIT);
+}
+
+void cc_instr_write(JointCorrSlot& s, uint32_t tag, int bonus) {
+    CcInstr& ccInstr = cc_instr_tls();
+    ++ccInstr.writes_total;
+    if (s.tag == tag)
+        ++ccInstr.writes_inplace;
+    else if (s.tag == 0)
+        ++ccInstr.writes_empty;
+    else
+        ++ccInstr.writes_evict;
+    int v   = s.tag == tag ? int(s.value) : int(JOINT_CORR_INIT);
+    v       = v + bonus - v * std::abs(bonus) / CORRECTION_HISTORY_LIMIT;
+    s.tag   = tag;
+    s.value = v;
+}
+
 int correction_value(const Worker& w, const Position& pos, const Stack* const ss) {
     const Color us     = pos.side_to_move();
     const auto& shared = w.sharedHistory;
@@ -118,13 +227,8 @@ int correction_value(const Worker& w, const Position& pos, const Stack* const ss
     const int   bnpcv  = shared.nonpawn_correction_entry<BLACK>(pos)[us].nonPawnBlack;
     int         cntcv;
     if ((ss - 1)->currentMove.is_ok())
-    {
-        const auto& sA = w.jointCorrectionHistory[ss->contcorrIdxA];
-        const auto& sB = w.jointCorrectionHistory[ss->contcorrIdxB];
-        int         a  = sA.tag == ss->contcorrTagA ? int(sA.value) : int(JOINT_CORR_INIT);
-        int         b  = sB.tag == ss->contcorrTagB ? int(sB.value) : int(JOINT_CORR_INIT);
-        cntcv          = a + b;
-    }
+        cntcv = cc_instr_read(w.jointCorrectionHistory[ss->contcorrIdxA], ss->contcorrTagA)
+              + cc_instr_read(w.jointCorrectionHistory[ss->contcorrIdxB], ss->contcorrTagB);
     else
         cntcv = JOINT_CORR_NOK;
 
@@ -153,14 +257,10 @@ void update_correction_history(const Position& pos,
 
     if ((ss - 1)->currentMove.is_ok())
     {
-        auto update = [](JointCorrSlot& s, uint32_t tag, int b) {
-            int v   = s.tag == tag ? int(s.value) : int(JOINT_CORR_INIT);
-            v       = v + b - v * std::abs(b) / CORRECTION_HISTORY_LIMIT;
-            s.tag   = tag;
-            s.value = v;
-        };
-        update(workerThread.jointCorrectionHistory[ss->contcorrIdxA], ss->contcorrTagA, bonus);
-        update(workerThread.jointCorrectionHistory[ss->contcorrIdxB], ss->contcorrTagB, bonus / 2);
+        cc_instr_write(workerThread.jointCorrectionHistory[ss->contcorrIdxA], ss->contcorrTagA,
+                       bonus);
+        cc_instr_write(workerThread.jointCorrectionHistory[ss->contcorrIdxB], ss->contcorrTagB,
+                       bonus / 2);
     }
 }
 
