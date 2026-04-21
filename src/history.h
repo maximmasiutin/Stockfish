@@ -41,11 +41,22 @@ constexpr int CORRHIST_BASE_SIZE       = UINT_16_HISTORY_SIZE;
 constexpr int CORRECTION_HISTORY_LIMIT = 1024;
 constexpr int LOW_PLY_HISTORY_SIZE     = 5;
 
+// Two independent thread-local hashed correction tables (A: ss-1/ss-2 pair,
+// B: ss-1/ss-4 pair). Fixed 16384 int16 entries each per worker.
+constexpr int JOINT_CORR_BASE_SIZE = 16384;  // has to be a power of 2
+constexpr int JOINT_CORR_MASK      = JOINT_CORR_BASE_SIZE - 1;
+constexpr int JOINT_CORR_INIT_A    = 6;
+constexpr int JOINT_CORR_INIT_B    = 3;
+constexpr int JOINT_CORR_NOK       = 8;
+
 static_assert((PAWN_HISTORY_BASE_SIZE & (PAWN_HISTORY_BASE_SIZE - 1)) == 0,
               "PAWN_HISTORY_BASE_SIZE has to be a power of 2");
 
 static_assert((CORRHIST_BASE_SIZE & (CORRHIST_BASE_SIZE - 1)) == 0,
               "CORRHIST_BASE_SIZE has to be a power of 2");
+
+static_assert((JOINT_CORR_BASE_SIZE & (JOINT_CORR_BASE_SIZE - 1)) == 0,
+              "JOINT_CORR_BASE_SIZE has to be a power of 2");
 
 // StatsEntry is the container of various numerical statistics. We use a class
 // instead of a naked value to directly call history update operator<<() on
@@ -214,6 +225,10 @@ template<CorrHistType T>
 using CorrectionHistory = typename Detail::CorrHistTypedef<T>::type;
 
 using TTMoveHistory = StatsEntry<std::int16_t, 8192>;
+
+// Thread-local hashed correction table. Fixed 16384 int16 entries per
+// worker (per-worker size is constant; total scales with thread count).
+using HashedCorrectionHistory = Stats<std::int16_t, CORRECTION_HISTORY_LIMIT, JOINT_CORR_BASE_SIZE>;
 
 // Set of histories shared between groups of threads. To avoid excessive
 // cross-node data transfer, histories are shared only between threads
