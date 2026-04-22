@@ -832,8 +832,10 @@ void Position::do_move(Move                      m,
                        bool                      givesCheck,
                        DirtyPiece&               dp,
                        DirtyThreats&             dts,
-                       const TranspositionTable* tt      = nullptr,
-                       const SharedHistories*    history = nullptr) {
+                       const TranspositionTable* tt,
+                       const SharedHistories*    history,
+                       const void*               jointCorrPfA,
+                       const void*               jointCorrPfB) {
 
     assert(m.is_ok());
     assert(&newSt != st);
@@ -1047,6 +1049,8 @@ void Position::do_move(Move                      m,
         prefetch(&history->minor_piece_correction_entry(*this));
         prefetch(&history->nonpawn_correction_entry<WHITE>(*this));
         prefetch(&history->nonpawn_correction_entry<BLACK>(*this));
+        prefetch(jointCorrPfA);
+        prefetch(jointCorrPfB);
     }
 
     // Set capture piece
