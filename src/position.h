@@ -149,7 +149,9 @@ class Position {
                  DirtyPiece&               dp,
                  DirtyThreats&             dts,
                  const TranspositionTable* tt,
-                 const SharedHistories*    worker);
+                 const SharedHistories*    worker,
+                 const void*               jointCorrPfA,
+                 const void*               jointCorrPfB);
     void undo_move(Move m);
     void do_null_move(StateInfo& newSt);
     void undo_null_move();
@@ -412,7 +414,7 @@ inline void Position::swap_piece(Square s, Piece pc, DirtyThreats* const dts) {
 
 inline void Position::do_move(Move m, StateInfo& newSt, const TranspositionTable* tt = nullptr) {
     new (&scratch_dts) DirtyThreats;
-    do_move(m, newSt, gives_check(m), scratch_dp, scratch_dts, tt, nullptr);
+    do_move(m, newSt, gives_check(m), scratch_dp, scratch_dts, tt, nullptr, this, this);
 }
 
 inline StateInfo* Position::state() const { return st; }
