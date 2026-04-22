@@ -103,21 +103,25 @@ struct PVMoves {
 // shallower and deeper in the tree during the search. Each search thread has
 // its own array of Stack objects, indexed by the current ply.
 struct Stack {
-    PVMoves*                    pv;
-    PieceToHistory*             continuationHistory;
-    CorrectionHistory<PieceTo>* continuationCorrectionHistory;
-    int                         ply;
-    Move                        currentMove;
-    Move                        excludedMove;
-    Value                       staticEval;
-    int                         statScore;
-    int                         moveCount;
-    bool                        inCheck;
-    bool                        ttPv;
-    bool                        ttHit;
-    bool                        followPV;
-    int                         cutoffCnt;
-    int                         reduction;
+    PVMoves*        pv;
+    PieceToHistory* continuationHistory;
+    int             ply;
+    Move            currentMove;
+    Move            excludedMove;
+    Value           staticEval;
+    int             statScore;
+    int             moveCount;
+    bool            inCheck;
+    bool            ttPv;
+    bool            ttHit;
+    bool            followPV;
+    int             cutoffCnt;
+    int             reduction;
+    unsigned        contcorrIndex;
+    uint32_t        contcorrIdxA;
+    uint32_t        contcorrTagA;
+    uint32_t        contcorrIdxB;
+    uint32_t        contcorrTagB;
 };
 
 
@@ -331,9 +335,9 @@ class Worker {
     ButterflyHistory mainHistory;
     LowPlyHistory    lowPlyHistory;
 
-    CapturePieceToHistory           captureHistory;
-    ContinuationHistory             continuationHistory[2][2];
-    CorrectionHistory<Continuation> continuationCorrectionHistory;
+    CapturePieceToHistory  captureHistory;
+    ContinuationHistory    continuationHistory[2][2];
+    JointCorrectionHistory jointCorrectionHistory;
 
     TTMoveHistory    ttMoveHistory;
     SharedHistories& sharedHistory;

@@ -41,11 +41,29 @@ constexpr int CORRHIST_BASE_SIZE       = UINT_16_HISTORY_SIZE;
 constexpr int CORRECTION_HISTORY_LIMIT = 1024;
 constexpr int LOW_PLY_HISTORY_SIZE     = 5;
 
+// Tagged thread-local joint correction history.
+constexpr int      JOINT_CORR_BITS       = 17;
+constexpr size_t   JOINT_CORR_BASE_SIZE  = size_t(1) << JOINT_CORR_BITS;
+constexpr uint32_t JOINT_CORR_INDEX_MASK = uint32_t(JOINT_CORR_BASE_SIZE - 1);
+constexpr int      JOINT_CORR_TAG_BITS   = 20;
+constexpr uint32_t JOINT_CORR_TAG_MASK   = (uint32_t(1) << JOINT_CORR_TAG_BITS) - 1;
+constexpr int16_t  JOINT_CORR_INIT       = 6;
+constexpr int16_t  JOINT_CORR_NOK        = 8;
+
 static_assert((PAWN_HISTORY_BASE_SIZE & (PAWN_HISTORY_BASE_SIZE - 1)) == 0,
               "PAWN_HISTORY_BASE_SIZE has to be a power of 2");
 
 static_assert((CORRHIST_BASE_SIZE & (CORRHIST_BASE_SIZE - 1)) == 0,
               "CORRHIST_BASE_SIZE has to be a power of 2");
+
+static_assert((JOINT_CORR_BASE_SIZE & (JOINT_CORR_BASE_SIZE - 1)) == 0,
+              "JOINT_CORR_BASE_SIZE has to be a power of 2");
+
+// Guard the packed slot's signed value field against a future SPSA tune
+// that raises CORRECTION_HISTORY_LIMIT past the 12-bit signed range.
+static_assert(CORRECTION_HISTORY_LIMIT <= (1 << 11) - 1,
+              "JointCorrSlot::value is int : 12 signed ([-2048, 2047]); "
+              "widen the field or lower CORRECTION_HISTORY_LIMIT");
 
 // StatsEntry is the container of various numerical statistics. We use a class
 // instead of a naked value to directly call history update operator<<() on
@@ -214,6 +232,31 @@ template<CorrHistType T>
 using CorrectionHistory = typename Detail::CorrHistTypedef<T>::type;
 
 using TTMoveHistory = StatsEntry<std::int16_t, 8192>;
+
+// Packed slot for the tagged thread-local joint correction history.
+// 12-bit signed value in bits [0..11], 20-bit tag in bits [12..31],
+// stored as a single uint32_t word so read and write compile to one
+// 32-bit load and one 32-bit store respectively. tag == 0 denotes an
+// empty slot; tag generation reserves 0 by remapping to 1.
+struct alignas(4) JointCorrSlot {
+    std::uint32_t word;
+
+    static constexpr int      WORD_BITS  = 32;
+    static constexpr int      VALUE_BITS = WORD_BITS - JOINT_CORR_TAG_BITS;
+    static constexpr int      SIGN_SHIFT = WORD_BITS - VALUE_BITS;  // sign-extend shift
+    static constexpr uint32_t VALUE_MASK = (uint32_t(1) << VALUE_BITS) - 1u;
+    static_assert(VALUE_BITS == 12, "JointCorrSlot value field must be 12 bits");
+
+    int      value() const { return std::int32_t(word << SIGN_SHIFT) >> SIGN_SHIFT; }
+    uint32_t tag() const { return word >> VALUE_BITS; }
+
+    static uint32_t pack(int v, uint32_t t) {
+        return (uint32_t(v) & VALUE_MASK) | (t << VALUE_BITS);
+    }
+};
+static_assert(sizeof(JointCorrSlot) == 4, "JointCorrSlot must be 4 bytes");
+
+using JointCorrectionHistory = std::array<JointCorrSlot, JOINT_CORR_BASE_SIZE>;
 
 // Set of histories shared between groups of threads. To avoid excessive
 // cross-node data transfer, histories are shared only between threads
