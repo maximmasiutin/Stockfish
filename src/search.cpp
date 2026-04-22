@@ -89,10 +89,20 @@ int correction_value(const Worker& w, const Position& pos, const Stack* const ss
     const int   micv   = shared.minor_piece_correction_entry(pos)[us].minor;
     const int   wnpcv  = shared.nonpawn_correction_entry<WHITE>(pos)[us].nonPawnWhite;
     const int   bnpcv  = shared.nonpawn_correction_entry<BLACK>(pos)[us].nonPawnBlack;
-    const int   cntcv =
-      m.is_ok() ? (*(ss - 2)->continuationCorrectionHistory)[pos.piece_on(m.to_sq())][m.to_sq()]
-                    + (*(ss - 4)->continuationCorrectionHistory)[pos.piece_on(m.to_sq())][m.to_sq()]
-                  : 8;
+
+    int cntcv;
+    if (m.is_ok())
+    {
+        Square sq = m.to_sq();
+        Piece  pc = pos.piece_on(sq);
+        cntcv     = (*(ss - 2)->continuationCorrectionHistory)[pc][sq]
+              + (*(ss - 4)->continuationCorrectionHistory)[pc][sq]
+              + (*(ss - 2)->sharedContCorr)[pc][sq] + (*(ss - 4)->sharedContCorr)[pc][sq];
+    }
+    else
+    {
+        cntcv = CONTCORR_NOK;
+    }
 
     return 12153 * pcv + 8620 * micv + 12355 * (wnpcv + bnpcv) + 7982 * cntcv;
 }
@@ -106,7 +116,9 @@ Value to_corrected_static_eval(const Value v, const int cv) {
 void update_correction_history(const Position& pos,
                                Stack* const    ss,
                                Search::Worker& workerThread,
-                               const int       bonus) {
+                               const int       bonus,
+                               const Depth     depth) {
+
     const Move  m  = (ss - 1)->currentMove;
     const Color us = pos.side_to_move();
 
@@ -122,8 +134,17 @@ void update_correction_history(const Position& pos,
     {
         const Square to = m.to_sq();
         const Piece  pc = pos.piece_on(to);
-        (*(ss - 2)->continuationCorrectionHistory)[pc][to] << bonus * 126 / 128;
-        (*(ss - 4)->continuationCorrectionHistory)[pc][to] << bonus * 63 / 128;
+        const int    b2 = bonus * 126 / 128;
+        const int    b4 = bonus * 63 / 128;
+
+        (*(ss - 2)->continuationCorrectionHistory)[pc][to] << b2;
+        (*(ss - 4)->continuationCorrectionHistory)[pc][to] << b4;
+
+        if (depth >= 14)
+        {
+            (*(ss - 2)->sharedContCorr)[pc][to] << b2;
+            (*(ss - 4)->sharedContCorr)[pc][to] << b4;
+        }
     }
 }
 
@@ -286,6 +307,7 @@ bool Search::Worker::iterative_deepening() {
         (ss - i)->continuationHistory =
           &continuationHistory[0][0][NO_PIECE][0];  // Use as a sentinel
         (ss - i)->continuationCorrectionHistory = &continuationCorrectionHistory[NO_PIECE][0];
+        (ss - i)->sharedContCorr                = &sharedHistory.sharedContCorrHistory[NO_PIECE][0];
         (ss - i)->staticEval                    = VALUE_NONE;
     }
 
@@ -579,6 +601,7 @@ void Search::Worker::do_move(
           &continuationHistory[ss->inCheck][capture][dirtyPiece.pc][move.to_sq()];
         ss->continuationCorrectionHistory =
           &continuationCorrectionHistory[dirtyPiece.pc][move.to_sq()];
+        ss->sharedContCorr = &sharedHistory.sharedContCorrHistory[dirtyPiece.pc][move.to_sq()];
     }
 }
 
@@ -587,6 +610,7 @@ void Search::Worker::do_null_move(Position& pos, StateInfo& st, Stack* const ss)
     ss->currentMove                   = Move::null();
     ss->continuationHistory           = &continuationHistory[0][0][NO_PIECE][0];
     ss->continuationCorrectionHistory = &continuationCorrectionHistory[NO_PIECE][0];
+    ss->sharedContCorr                = &sharedHistory.sharedContCorrHistory[NO_PIECE][0];
 }
 
 void Search::Worker::undo_move(Position& pos, const Move move) {
@@ -605,12 +629,16 @@ void Search::Worker::clear() {
     // Each thread is responsible for clearing their part of shared history
     sharedHistory.correctionHistory.clear_range(0, numaThreadIdx, numaTotal);
     sharedHistory.pawnHistory.clear_range(-1238, numaThreadIdx, numaTotal);
+    if (numaThreadIdx == 0)
+        for (auto& prevPc : sharedHistory.sharedContCorrHistory)
+            for (auto& prevSq : prevPc)
+                prevSq.fill(SHARED_CONTCORR_FILL);
 
     ttMoveHistory = 0;
 
     for (auto& to : continuationCorrectionHistory)
         for (auto& h : to)
-            h.fill(6);
+            h.fill(CONTCORR_FILL);
 
     for (bool inCheck : {false, true})
         for (StatsType c : {NoCaptures, Captures})
@@ -1496,7 +1524,7 @@ moves_loop:  // When in check, search starts here
         auto bonus =
           std::clamp(int(bestValue - ss->staticEval) * depth * (bestMove ? 12 : 17) / 128,
                      -CORRECTION_HISTORY_LIMIT / 4, CORRECTION_HISTORY_LIMIT / 4);
-        update_correction_history(pos, ss, *this, 1069 * bonus / 1024);
+        update_correction_history(pos, ss, *this, 1069 * bonus / 1024, depth);
     }
 
     assert(bestValue > -VALUE_INFINITE && bestValue < VALUE_INFINITE);

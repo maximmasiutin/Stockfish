@@ -106,6 +106,7 @@ struct Stack {
     PVMoves*                    pv;
     PieceToHistory*             continuationHistory;
     CorrectionHistory<PieceTo>* continuationCorrectionHistory;
+    SharedContCorrPieceTo*      sharedContCorr;
     int                         ply;
     Move                        currentMove;
     Move                        excludedMove;
