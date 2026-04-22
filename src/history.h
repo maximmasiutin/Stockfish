@@ -74,11 +74,23 @@ struct StatsEntry {
             return entry;
     }
 
+    template<int x>
+    static constexpr unsigned log2_pow2() {
+        static_assert(x > 0 && (x & (x - 1)) == 0);
+        unsigned n = 0;
+        while ((1 << n) < x)
+            ++n;
+        return n;
+    }
+
     void operator<<(int bonus) {
         // Make sure that bonus is in range [-D, D]
         int clampedBonus = std::clamp(bonus, -D, D);
         T   val          = *this;
-        *this            = val + clampedBonus - val * std::abs(clampedBonus) / D;
+        if constexpr ((D & (D - 1)) == 0)
+            *this = val + clampedBonus - (int(val) * std::abs(clampedBonus) >> log2_pow2<D>());
+        else
+            *this = val + clampedBonus - val * std::abs(clampedBonus) / D;
 
         assert(std::abs(T(*this)) <= D);
     }
