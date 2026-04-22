@@ -26,6 +26,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <initializer_list>
 #include <iostream>
 #include <list>
@@ -81,18 +82,63 @@ using SearchedList                  = ValueList<Move, SEARCHEDLIST_CAPACITY>;
 // (*Scaler) All tuned parameters at time controls shorter than
 // optimized for require verifications at longer time controls
 
+// Encode a (piece, square) pair into a 10-bit contcorrIndex for the
+// joint correction hash. NO_PIECE paired with SQ_A1 is the canonical
+// zero sentinel used before the root.
+static_assert(unsigned(NO_PIECE) == 0 && unsigned(SQ_A1) == 0,
+              "contcorr zero sentinel assumes NO_PIECE on SQ_A1 encodes to 0");
+static_assert(unsigned(PIECE_NB) * unsigned(SQUARE_NB) <= (1u << 10),
+              "contcorr_index must fit in 10 bits");
+unsigned contcorr_index(Piece pc, Square sq) { return unsigned(pc) * 64 + unsigned(sq); }
+
+// 64-bit mixer producing both a table index and a verification tag from
+// two 10-bit contcorrIndex inputs. Two rounds of multiply-xor-shift using
+// SplitMix64-derived odd multipliers; not the exact three-round SplitMix64
+// finalizer, but avalanches all 64 output bits so the tag is statistically
+// independent of the index.
+uint64_t contcorr_mix(uint32_t a, uint32_t b) {
+    uint64_t k = (uint64_t(a) << 10) | b;
+    k *= 0x9E3779B97F4A7C15ULL;
+    k ^= k >> 32;
+    k *= 0xBF58476D1CE4E5B9ULL;
+    k ^= k >> 27;
+    return k;
+}
+
+uint32_t contcorr_idx_from(uint64_t h) { return uint32_t(h) & JOINT_CORR_INDEX_MASK; }
+
+// Reserve tag == 0 as the empty-slot sentinel so a freshly cleared
+// (all-zeros) table behaves as if every access misses and returns INIT.
+CorrTag contcorr_tag_from(uint64_t h) {
+    CorrTag t = CorrTag(uint32_t(h >> JOINT_CORR_BITS)) & JOINT_CORR_TAG_MASK;
+    return t == 0 ? CorrTag(1) : t;
+}
+
 int correction_value(const Worker& w, const Position& pos, const Stack* const ss) {
     const Color us     = pos.side_to_move();
-    const auto  m      = (ss - 1)->currentMove;
     const auto& shared = w.sharedHistory;
     const int   pcv    = shared.pawn_correction_entry(pos)[us].pawn;
     const int   micv   = shared.minor_piece_correction_entry(pos)[us].minor;
     const int   wnpcv  = shared.nonpawn_correction_entry<WHITE>(pos)[us].nonPawnWhite;
     const int   bnpcv  = shared.nonpawn_correction_entry<BLACK>(pos)[us].nonPawnBlack;
-    const int   cntcv =
-      m.is_ok() ? (*(ss - 2)->continuationCorrectionHistory)[pos.piece_on(m.to_sq())][m.to_sq()]
-                    + (*(ss - 4)->continuationCorrectionHistory)[pos.piece_on(m.to_sq())][m.to_sq()]
-                  : 8;
+    int         cntcv;
+    if ((ss - 1)->currentMove.is_ok())
+    {
+        // One 16-bit load per slot, branchless tag check: compute
+        // sign-extended value and a match mask, then blend against
+        // JOINT_CORR_INIT. Mask is 0 on match, -1 on miss.
+        auto read = [](uint16_t w_, CorrTag tag) -> int {
+            const JointCorrSlot s{w_};
+            const int           v    = s.value();
+            const int32_t       mask = -int32_t(s.tag() != tag);
+            return (v & ~mask) | (int(JOINT_CORR_INIT) & mask);
+        };
+        const uint16_t wA = w.jointCorrectionHistory[ss->contcorrIdxA].word;
+        const uint16_t wB = w.jointCorrectionHistory[ss->contcorrIdxB].word;
+        cntcv             = read(wA, ss->contcorrTagA) + read(wB, ss->contcorrTagB);
+    }
+    else
+        cntcv = JOINT_CORR_NOK;
 
     return 12153 * pcv + 8620 * micv + 12355 * (wnpcv + bnpcv) + 7982 * cntcv;
 }
@@ -107,23 +153,31 @@ void update_correction_history(const Position& pos,
                                Stack* const    ss,
                                Search::Worker& workerThread,
                                const int       bonus) {
-    const Move  m  = (ss - 1)->currentMove;
     const Color us = pos.side_to_move();
 
     constexpr int nonPawnWeight = 187;
     auto&         shared        = workerThread.sharedHistory;
 
     shared.pawn_correction_entry(pos)[us].pawn << bonus;
-    shared.minor_piece_correction_entry(pos)[us].minor << bonus * 153 / 128;
-    shared.nonpawn_correction_entry<WHITE>(pos)[us].nonPawnWhite << bonus * nonPawnWeight / 128;
-    shared.nonpawn_correction_entry<BLACK>(pos)[us].nonPawnBlack << bonus * nonPawnWeight / 128;
+    shared.minor_piece_correction_entry(pos)[us].minor
+      << ((bonus * 153) >> CORRECTION_WEIGHT_SHIFT);
+    shared.nonpawn_correction_entry<WHITE>(pos)[us].nonPawnWhite
+      << ((bonus * nonPawnWeight) >> CORRECTION_WEIGHT_SHIFT);
+    shared.nonpawn_correction_entry<BLACK>(pos)[us].nonPawnBlack
+      << ((bonus * nonPawnWeight) >> CORRECTION_WEIGHT_SHIFT);
 
-    if (m.is_ok())
+    if ((ss - 1)->currentMove.is_ok())
     {
-        const Square to = m.to_sq();
-        const Piece  pc = pos.piece_on(to);
-        (*(ss - 2)->continuationCorrectionHistory)[pc][to] << bonus * 126 / 128;
-        (*(ss - 4)->continuationCorrectionHistory)[pc][to] << bonus * 63 / 128;
+        // One 16-bit load + one 16-bit store per slot.
+        auto update = [](JointCorrSlot& s, CorrTag tag, int b) {
+            const JointCorrSlot s_ = s;
+            int                 v  = s_.tag() == tag ? s_.value() : int(JOINT_CORR_INIT);
+            v                      = v + b - ((v * std::abs(b)) >> JointCorrSlot::GRAVITY_SHIFT);
+            s.word                 = JointCorrSlot::pack(v, tag);
+        };
+        update(workerThread.jointCorrectionHistory[ss->contcorrIdxA], ss->contcorrTagA, bonus);
+        update(workerThread.jointCorrectionHistory[ss->contcorrIdxB], ss->contcorrTagB,
+               bonus >> JOINT_CORR_B_BONUS_SHIFT);
     }
 }
 
@@ -285,9 +339,17 @@ bool Search::Worker::iterative_deepening() {
     {
         (ss - i)->continuationHistory =
           &continuationHistory[0][0][NO_PIECE][0];  // Use as a sentinel
-        (ss - i)->continuationCorrectionHistory = &continuationCorrectionHistory[NO_PIECE][0];
-        (ss - i)->staticEval                    = VALUE_NONE;
+        (ss - i)->contcorrIndex = 0;
+        (ss - i)->contcorrIdxA  = 0;
+        (ss - i)->contcorrTagA  = 0;
+        (ss - i)->contcorrIdxB  = 0;
+        (ss - i)->contcorrTagB  = 0;
+        (ss - i)->staticEval    = VALUE_NONE;
     }
+    ss->contcorrIdxA = 0;
+    ss->contcorrTagA = 0;
+    ss->contcorrIdxB = 0;
+    ss->contcorrTagB = 0;
 
     for (int i = 0; i <= MAX_PLY + 2; ++i)
         (ss + i)->ply = i;
@@ -577,16 +639,32 @@ void Search::Worker::do_move(
         ss->currentMove = move;
         ss->continuationHistory =
           &continuationHistory[ss->inCheck][capture][dirtyPiece.pc][move.to_sq()];
-        ss->continuationCorrectionHistory =
-          &continuationCorrectionHistory[dirtyPiece.pc][move.to_sq()];
+
+        ss->contcorrIndex = contcorr_index(dirtyPiece.pc, move.to_sq());
+
+        // Seed child hashes: at the read site ss becomes (ss-1), our
+        // (ss-1) becomes (ss-2), and our (ss-3) becomes (ss-4).
+        const uint64_t hA      = contcorr_mix(ss->contcorrIndex, (ss - 1)->contcorrIndex);
+        const uint64_t hB      = contcorr_mix(ss->contcorrIndex, (ss - 3)->contcorrIndex);
+        (ss + 1)->contcorrIdxA = contcorr_idx_from(hA);
+        (ss + 1)->contcorrTagA = contcorr_tag_from(hA);
+        (ss + 1)->contcorrIdxB = contcorr_idx_from(hB);
+        (ss + 1)->contcorrTagB = contcorr_tag_from(hB);
     }
 }
 
 void Search::Worker::do_null_move(Position& pos, StateInfo& st, Stack* const ss) {
     pos.do_null_move(st);
-    ss->currentMove                   = Move::null();
-    ss->continuationHistory           = &continuationHistory[0][0][NO_PIECE][0];
-    ss->continuationCorrectionHistory = &continuationCorrectionHistory[NO_PIECE][0];
+    ss->currentMove         = Move::null();
+    ss->continuationHistory = &continuationHistory[0][0][NO_PIECE][0];
+    ss->contcorrIndex       = contcorr_index(NO_PIECE, SQ_A1);
+
+    const uint64_t hA      = contcorr_mix(ss->contcorrIndex, (ss - 1)->contcorrIndex);
+    const uint64_t hB      = contcorr_mix(ss->contcorrIndex, (ss - 3)->contcorrIndex);
+    (ss + 1)->contcorrIdxA = contcorr_idx_from(hA);
+    (ss + 1)->contcorrTagA = contcorr_tag_from(hA);
+    (ss + 1)->contcorrIdxB = contcorr_idx_from(hB);
+    (ss + 1)->contcorrTagB = contcorr_tag_from(hB);
 }
 
 void Search::Worker::undo_move(Position& pos, const Move move) {
@@ -608,9 +686,10 @@ void Search::Worker::clear() {
 
     ttMoveHistory = 0;
 
-    for (auto& to : continuationCorrectionHistory)
-        for (auto& h : to)
-            h.fill(6);
+    // Zero-initialize: tag == 0 is the empty-slot sentinel; read path
+    // returns JOINT_CORR_INIT for any access that does not match.
+    std::memset(jointCorrectionHistory.data(), 0,
+                sizeof(JointCorrSlot) * jointCorrectionHistory.size());
 
     for (bool inCheck : {false, true})
         for (StatsType c : {NoCaptures, Captures})
