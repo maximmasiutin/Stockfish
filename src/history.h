@@ -41,6 +41,10 @@ constexpr int CORRHIST_BASE_SIZE       = UINT_16_HISTORY_SIZE;
 constexpr int CORRECTION_HISTORY_LIMIT = 1024;
 constexpr int LOW_PLY_HISTORY_SIZE     = 5;
 
+constexpr int     CONTCORR_FILL        = 6;  // SPSA-tunable
+constexpr int16_t SHARED_CONTCORR_FILL = 0;  // SPSA-tunable
+constexpr int     CONTCORR_NOK         = 8;  // SPSA-tunable
+
 static_assert((PAWN_HISTORY_BASE_SIZE & (PAWN_HISTORY_BASE_SIZE - 1)) == 0,
               "PAWN_HISTORY_BASE_SIZE has to be a power of 2");
 
@@ -213,6 +217,10 @@ using UnifiedCorrectionHistory =
 template<CorrHistType T>
 using CorrectionHistory = typename Detail::CorrHistTypedef<T>::type;
 
+using SharedContCorrPieceTo =
+  AtomicStats<std::int16_t, CORRECTION_HISTORY_LIMIT, PIECE_NB, SQUARE_NB>;
+using SharedContCorrHistory = MultiArray<SharedContCorrPieceTo, PIECE_NB, SQUARE_NB>;
+
 using TTMoveHistory = StatsEntry<std::int16_t, 8192>;
 
 // Set of histories shared between groups of threads. To avoid excessive
@@ -226,6 +234,12 @@ struct SharedHistories {
         assert((threadCount & (threadCount - 1)) == 0 && threadCount != 0);
         sizeMinus1         = correctionHistory.get_size() - 1;
         pawnHistSizeMinus1 = pawnHistory.get_size() - 1;
+
+        for (auto& prevPc : sharedContCorrHistory)
+            for (auto& prevSq : prevPc)
+                for (auto& pc : prevSq)
+                    for (auto& entry : pc)
+                        entry = SHARED_CONTCORR_FILL;
     }
 
     size_t get_size() const { return sizeMinus1 + 1; }
@@ -262,6 +276,7 @@ struct SharedHistories {
 
     UnifiedCorrectionHistory correctionHistory;
     PawnHistory              pawnHistory;
+    SharedContCorrHistory    sharedContCorrHistory;
 
 
    private:
