@@ -41,11 +41,46 @@ constexpr int CORRHIST_BASE_SIZE       = UINT_16_HISTORY_SIZE;
 constexpr int CORRECTION_HISTORY_LIMIT = 1024;
 constexpr int LOW_PLY_HISTORY_SIZE     = 5;
 
+// Tagged thread-local joint correction history.
+// Slot is a single 16-bit word: 11-bit signed value [-1023, +1023]
+// plus 5-bit tag.
+constexpr int      JOINT_CORR_BITS       = 17;
+constexpr size_t   JOINT_CORR_BASE_SIZE  = size_t(1) << JOINT_CORR_BITS;
+constexpr uint32_t JOINT_CORR_INDEX_MASK = uint32_t(JOINT_CORR_BASE_SIZE - 1);
+constexpr int      JOINT_CORR_TAG_BITS   = 5;
+using CorrTag                            = std::uint8_t;
+constexpr CorrTag JOINT_CORR_TAG_MASK    = CorrTag((1u << JOINT_CORR_TAG_BITS) - 1);
+constexpr int16_t JOINT_CORR_INIT        = 6;
+constexpr int16_t JOINT_CORR_NOK         = 8;
+
+// B-slot (4-ply-back) receives half the A-slot bonus, mirroring the
+// relative weights of the master continuation correction history.
+// Applied as a signed right shift (floor semantics).
+constexpr int JOINT_CORR_B_BONUS_SHIFT = 1;
+
+// log2(128). The per-table shared-history bonuses use weight fractions
+// with denominator 128; the division lowers to a signed right shift.
+constexpr int CORRECTION_WEIGHT_SHIFT = 7;
+static_assert((1 << CORRECTION_WEIGHT_SHIFT) == 128, "CORRECTION_WEIGHT_SHIFT must be log2(128)");
+
 static_assert((PAWN_HISTORY_BASE_SIZE & (PAWN_HISTORY_BASE_SIZE - 1)) == 0,
               "PAWN_HISTORY_BASE_SIZE has to be a power of 2");
 
 static_assert((CORRHIST_BASE_SIZE & (CORRHIST_BASE_SIZE - 1)) == 0,
               "CORRHIST_BASE_SIZE has to be a power of 2");
+
+static_assert((JOINT_CORR_BASE_SIZE & (JOINT_CORR_BASE_SIZE - 1)) == 0,
+              "JOINT_CORR_BASE_SIZE has to be a power of 2");
+
+// Guard the packed slot's signed value field against CORRECTION_HISTORY_LIMIT
+// growth. The field is 11-bit signed saturated to [-1023, +1023] (one codepoint
+// shaved off the negative end for symmetry). The gravity update
+// v + b - v*|b|/CORRECTION_HISTORY_LIMIT is a contraction whose fixed point
+// is +-CORRECTION_HISTORY_LIMIT; as long as CORRECTION_HISTORY_LIMIT <= 1024,
+// the saturating clamp in JointCorrSlot::pack() keeps v representable.
+static_assert(CORRECTION_HISTORY_LIMIT <= 1024,
+              "JointCorrSlot::value is an 11-bit saturated signed field; "
+              "widen the field or lower CORRECTION_HISTORY_LIMIT if this grows");
 
 // StatsEntry is the container of various numerical statistics. We use a class
 // instead of a naked value to directly call history update operator<<() on
@@ -214,6 +249,53 @@ template<CorrHistType T>
 using CorrectionHistory = typename Detail::CorrHistTypedef<T>::type;
 
 using TTMoveHistory = StatsEntry<std::int16_t, 8192>;
+
+// Packed slot for the tagged thread-local joint correction history.
+// 11-bit signed value in bits [0..10] clamped to [-1023, +1023],
+// 5-bit tag in bits [11..15], stored as a single uint16_t word so
+// read and write compile to one 16-bit load and one 16-bit store
+// respectively. tag == 0 denotes an empty slot; tag generation
+// reserves 0 by remapping to 1.
+struct alignas(2) JointCorrSlot {
+    std::uint16_t word;
+
+    static constexpr int      WORD_BITS  = 16;
+    static constexpr int      VALUE_BITS = WORD_BITS - JOINT_CORR_TAG_BITS;
+    static constexpr int      SIGN_SHIFT = WORD_BITS - VALUE_BITS;  // sign-extend shift
+    static constexpr uint16_t VALUE_MASK = uint16_t((uint16_t(1) << VALUE_BITS) - 1u);
+    static constexpr int      VALUE_MAX  = (1 << (VALUE_BITS - 1)) - 1;  // +1023
+    static constexpr int      VALUE_MIN  = -VALUE_MAX;                   // -1023
+    static_assert(VALUE_BITS == 11, "JointCorrSlot value field must be 11 bits");
+
+    // log2(CORRECTION_HISTORY_LIMIT). The gravity update divides
+    // v*|b| by CORRECTION_HISTORY_LIMIT; since that limit is a power
+    // of two, the division lowers to a signed right shift. Computed
+    // at compile time so changing CORRECTION_HISTORY_LIMIT cannot
+    // desync the shift amount.
+    static constexpr int GRAVITY_SHIFT = [] {
+        int s = 0;
+        int n = CORRECTION_HISTORY_LIMIT;
+        while (n > 1)
+        {
+            n >>= 1;
+            ++s;
+        }
+        return s;
+    }();
+    static_assert((1 << GRAVITY_SHIFT) == CORRECTION_HISTORY_LIMIT,
+                  "CORRECTION_HISTORY_LIMIT must be a power of 2");
+
+    int     value() const { return std::int16_t(word << SIGN_SHIFT) >> SIGN_SHIFT; }
+    CorrTag tag() const { return CorrTag(word >> VALUE_BITS); }
+
+    static uint16_t pack(int v, CorrTag t) {
+        v = std::clamp(v, VALUE_MIN, VALUE_MAX);
+        return uint16_t((uint16_t(v) & VALUE_MASK) | uint16_t(uint16_t(t) << VALUE_BITS));
+    }
+};
+static_assert(sizeof(JointCorrSlot) == 2, "JointCorrSlot must be 2 bytes");
+
+using JointCorrectionHistory = std::array<JointCorrSlot, JOINT_CORR_BASE_SIZE>;
 
 // Set of histories shared between groups of threads. To avoid excessive
 // cross-node data transfer, histories are shared only between threads
