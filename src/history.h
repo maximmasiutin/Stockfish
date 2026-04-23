@@ -41,11 +41,29 @@ constexpr int CORRHIST_BASE_SIZE       = UINT_16_HISTORY_SIZE;
 constexpr int CORRECTION_HISTORY_LIMIT = 1024;
 constexpr int LOW_PLY_HISTORY_SIZE     = 5;
 
+constexpr int      LOW_PLY_BITS        = 14;
+constexpr size_t   LOW_PLY_BASE_SIZE   = size_t(1) << LOW_PLY_BITS;
+constexpr uint32_t LOW_PLY_INDEX_MASK  = uint32_t(LOW_PLY_BASE_SIZE - 1);
+constexpr int      LOW_PLY_VALUE_LIMIT = 7183;
+constexpr int16_t  LOW_PLY_INIT        = 98;
+
+// Mask-blend in LowPly::extract and int16 packing in LowPly::pack require both
+// the init and the clamp bounds to be representable as int16.
+static_assert(-LOW_PLY_VALUE_LIMIT >= std::numeric_limits<std::int16_t>::min()
+                && LOW_PLY_VALUE_LIMIT <= std::numeric_limits<std::int16_t>::max(),
+              "LOW_PLY_VALUE_LIMIT must fit in int16_t for packed-slot storage");
+static_assert(LOW_PLY_INIT >= std::numeric_limits<std::int16_t>::min()
+                && LOW_PLY_INIT <= std::numeric_limits<std::int16_t>::max(),
+              "LOW_PLY_INIT must fit in int16_t");
+
 static_assert((PAWN_HISTORY_BASE_SIZE & (PAWN_HISTORY_BASE_SIZE - 1)) == 0,
               "PAWN_HISTORY_BASE_SIZE has to be a power of 2");
 
 static_assert((CORRHIST_BASE_SIZE & (CORRHIST_BASE_SIZE - 1)) == 0,
               "CORRHIST_BASE_SIZE has to be a power of 2");
+
+static_assert((LOW_PLY_BASE_SIZE & (LOW_PLY_BASE_SIZE - 1)) == 0,
+              "LOW_PLY_BASE_SIZE has to be a power of 2");
 
 // StatsEntry is the container of various numerical statistics. We use a class
 // instead of a naked value to directly call history update operator<<() on
@@ -134,9 +152,60 @@ struct DynStats {
 // see https://www.chessprogramming.org/Butterfly_Boards
 using ButterflyHistory = Stats<std::int16_t, 7183, COLOR_NB, UINT_16_HISTORY_SIZE>;
 
-// LowPlyHistory is addressed by ply and move's from and to squares, used
-// to improve move ordering near the root
-using LowPlyHistory = Stats<std::int16_t, 7183, LOW_PLY_HISTORY_SIZE, UINT_16_HISTORY_SIZE>;
+// LowPlyHistory: tagged hashed table keyed by (ply, move.raw()).
+struct alignas(4) LowPlySlot {
+    std::uint32_t data;
+};
+static_assert(sizeof(LowPlySlot) == 4, "LowPlySlot must be 4 bytes");
+
+using LowPlyHistory = std::array<LowPlySlot, LOW_PLY_BASE_SIZE>;
+
+struct LowPly {
+    static std::uint32_t input(int ply, std::uint16_t move_raw) {
+        assert(0 <= ply && ply < LOW_PLY_HISTORY_SIZE);
+        return (std::uint32_t(unsigned(ply)) << 16) | move_raw;
+    }
+    static std::uint64_t mix(std::uint32_t in) {
+        std::uint64_t k = in;
+        k *= 0x9E3779B97F4A7C15ULL;
+        k ^= k >> 32;
+        k *= 0xBF58476D1CE4E5B9ULL;
+        k ^= k >> 27;
+        return k;
+    }
+    static std::uint32_t idx_from(std::uint64_t h) { return std::uint32_t(h) & LOW_PLY_INDEX_MASK; }
+    static std::uint16_t tag_from(std::uint64_t h) {
+        std::uint16_t t = std::uint16_t(h >> LOW_PLY_BITS);
+        return t == 0 ? std::uint16_t(1) : t;
+    }
+    static std::uint32_t pack(int v, std::uint16_t tag) {
+        return std::uint32_t(std::uint16_t(v)) | (std::uint32_t(tag) << 16);
+    }
+    static int extract(std::uint32_t data, std::uint16_t tag) {
+        const int          v = int(std::int16_t(data & 0xFFFF));
+        // mask is 0 on tag match, -1 on mismatch; blends v with LOW_PLY_INIT branchlessly.
+        const std::int32_t mask = -std::int32_t(std::uint16_t(data >> 16) != tag);
+        return (v & ~mask) | (int(LOW_PLY_INIT) & mask);
+    }
+
+    static int read(const LowPlyHistory& t, int ply, std::uint16_t move_raw) {
+        const std::uint64_t h   = mix(input(ply, move_raw));
+        const std::uint32_t idx = idx_from(h);
+        const std::uint16_t tag = tag_from(h);
+        return extract(t[idx].data, tag);
+    }
+
+    static void update(LowPlyHistory& t, int ply, std::uint16_t move_raw, int bonus) {
+        const std::uint64_t h            = mix(input(ply, move_raw));
+        const std::uint32_t idx          = idx_from(h);
+        const std::uint16_t tag          = tag_from(h);
+        LowPlySlot&         s            = t[idx];
+        const int clampedBonus = std::clamp(bonus, -LOW_PLY_VALUE_LIMIT, LOW_PLY_VALUE_LIMIT);
+        int       v            = extract(s.data, tag);
+        v += clampedBonus - v * std::abs(clampedBonus) / LOW_PLY_VALUE_LIMIT;
+        s.data = pack(std::clamp(v, -LOW_PLY_VALUE_LIMIT, LOW_PLY_VALUE_LIMIT), tag);
+    }
+};
 
 // CapturePieceToHistory is addressed by a move's [piece][to][captured piece type]
 using CapturePieceToHistory = Stats<std::int16_t, 10692, PIECE_NB, SQUARE_NB, PIECE_TYPE_NB>;
