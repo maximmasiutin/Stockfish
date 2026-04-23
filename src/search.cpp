@@ -81,6 +81,52 @@ using SearchedList                  = ValueList<Move, SEARCHEDLIST_CAPACITY>;
 // (*Scaler) All tuned parameters at time controls shorter than
 // optimized for require verifications at longer time controls
 
+// Layout of contHistPrefix (16 bits used as 12):
+//   bit 11      inCheck
+//   bit 10      capture
+//   bits 9..6   Piece        (4 bits, PIECE_NB = 16)
+//   bits 5..0   Square       (6 bits, SQUARE_NB = 64)
+// Layout of contCorrPrefix (16 bits used as 10):
+//   bits 9..6   Piece
+//   bits 5..0   Square
+constexpr int CC_PREFIX_PC_SHIFT       = 6;
+constexpr int CH_PREFIX_CAPTURE_SHIFT  = 10;
+constexpr int CH_PREFIX_INCHECK_SHIFT  = 11;
+
+inline uint16_t encode_cont_corr_prefix(Piece pc, Square to) {
+    return uint16_t((unsigned(pc) << CC_PREFIX_PC_SHIFT) | unsigned(to));
+}
+inline uint16_t encode_cont_hist_prefix(bool inCheck, bool capture, Piece pc, Square to) {
+    return uint16_t((unsigned(inCheck) << CH_PREFIX_INCHECK_SHIFT)
+                    | (unsigned(capture) << CH_PREFIX_CAPTURE_SHIFT)
+                    | encode_cont_corr_prefix(pc, to));
+}
+
+inline Piece  cc_prefix_pc(uint16_t p) { return Piece((p >> CC_PREFIX_PC_SHIFT) & 0xF); }
+inline Square cc_prefix_to(uint16_t p) { return Square(p & 0x3F); }
+inline bool   ch_prefix_inCheck(uint16_t p) { return (p >> CH_PREFIX_INCHECK_SHIFT) & 1; }
+inline bool   ch_prefix_capture(uint16_t p) { return (p >> CH_PREFIX_CAPTURE_SHIFT) & 1; }
+
+inline CorrectionHistory<PieceTo>* cont_corr_from_prefix(Worker& w, uint16_t prefix) {
+    return &w.continuationCorrectionHistory[cc_prefix_pc(prefix)][cc_prefix_to(prefix)];
+}
+inline const CorrectionHistory<PieceTo>* cont_corr_from_prefix(const Worker& w, uint16_t prefix) {
+    return &w.continuationCorrectionHistory[cc_prefix_pc(prefix)][cc_prefix_to(prefix)];
+}
+inline PieceToHistory* cont_hist_from_prefix(Worker& w, uint16_t prefix) {
+    return &w.continuationHistory[ch_prefix_inCheck(prefix)][ch_prefix_capture(prefix)]
+                                 [cc_prefix_pc(prefix)][cc_prefix_to(prefix)];
+}
+inline const PieceToHistory* cont_hist_from_prefix(const Worker& w, uint16_t prefix) {
+    return &w.continuationHistory[ch_prefix_inCheck(prefix)][ch_prefix_capture(prefix)]
+                                 [cc_prefix_pc(prefix)][cc_prefix_to(prefix)];
+}
+
+constexpr bool   SENTINEL_IN_CHECK = false;
+constexpr bool   SENTINEL_CAPTURE  = false;
+constexpr Piece  SENTINEL_PIECE    = NO_PIECE;
+constexpr Square SENTINEL_SQUARE   = SQ_A1;
+
 int correction_value(const Worker& w, const Position& pos, const Stack* const ss) {
     const Color us     = pos.side_to_move();
     const auto  m      = (ss - 1)->currentMove;
@@ -90,8 +136,8 @@ int correction_value(const Worker& w, const Position& pos, const Stack* const ss
     const int   wnpcv  = shared.nonpawn_correction_entry<WHITE>(pos)[us].nonPawnWhite;
     const int   bnpcv  = shared.nonpawn_correction_entry<BLACK>(pos)[us].nonPawnBlack;
     const int   cntcv =
-      m.is_ok() ? (*(ss - 2)->continuationCorrectionHistory)[pos.piece_on(m.to_sq())][m.to_sq()]
-                    + (*(ss - 4)->continuationCorrectionHistory)[pos.piece_on(m.to_sq())][m.to_sq()]
+      m.is_ok() ? (*cont_corr_from_prefix(w, (ss - 2)->contCorrPrefix))[pos.piece_on(m.to_sq())][m.to_sq()]
+                    + (*cont_corr_from_prefix(w, (ss - 4)->contCorrPrefix))[pos.piece_on(m.to_sq())][m.to_sq()]
                   : 8;
 
     return 12153 * pcv + 8620 * micv + 12355 * (wnpcv + bnpcv) + 7982 * cntcv;
@@ -122,8 +168,8 @@ void update_correction_history(const Position& pos,
     {
         const Square to = m.to_sq();
         const Piece  pc = pos.piece_on(to);
-        (*(ss - 2)->continuationCorrectionHistory)[pc][to] << bonus * 126 / 128;
-        (*(ss - 4)->continuationCorrectionHistory)[pc][to] << bonus * 63 / 128;
+        (*cont_corr_from_prefix(workerThread, (ss - 2)->contCorrPrefix))[pc][to] << bonus * 126 / 128;
+        (*cont_corr_from_prefix(workerThread, (ss - 4)->contCorrPrefix))[pc][to] << bonus * 63 / 128;
     }
 }
 
@@ -131,7 +177,7 @@ void update_correction_history(const Position& pos,
 Value value_draw(size_t nodes) { return VALUE_DRAW - 1 + Value(nodes & 0x2); }
 Value value_to_tt(Value v, int ply);
 Value value_from_tt(Value v, int ply, int r50c);
-void  update_continuation_histories(Stack* ss, Piece pc, Square to, int bonus);
+void  update_continuation_histories(Worker& w, Stack* ss, Piece pc, Square to, int bonus);
 void  update_quiet_histories(
    const Position& pos, Stack* ss, Search::Worker& workerThread, Move move, int bonus);
 void update_all_stats(const Position& pos,
@@ -283,10 +329,9 @@ bool Search::Worker::iterative_deepening() {
 
     for (int i = 7; i > 0; --i)
     {
-        (ss - i)->continuationHistory =
-          &continuationHistory[0][0][NO_PIECE][0];  // Use as a sentinel
-        (ss - i)->continuationCorrectionHistory = &continuationCorrectionHistory[NO_PIECE][0];
-        (ss - i)->staticEval                    = VALUE_NONE;
+        (ss - i)->contHistPrefix = encode_cont_hist_prefix(SENTINEL_IN_CHECK, SENTINEL_CAPTURE, SENTINEL_PIECE, SENTINEL_SQUARE);
+        (ss - i)->contCorrPrefix = encode_cont_corr_prefix(SENTINEL_PIECE, SENTINEL_SQUARE);
+        (ss - i)->staticEval     = VALUE_NONE;
     }
 
     for (int i = 0; i <= MAX_PLY + 2; ++i)
@@ -574,19 +619,17 @@ void Search::Worker::do_move(
 
     if (ss != nullptr)
     {
-        ss->currentMove = move;
-        ss->continuationHistory =
-          &continuationHistory[ss->inCheck][capture][dirtyPiece.pc][move.to_sq()];
-        ss->continuationCorrectionHistory =
-          &continuationCorrectionHistory[dirtyPiece.pc][move.to_sq()];
+        ss->currentMove    = move;
+        ss->contHistPrefix = encode_cont_hist_prefix(ss->inCheck, capture, dirtyPiece.pc, move.to_sq());
+        ss->contCorrPrefix = encode_cont_corr_prefix(dirtyPiece.pc, move.to_sq());
     }
 }
 
 void Search::Worker::do_null_move(Position& pos, StateInfo& st, Stack* const ss) {
     pos.do_null_move(st);
-    ss->currentMove                   = Move::null();
-    ss->continuationHistory           = &continuationHistory[0][0][NO_PIECE][0];
-    ss->continuationCorrectionHistory = &continuationCorrectionHistory[NO_PIECE][0];
+    ss->currentMove    = Move::null();
+    ss->contHistPrefix = encode_cont_hist_prefix(SENTINEL_IN_CHECK, SENTINEL_CAPTURE, SENTINEL_PIECE, SENTINEL_SQUARE);
+    ss->contCorrPrefix = encode_cont_corr_prefix(SENTINEL_PIECE, SENTINEL_SQUARE);
 }
 
 void Search::Worker::undo_move(Position& pos, const Move move) {
@@ -791,7 +834,7 @@ Value Search::Worker::search(
 
             // Extra penalty for early quiet moves of the previous ply
             if (prevSq != SQ_NONE && (ss - 1)->moveCount < 4 && !priorCapture)
-                update_continuation_histories(ss - 1, pos.piece_on(prevSq), prevSq, -2014);
+                update_continuation_histories(*this, ss - 1, pos.piece_on(prevSq), prevSq, -2014);
         }
 
         // Partial workaround for the graph history interaction problem
@@ -1006,8 +1049,12 @@ moves_loop:  // When in check, search starts here
         return probCutBeta;
 
     const PieceToHistory* contHist[] = {
-      (ss - 1)->continuationHistory, (ss - 2)->continuationHistory, (ss - 3)->continuationHistory,
-      (ss - 4)->continuationHistory, (ss - 5)->continuationHistory, (ss - 6)->continuationHistory};
+      cont_hist_from_prefix(*this, (ss - 1)->contHistPrefix),
+      cont_hist_from_prefix(*this, (ss - 2)->contHistPrefix),
+      cont_hist_from_prefix(*this, (ss - 3)->contHistPrefix),
+      cont_hist_from_prefix(*this, (ss - 4)->contHistPrefix),
+      cont_hist_from_prefix(*this, (ss - 5)->contHistPrefix),
+      cont_hist_from_prefix(*this, (ss - 6)->contHistPrefix)};
 
 
     MovePicker mp(pos, ttData.move, depth, &mainHistory, &lowPlyHistory, &captureHistory, contHist,
@@ -1274,7 +1321,7 @@ moves_loop:  // When in check, search starts here
                     value = -search<NonPV>(pos, ss + 1, -(alpha + 1), -alpha, newDepth, !cutNode);
 
                 // Post LMR continuation history updates
-                update_continuation_histories(ss, movedPiece, move.to_sq(), 1426);
+                update_continuation_histories(*this, ss, movedPiece, move.to_sq(), 1426);
             }
         }
 
@@ -1453,7 +1500,7 @@ moves_loop:  // When in check, search starts here
         // scaledBonus ranges from 0 to roughly 2.3M, overflows happen for multipliers larger than 900
         const int scaledBonus = std::min(135 * depth - 80, 1400) * bonusScale;
 
-        update_continuation_histories(ss - 1, pos.piece_on(prevSq), prevSq,
+        update_continuation_histories(*this, ss - 1, pos.piece_on(prevSq), prevSq,
                                       scaledBonus * 221 / 16384);
 
         mainHistory[~us][((ss - 1)->currentMove).raw()] << scaledBonus * 235 / 32768;
@@ -1622,7 +1669,7 @@ Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta)
         futilityBase = ss->staticEval + 328;
     }
 
-    const PieceToHistory* contHist[] = {(ss - 1)->continuationHistory};
+    const PieceToHistory* contHist[] = {cont_hist_from_prefix(*this, (ss - 1)->contHistPrefix)};
 
     Square prevSq = ((ss - 1)->currentMove).is_ok() ? ((ss - 1)->currentMove).to_sq() : SQ_NONE;
 
@@ -1859,7 +1906,8 @@ void update_all_stats(const Position& pos,
     // Extra penalty for a quiet early move that was not a TT move in
     // previous ply when it gets refuted.
     if (prevSq != SQ_NONE && ((ss - 1)->moveCount == 1 + (ss - 1)->ttHit) && !pos.captured_piece())
-        update_continuation_histories(ss - 1, pos.piece_on(prevSq), prevSq, -malus * 616 / 1024);
+        update_continuation_histories(workerThread, ss - 1, pos.piece_on(prevSq), prevSq,
+                                      -malus * 616 / 1024);
 
     // Decrease stats for all non-best capture moves
     for (Move move : capturesSearched)
@@ -1873,7 +1921,7 @@ void update_all_stats(const Position& pos,
 
 // Updates the continuation histories for the move pairs formed by
 // the current move and the moves played in previous plies.
-void update_continuation_histories(Stack* ss, Piece pc, Square to, int bonus) {
+void update_continuation_histories(Worker& w, Stack* ss, Piece pc, Square to, int bonus) {
     static constexpr std::array<ConthistBonus, 6> conthist_bonuses = {
       {{1, 1071}, {2, 753}, {3, 329}, {4, 539}, {5, 124}, {6, 434}}};
 
@@ -1889,7 +1937,7 @@ void update_continuation_histories(Stack* ss, Piece pc, Square to, int bonus) {
 
         if (((ss - i)->currentMove).is_ok())
         {
-            auto& historyEntry = (*(ss - i)->continuationHistory)[pc][to];
+            auto& historyEntry = (*cont_hist_from_prefix(w, (ss - i)->contHistPrefix))[pc][to];
             if (historyEntry > 0)
                 positiveCount++;
 
@@ -1910,7 +1958,8 @@ void update_quiet_histories(
     if (ss->ply < LOW_PLY_HISTORY_SIZE)
         workerThread.lowPlyHistory[ss->ply][move.raw()] << bonus * 682 / 1024;
 
-    update_continuation_histories(ss, pos.moved_piece(move), move.to_sq(), bonus * 894 / 1024);
+    update_continuation_histories(workerThread, ss, pos.moved_piece(move), move.to_sq(),
+                                  bonus * 894 / 1024);
 
     workerThread.sharedHistory.pawn_entry(pos)[pos.moved_piece(move)][move.to_sq()]
       << bonus * (bonus > 0 ? 974 : 543) / 1024;

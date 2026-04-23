@@ -103,21 +103,21 @@ struct PVMoves {
 // shallower and deeper in the tree during the search. Each search thread has
 // its own array of Stack objects, indexed by the current ply.
 struct Stack {
-    PVMoves*                    pv;
-    PieceToHistory*             continuationHistory;
-    CorrectionHistory<PieceTo>* continuationCorrectionHistory;
-    int                         ply;
-    Move                        currentMove;
-    Move                        excludedMove;
-    Value                       staticEval;
-    int                         statScore;
-    int                         moveCount;
-    bool                        inCheck;
-    bool                        ttPv;
-    bool                        ttHit;
-    bool                        followPV;
-    int                         cutoffCnt;
-    int                         reduction;
+    PVMoves* pv;
+    uint16_t contHistPrefix;
+    uint16_t contCorrPrefix;
+    Move     currentMove;
+    Move     excludedMove;
+    int16_t  staticEval;
+    uint16_t moveCount;
+    uint16_t cutoffCnt;
+    int16_t  reduction;
+    int32_t  statScore;
+    uint8_t  ply;
+    bool     inCheck : 1;
+    bool     ttPv : 1;
+    bool     ttHit : 1;
+    bool     followPV : 1;
 };
 
 
