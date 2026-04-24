@@ -89,6 +89,83 @@ enum StatsType {
     Captures
 };
 
+constexpr int corrhist_bit_width(unsigned x) {
+    int n = 0;
+    while ((1u << n) < x)
+        ++n;
+    return n;
+}
+
+constexpr int      CORRHIST_VALUE_MIN     = -1024;
+constexpr int      CORRHIST_VALUE_MAX     = -CORRHIST_VALUE_MIN - 1;
+constexpr int      CORRHIST_SLOT_BITS     = int(sizeof(std::uint16_t) * 8);
+constexpr int      CORRHIST_VALUE_BITS    = corrhist_bit_width(unsigned(-CORRHIST_VALUE_MIN)) + 1;
+constexpr int      CORRHIST_TAG_BITS      = CORRHIST_SLOT_BITS - CORRHIST_VALUE_BITS;
+constexpr int      CORRHIST_TAG_KEY_SHIFT = int(sizeof(std::uint64_t) * 8) - CORRHIST_TAG_BITS;
+constexpr uint16_t CORRHIST_VALUE_MASK    = uint16_t((1u << CORRHIST_VALUE_BITS) - 1u);
+constexpr uint16_t CORRHIST_TAG_RAW_MASK  = uint16_t((1u << CORRHIST_TAG_BITS) - 1u);
+constexpr int      CORRHIST_INIT_VALUE    = 0;
+
+static_assert(CORRHIST_VALUE_BITS + CORRHIST_TAG_BITS == CORRHIST_SLOT_BITS,
+              "Value and tag must fill the atomic slot exactly");
+static_assert(CORRHIST_TAG_BITS >= 1, "Need at least one bit of tag discrimination");
+static_assert(-CORRHIST_VALUE_MIN == CORRECTION_HISTORY_LIMIT,
+              "Value range must match master's correction-history gravity divisor");
+
+using CorrhistTag = std::uint8_t;
+
+// Extract the topmost TAG_BITS of the 64-bit key as the tag. Using the top
+// bits keeps the tag disjoint from any low-bit index width used by the
+// shared correction history (DynStats sized threadCount * CORRHIST_BASE_SIZE).
+inline CorrhistTag corrhist_tag_from(std::uint64_t key) {
+    const CorrhistTag t = CorrhistTag((key >> CORRHIST_TAG_KEY_SHIFT) & CORRHIST_TAG_RAW_MASK);
+    return t == 0 ? CorrhistTag(1) : t;
+}
+
+struct alignas(2) CorrhistTaggedSlot {
+    std::atomic<std::uint16_t> word{0};
+
+    // Clear to empty (tag=0). Used by DynStats::clear_range via
+    // CorrectionBundle::operator=.
+    void operator=(int) { word.store(0, std::memory_order_relaxed); }
+
+    // Branchless read: sign-extend value, blend with INIT on tag mismatch.
+    int read(CorrhistTag tag) const {
+        const std::uint16_t w         = word.load(std::memory_order_relaxed);
+        const CorrhistTag   storedTag = CorrhistTag(w >> CORRHIST_VALUE_BITS);
+        const int           v         = std::int16_t(w << CORRHIST_TAG_BITS) >> CORRHIST_TAG_BITS;
+        const std::int32_t  mask      = -std::int32_t(storedTag != tag);
+        return (v & ~mask) | (CORRHIST_INIT_VALUE & mask);
+    }
+
+    inline sf_always_inline void update(CorrhistTag tag, int bonus) {
+        constexpr int       D            = -CORRHIST_VALUE_MIN;
+        const int           clampedBonus = std::clamp(bonus, -D, D);
+        const std::uint16_t w            = word.load(std::memory_order_relaxed);
+        const CorrhistTag   storedTag    = CorrhistTag(w >> CORRHIST_VALUE_BITS);
+        int v = (storedTag == tag) ? (std::int16_t(w << CORRHIST_TAG_BITS) >> CORRHIST_TAG_BITS)
+                                   : CORRHIST_INIT_VALUE;
+        v     = v + clampedBonus - v * std::abs(clampedBonus) / D;
+        v     = std::clamp(v, CORRHIST_VALUE_MIN, CORRHIST_VALUE_MAX);
+        const std::uint16_t newWord =
+          (std::uint16_t(v) & CORRHIST_VALUE_MASK) | (std::uint16_t(tag) << CORRHIST_VALUE_BITS);
+        word.store(newWord, std::memory_order_relaxed);
+    }
+};
+static_assert(sizeof(CorrhistTaggedSlot) == 2,
+              "CorrhistTaggedSlot must remain 2 bytes (memory-neutral vs int16_t)");
+
+// Proxy returned by SharedHistories correction accessors: carries the slot
+// pointer and the tag derived from the position key used to reach the slot.
+struct CorrhistAccess {
+    CorrhistTaggedSlot* slot;
+    CorrhistTag         tag;
+
+    inline sf_always_inline int  read() const { return slot->read(tag); }
+    inline sf_always_inline void operator<<(int bonus) const { slot->update(tag, bonus); }
+    inline sf_always_inline      operator int() const { return read(); }
+};
+
 template<typename T, int D, std::size_t... Sizes>
 using Stats = MultiArray<StatsEntry<T, D>, Sizes...>;
 
@@ -167,16 +244,21 @@ enum CorrHistType {
 
 template<typename T, int D>
 struct CorrectionBundle {
-    StatsEntry<T, D, true> pawn;
-    StatsEntry<T, D, true> minor;
-    StatsEntry<T, D, true> nonPawnWhite;
-    StatsEntry<T, D, true> nonPawnBlack;
+    static_assert(std::is_same_v<T, std::int16_t> && D == CORRECTION_HISTORY_LIMIT,
+                  "Tagged CorrectionBundle supports only int16_t and CORRECTION_HISTORY_LIMIT");
 
-    void operator=(T val) {
-        pawn         = val;
-        minor        = val;
-        nonPawnWhite = val;
-        nonPawnBlack = val;
+    CorrhistTaggedSlot pawn;
+    CorrhistTaggedSlot minor;
+    CorrhistTaggedSlot nonPawnWhite;
+    CorrhistTaggedSlot nonPawnBlack;
+
+    void operator=(T /*val*/) {
+        // Tagged slots only have one valid initialization (empty: tag=0). Master
+        // only ever fills shared corrhist with 0, so ignoring val is safe.
+        pawn         = 0;
+        minor        = 0;
+        nonPawnWhite = 0;
+        nonPawnBlack = 0;
     }
 };
 
@@ -260,11 +342,34 @@ struct SharedHistories {
         return correctionHistory[pos.non_pawn_key(c) & sizeMinus1];
     }
 
-    UnifiedCorrectionHistory correctionHistory;
-    PawnHistory              pawnHistory;
+    CorrhistAccess pawn_correction_access(const Position& pos, Color us) const {
+        const std::uint64_t k = pos.pawn_key();
+        return {&get_bundle(k, us).pawn, corrhist_tag_from(k)};
+    }
+    CorrhistAccess minor_correction_access(const Position& pos, Color us) const {
+        const std::uint64_t k = pos.minor_piece_key();
+        return {&get_bundle(k, us).minor, corrhist_tag_from(k)};
+    }
+    template<Color Us>
+    CorrhistAccess nonpawn_correction_access(const Position& pos, Color us) const {
+        const std::uint64_t k      = pos.non_pawn_key(Us);
+        auto&               bundle = get_bundle(k, us);
+        if constexpr (Us == WHITE)
+            return {&bundle.nonPawnWhite, corrhist_tag_from(k)};
+        else
+            return {&bundle.nonPawnBlack, corrhist_tag_from(k)};
+    }
+
+    mutable UnifiedCorrectionHistory correctionHistory;
+    PawnHistory                      pawnHistory;
 
 
    private:
+    CorrectionBundle<std::int16_t, CORRECTION_HISTORY_LIMIT>& get_bundle(std::uint64_t key,
+                                                                         Color         us) const {
+        return correctionHistory[key & sizeMinus1][us];
+    }
+
     size_t sizeMinus1, pawnHistSizeMinus1;
 };
 
