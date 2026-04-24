@@ -81,20 +81,12 @@ using SearchedList                  = ValueList<Move, SEARCHEDLIST_CAPACITY>;
 // (*Scaler) All tuned parameters at time controls shorter than
 // optimized for require verifications at longer time controls
 
-int correction_value(const Worker& w, const Position& pos, const Stack* const ss) {
-    const Color us     = pos.side_to_move();
-    const auto  m      = (ss - 1)->currentMove;
-    const auto& shared = w.sharedHistory;
-    const int   pcv    = shared.pawn_correction_entry(pos)[us].pawn;
-    const int   micv   = shared.minor_piece_correction_entry(pos)[us].minor;
-    const int   wnpcv  = shared.nonpawn_correction_entry<WHITE>(pos)[us].nonPawnWhite;
-    const int   bnpcv  = shared.nonpawn_correction_entry<BLACK>(pos)[us].nonPawnBlack;
-    const int   cntcv =
-      m.is_ok() ? (*(ss - 2)->continuationCorrectionHistory)[pos.piece_on(m.to_sq())][m.to_sq()]
-                    + (*(ss - 4)->continuationCorrectionHistory)[pos.piece_on(m.to_sq())][m.to_sq()]
-                  : 8;
-
-    return 12153 * pcv + 8620 * micv + 12355 * (wnpcv + bnpcv) + 7982 * cntcv;
+int correction_value(const Stack* const ss) {
+    const int pcv   = *ss->pawnCorr;
+    const int micv  = *ss->minorCorr;
+    const int npcv  = *ss->nonpawnWCorr + *ss->nonpawnBCorr;
+    const int cntcv = *ss->contcorrReadA + *ss->contcorrReadB;
+    return 12153 * pcv + 8620 * micv + 12355 * npcv + 7982 * cntcv;
 }
 
 // Add correctionHistory value to raw staticEval and guarantee evaluation
@@ -103,28 +95,15 @@ Value to_corrected_static_eval(const Value v, const int cv) {
     return std::clamp(v + cv / 131072, VALUE_TB_LOSS_IN_MAX_PLY + 1, VALUE_TB_WIN_IN_MAX_PLY - 1);
 }
 
-void update_correction_history(const Position& pos,
-                               Stack* const    ss,
-                               Search::Worker& workerThread,
-                               const int       bonus) {
-    const Move  m  = (ss - 1)->currentMove;
-    const Color us = pos.side_to_move();
-
+void update_correction_history(Stack* const ss, const int bonus) {
     constexpr int nonPawnWeight = 187;
-    auto&         shared        = workerThread.sharedHistory;
 
-    shared.pawn_correction_entry(pos)[us].pawn << bonus;
-    shared.minor_piece_correction_entry(pos)[us].minor << bonus * 153 / 128;
-    shared.nonpawn_correction_entry<WHITE>(pos)[us].nonPawnWhite << bonus * nonPawnWeight / 128;
-    shared.nonpawn_correction_entry<BLACK>(pos)[us].nonPawnBlack << bonus * nonPawnWeight / 128;
-
-    if (m.is_ok())
-    {
-        const Square to = m.to_sq();
-        const Piece  pc = pos.piece_on(to);
-        (*(ss - 2)->continuationCorrectionHistory)[pc][to] << bonus * 126 / 128;
-        (*(ss - 4)->continuationCorrectionHistory)[pc][to] << bonus * 63 / 128;
-    }
+    *ss->pawnCorr << bonus;
+    *ss->minorCorr << bonus * 153 / 128;
+    *ss->nonpawnWCorr << bonus * nonPawnWeight / 128;
+    *ss->nonpawnBCorr << bonus * nonPawnWeight / 128;
+    *ss->contcorrWriteA << bonus * 126 / 128;
+    *ss->contcorrWriteB << bonus * 63 / 128;
 }
 
 // Add a small random component to draw evaluations to avoid 3-fold blindness
@@ -281,13 +260,34 @@ bool Search::Worker::iterative_deepening() {
     Stack  stack[MAX_PLY + 10] = {};
     Stack* ss                  = stack + 7;
 
+    auto& sh = sharedHistory;
+
+    auto* const sentinelPawnCorr  = &sh.pawn_correction_entry(rootPos)[us].pawn;
+    auto* const sentinelMinorCorr = &sh.minor_piece_correction_entry(rootPos)[us].minor;
+    auto* const sentinelNonpawnWCorr =
+      &sh.nonpawn_correction_entry<WHITE>(rootPos)[us].nonPawnWhite;
+    auto* const sentinelNonpawnBCorr =
+      &sh.nonpawn_correction_entry<BLACK>(rootPos)[us].nonPawnBlack;
+
+    auto bindSentinel = [&](Stack* sp) {
+        sp->continuationHistory = &continuationHistory[0][0][NO_PIECE][0];  // Use as a sentinel
+        sp->continuationCorrectionHistory = &continuationCorrectionHistory[NO_PIECE][0];
+        sp->pawnCorr                      = sentinelPawnCorr;
+        sp->minorCorr                     = sentinelMinorCorr;
+        sp->nonpawnWCorr                  = sentinelNonpawnWCorr;
+        sp->nonpawnBCorr                  = sentinelNonpawnBCorr;
+        sp->contcorrReadA                 = &contcorrDefaultRead;
+        sp->contcorrReadB                 = &contcorrDefaultRead;
+        sp->contcorrWriteA                = &contcorrDummyWrite;
+        sp->contcorrWriteB                = &contcorrDummyWrite;
+    };
+
     for (int i = 7; i > 0; --i)
     {
-        (ss - i)->continuationHistory =
-          &continuationHistory[0][0][NO_PIECE][0];  // Use as a sentinel
-        (ss - i)->continuationCorrectionHistory = &continuationCorrectionHistory[NO_PIECE][0];
-        (ss - i)->staticEval                    = VALUE_NONE;
+        bindSentinel(ss - i);
+        (ss - i)->staticEval = VALUE_NONE;
     }
+    bindSentinel(ss);
 
     for (int i = 0; i <= MAX_PLY + 2; ++i)
         (ss + i)->ply = i;
@@ -570,15 +570,53 @@ void Search::Worker::do_move(
     nodes.store(nodes.load(std::memory_order_relaxed) + 1, std::memory_order_relaxed);
 
     auto [dirtyPiece, dirtyThreats] = accumulatorStack.push();
-    pos.do_move(move, st, givesCheck, dirtyPiece, dirtyThreats, &tt, &sharedHistory);
+    pos.do_move(move, st, givesCheck, dirtyPiece, dirtyThreats, &tt);
 
     if (ss != nullptr)
     {
-        ss->currentMove = move;
-        ss->continuationHistory =
-          &continuationHistory[ss->inCheck][capture][dirtyPiece.pc][move.to_sq()];
-        ss->continuationCorrectionHistory =
-          &continuationCorrectionHistory[dirtyPiece.pc][move.to_sq()];
+        const Piece  pc = dirtyPiece.pc;
+        const Square to = move.to_sq();
+
+        ss->currentMove                   = move;
+        ss->continuationHistory           = &continuationHistory[ss->inCheck][capture][pc][to];
+        ss->continuationCorrectionHistory = &continuationCorrectionHistory[pc][to];
+
+        // Precompute for the child frame the five shared-history entry
+        // addresses and the two continuation-corrhist entry addresses, so
+        // correction_value / update_correction_history consume plain pointer
+        // loads with no hash, no mask, and no is_ok branch. The same
+        // addresses are fed to the prefetches below.
+        Stack* const ss1 = ss + 1;
+        auto&        sh  = sharedHistory;
+        const Color  cus = pos.side_to_move();
+
+        auto& pawnBundle     = sh.pawn_correction_entry(pos);
+        auto& minorBundle    = sh.minor_piece_correction_entry(pos);
+        auto& nonpawnWBundle = sh.nonpawn_correction_entry<WHITE>(pos);
+        auto& nonpawnBBundle = sh.nonpawn_correction_entry<BLACK>(pos);
+
+        ss1->pawnCorr     = &pawnBundle[cus].pawn;
+        ss1->minorCorr    = &minorBundle[cus].minor;
+        ss1->nonpawnWCorr = &nonpawnWBundle[cus].nonPawnWhite;
+        ss1->nonpawnBCorr = &nonpawnBBundle[cus].nonPawnBlack;
+
+        // Master's correction_value / update_correction_history index contcorr
+        // with pos.piece_on(m.to_sq()) (post-promotion piece on promotion
+        // moves), while ss->continuationCorrectionHistory above keeps
+        // dirtyPiece.pc (pre-promotion). Preserve that asymmetry here.
+        const Piece pcCorr  = pos.piece_on(to);
+        auto&       eA      = (*(ss - 1)->continuationCorrectionHistory)[pcCorr][to];
+        auto&       eB      = (*(ss - 3)->continuationCorrectionHistory)[pcCorr][to];
+        ss1->contcorrReadA  = &eA;
+        ss1->contcorrWriteA = &eA;
+        ss1->contcorrReadB  = &eB;
+        ss1->contcorrWriteB = &eB;
+
+        prefetch(&sh.pawn_entry(pos)[pc][to]);
+        prefetch(ss1->pawnCorr);
+        prefetch(ss1->minorCorr);
+        prefetch(ss1->nonpawnWCorr);
+        prefetch(ss1->nonpawnBCorr);
     }
 }
 
@@ -587,6 +625,20 @@ void Search::Worker::do_null_move(Position& pos, StateInfo& st, Stack* const ss)
     ss->currentMove                   = Move::null();
     ss->continuationHistory           = &continuationHistory[0][0][NO_PIECE][0];
     ss->continuationCorrectionHistory = &continuationCorrectionHistory[NO_PIECE][0];
+
+    Stack* const ss1 = ss + 1;
+    auto&        sh  = sharedHistory;
+    const Color  cus = pos.side_to_move();
+
+    ss1->pawnCorr     = &sh.pawn_correction_entry(pos)[cus].pawn;
+    ss1->minorCorr    = &sh.minor_piece_correction_entry(pos)[cus].minor;
+    ss1->nonpawnWCorr = &sh.nonpawn_correction_entry<WHITE>(pos)[cus].nonPawnWhite;
+    ss1->nonpawnBCorr = &sh.nonpawn_correction_entry<BLACK>(pos)[cus].nonPawnBlack;
+
+    ss1->contcorrReadA  = &contcorrDefaultRead;
+    ss1->contcorrReadB  = &contcorrDefaultRead;
+    ss1->contcorrWriteA = &contcorrDummyWrite;
+    ss1->contcorrWriteB = &contcorrDummyWrite;
 }
 
 void Search::Worker::undo_move(Position& pos, const Move move) {
@@ -611,6 +663,9 @@ void Search::Worker::clear() {
     for (auto& to : continuationCorrectionHistory)
         for (auto& h : to)
             h.fill(6);
+
+    contcorrDefaultRead = 4;
+    contcorrDummyWrite  = 0;
 
     for (bool inCheck : {false, true})
         for (StatsType c : {NoCaptures, Captures})
@@ -730,7 +785,7 @@ Value Search::Worker::search(
 
     // Step 5. Static evaluation of the position
     Value      unadjustedStaticEval = VALUE_NONE;
-    const auto correctionValue      = correction_value(*this, pos, ss);
+    const auto correctionValue      = correction_value(ss);
     // Skip early pruning when in check
     if (ss->inCheck)
         ss->staticEval = eval = (ss - 2)->staticEval;
@@ -1496,7 +1551,7 @@ moves_loop:  // When in check, search starts here
         auto bonus =
           std::clamp(int(bestValue - ss->staticEval) * depth * (bestMove ? 12 : 17) / 128,
                      -CORRECTION_HISTORY_LIMIT / 4, CORRECTION_HISTORY_LIMIT / 4);
-        update_correction_history(pos, ss, *this, 1069 * bonus / 1024);
+        update_correction_history(ss, 1069 * bonus / 1024);
     }
 
     assert(bestValue > -VALUE_INFINITE && bestValue < VALUE_INFINITE);
@@ -1579,7 +1634,7 @@ Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta)
         bestValue = futilityBase = -VALUE_INFINITE;
     else
     {
-        const auto correctionValue = correction_value(*this, pos, ss);
+        const auto correctionValue = correction_value(ss);
 
         if (ss->ttHit)
         {

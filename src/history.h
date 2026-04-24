@@ -149,6 +149,9 @@ using PieceToHistory = Stats<std::int16_t, 30000, PIECE_NB, SQUARE_NB>;
 // PieceToHistory instead of ButterflyBoards.
 using ContinuationHistory = MultiArray<PieceToHistory, PIECE_NB, SQUARE_NB>;
 
+using AtomicCorrhistEntry = StatsEntry<std::int16_t, CORRECTION_HISTORY_LIMIT, true>;
+using CorrhistEntry       = StatsEntry<std::int16_t, CORRECTION_HISTORY_LIMIT>;
+
 // PawnHistory is addressed by the pawn structure and a move's [piece][to]
 using PawnHistory =
   DynStats<AtomicStats<std::int16_t, 8192, PIECE_NB, SQUARE_NB>, PAWN_HISTORY_BASE_SIZE>;
@@ -165,14 +168,13 @@ enum CorrHistType {
     Continuation,  // Combined history of move pairs
 };
 
-template<typename T, int D>
 struct CorrectionBundle {
-    StatsEntry<T, D, true> pawn;
-    StatsEntry<T, D, true> minor;
-    StatsEntry<T, D, true> nonPawnWhite;
-    StatsEntry<T, D, true> nonPawnBlack;
+    AtomicCorrhistEntry pawn;
+    AtomicCorrhistEntry minor;
+    AtomicCorrhistEntry nonPawnWhite;
+    AtomicCorrhistEntry nonPawnBlack;
 
-    void operator=(T val) {
+    void operator=(std::int16_t val) {
         pawn         = val;
         minor        = val;
         nonPawnWhite = val;
@@ -184,13 +186,12 @@ namespace Detail {
 
 template<CorrHistType>
 struct CorrHistTypedef {
-    using type =
-      DynStats<Stats<std::int16_t, CORRECTION_HISTORY_LIMIT, COLOR_NB>, CORRHIST_BASE_SIZE>;
+    using type = DynStats<MultiArray<CorrhistEntry, COLOR_NB>, CORRHIST_BASE_SIZE>;
 };
 
 template<>
 struct CorrHistTypedef<PieceTo> {
-    using type = Stats<std::int16_t, CORRECTION_HISTORY_LIMIT, PIECE_NB, SQUARE_NB>;
+    using type = MultiArray<CorrhistEntry, PIECE_NB, SQUARE_NB>;
 };
 
 template<>
@@ -200,15 +201,13 @@ struct CorrHistTypedef<Continuation> {
 
 template<>
 struct CorrHistTypedef<NonPawn> {
-    using type = DynStats<Stats<std::int16_t, CORRECTION_HISTORY_LIMIT, COLOR_NB, COLOR_NB>,
-                          CORRHIST_BASE_SIZE>;
+    using type = DynStats<MultiArray<CorrhistEntry, COLOR_NB, COLOR_NB>, CORRHIST_BASE_SIZE>;
 };
 
 }
 
 using UnifiedCorrectionHistory =
-  DynStats<MultiArray<CorrectionBundle<std::int16_t, CORRECTION_HISTORY_LIMIT>, COLOR_NB>,
-           CORRHIST_BASE_SIZE>;
+  DynStats<MultiArray<CorrectionBundle, COLOR_NB>, CORRHIST_BASE_SIZE>;
 
 template<CorrHistType T>
 using CorrectionHistory = typename Detail::CorrHistTypedef<T>::type;
