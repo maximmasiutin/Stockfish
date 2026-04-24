@@ -106,6 +106,14 @@ struct Stack {
     PVMoves*                    pv;
     PieceToHistory*             continuationHistory;
     CorrectionHistory<PieceTo>* continuationCorrectionHistory;
+    AtomicCorrhistEntry*        pawnCorr;
+    AtomicCorrhistEntry*        minorCorr;
+    AtomicCorrhistEntry*        nonpawnWCorr;
+    AtomicCorrhistEntry*        nonpawnBCorr;
+    CorrhistEntry*              contcorrReadA;
+    CorrhistEntry*              contcorrReadB;
+    CorrhistEntry*              contcorrWriteA;
+    CorrhistEntry*              contcorrWriteB;
     int                         ply;
     Move                        currentMove;
     Move                        excludedMove;
@@ -334,6 +342,9 @@ class Worker {
     CapturePieceToHistory           captureHistory;
     ContinuationHistory             continuationHistory[2][2];
     CorrectionHistory<Continuation> continuationCorrectionHistory;
+
+    CorrhistEntry contcorrDefaultRead;
+    CorrhistEntry contcorrDummyWrite;
 
     TTMoveHistory    ttMoveHistory;
     SharedHistories& sharedHistory;
