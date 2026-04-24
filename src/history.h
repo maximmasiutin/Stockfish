@@ -114,9 +114,6 @@ static_assert(-CORRHIST_VALUE_MIN == CORRECTION_HISTORY_LIMIT,
 
 using CorrhistTag = std::uint8_t;
 
-// Extract the topmost TAG_BITS of the 64-bit key as the tag. Using the top
-// bits keeps the tag disjoint from any low-bit index width used by the
-// shared correction history (DynStats sized threadCount * CORRHIST_BASE_SIZE).
 inline CorrhistTag corrhist_tag_from(std::uint64_t key) {
     const CorrhistTag t = CorrhistTag((key >> CORRHIST_TAG_KEY_SHIFT) & CORRHIST_TAG_RAW_MASK);
     return t == 0 ? CorrhistTag(1) : t;
@@ -125,11 +122,12 @@ inline CorrhistTag corrhist_tag_from(std::uint64_t key) {
 struct alignas(2) CorrhistTaggedSlot {
     std::atomic<std::uint16_t> word{0};
 
-    // Clear to empty (tag=0). Used by DynStats::clear_range via
-    // CorrectionBundle::operator=.
-    void operator=(int) { word.store(0, std::memory_order_relaxed); }
+    void operator=(int v) {
+        assert(v == 0);
+        (void) v;
+        word.store(0, std::memory_order_relaxed);
+    }
 
-    // Branchless read: sign-extend value, blend with INIT on tag mismatch.
     int read(CorrhistTag tag) const {
         const std::uint16_t w         = word.load(std::memory_order_relaxed);
         const CorrhistTag   storedTag = CorrhistTag(w >> CORRHIST_VALUE_BITS);
@@ -152,11 +150,8 @@ struct alignas(2) CorrhistTaggedSlot {
         word.store(newWord, std::memory_order_relaxed);
     }
 };
-static_assert(sizeof(CorrhistTaggedSlot) == 2,
-              "CorrhistTaggedSlot must remain 2 bytes (memory-neutral vs int16_t)");
+static_assert(sizeof(CorrhistTaggedSlot) == 2);
 
-// Proxy returned by SharedHistories correction accessors: carries the slot
-// pointer and the tag derived from the position key used to reach the slot.
 struct CorrhistAccess {
     CorrhistTaggedSlot* slot;
     CorrhistTag         tag;
@@ -252,9 +247,9 @@ struct CorrectionBundle {
     CorrhistTaggedSlot nonPawnWhite;
     CorrhistTaggedSlot nonPawnBlack;
 
-    void operator=(T /*val*/) {
-        // Tagged slots only have one valid initialization (empty: tag=0). Master
-        // only ever fills shared corrhist with 0, so ignoring val is safe.
+    void operator=(T val) {
+        assert(val == 0);
+        (void) val;
         pawn         = 0;
         minor        = 0;
         nonPawnWhite = 0;
