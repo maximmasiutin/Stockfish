@@ -89,28 +89,35 @@ enum StatsType {
     Captures
 };
 
-constexpr int corrhist_bit_width(unsigned x) {
-    int n = 0;
-    while ((1u << n) < x)
-        ++n;
-    return n;
-}
+constexpr int           CORRHIST_VALUE_MIN     = -1024;
+constexpr int           CORRHIST_VALUE_MAX     = -CORRHIST_VALUE_MIN - 1;
+constexpr int           CORRHIST_INIT_VALUE    = 0;
+constexpr std::size_t   CORRHIST_SLOT_BITS     = sizeof(std::uint16_t) * 8;
+constexpr std::size_t   CORRHIST_VALUE_BITS    = ilog2(std::size_t(-CORRHIST_VALUE_MIN)) + 1;
+constexpr std::size_t   CORRHIST_TAG_BITS      = CORRHIST_SLOT_BITS - CORRHIST_VALUE_BITS;
+constexpr std::size_t   CORRHIST_KEY_BITS      = sizeof(std::uint64_t) * 8;
+constexpr std::size_t   CORRHIST_TAG_KEY_SHIFT = CORRHIST_KEY_BITS - CORRHIST_TAG_BITS;
+constexpr std::uint16_t CORRHIST_VALUE_MASK    = std::uint16_t((1u << CORRHIST_VALUE_BITS) - 1u);
+constexpr std::uint16_t CORRHIST_TAG_RAW_MASK  = std::uint16_t((1u << CORRHIST_TAG_BITS) - 1u);
 
-constexpr int      CORRHIST_VALUE_MIN     = -1024;
-constexpr int      CORRHIST_VALUE_MAX     = -CORRHIST_VALUE_MIN - 1;
-constexpr int      CORRHIST_SLOT_BITS     = int(sizeof(std::uint16_t) * 8);
-constexpr int      CORRHIST_VALUE_BITS    = corrhist_bit_width(unsigned(-CORRHIST_VALUE_MIN)) + 1;
-constexpr int      CORRHIST_TAG_BITS      = CORRHIST_SLOT_BITS - CORRHIST_VALUE_BITS;
-constexpr int      CORRHIST_TAG_KEY_SHIFT = int(sizeof(std::uint64_t) * 8) - CORRHIST_TAG_BITS;
-constexpr uint16_t CORRHIST_VALUE_MASK    = uint16_t((1u << CORRHIST_VALUE_BITS) - 1u);
-constexpr uint16_t CORRHIST_TAG_RAW_MASK  = uint16_t((1u << CORRHIST_TAG_BITS) - 1u);
-constexpr int      CORRHIST_INIT_VALUE    = 0;
+constexpr std::size_t CORRHIST_INDEX_BASE_BITS     = ilog2(std::size_t(CORRHIST_BASE_SIZE));
+constexpr std::size_t CORRHIST_DOMAIN_LOG2_PAWN    = 26;
+constexpr std::size_t CORRHIST_DOMAIN_LOG2_MINOR   = 23;
+constexpr std::size_t CORRHIST_DOMAIN_LOG2_NONPAWN = 25;
+constexpr std::size_t CORRHIST_DOMAIN_LOG2_MAX     = CORRHIST_DOMAIN_LOG2_PAWN;
 
-static_assert(CORRHIST_VALUE_BITS + CORRHIST_TAG_BITS == CORRHIST_SLOT_BITS,
-              "Value and tag must fill the atomic slot exactly");
-static_assert(CORRHIST_TAG_BITS >= 1, "Need at least one bit of tag discrimination");
-static_assert(-CORRHIST_VALUE_MIN == CORRECTION_HISTORY_LIMIT,
-              "Value range must match master's correction-history gravity divisor");
+constexpr std::size_t CORRHIST_MAX_THREADS_STRUCT =
+  std::size_t(1) << (CORRHIST_TAG_KEY_SHIFT - CORRHIST_INDEX_BASE_BITS);
+constexpr std::size_t CORRHIST_MAX_THREADS_DATA =
+  std::size_t(1) << (CORRHIST_DOMAIN_LOG2_MAX - CORRHIST_INDEX_BASE_BITS);
+constexpr std::size_t CORRHIST_MAX_THREADS =
+  std::min(CORRHIST_MAX_THREADS_STRUCT, CORRHIST_MAX_THREADS_DATA);
+
+static_assert(CORRHIST_VALUE_BITS + CORRHIST_TAG_BITS == CORRHIST_SLOT_BITS);
+static_assert(CORRHIST_TAG_BITS >= 1);
+static_assert(-CORRHIST_VALUE_MIN == CORRECTION_HISTORY_LIMIT);
+static_assert(CORRHIST_INDEX_BASE_BITS <= CORRHIST_TAG_KEY_SHIFT);
+static_assert(CORRHIST_INDEX_BASE_BITS <= CORRHIST_DOMAIN_LOG2_MAX);
 
 using CorrhistTag = std::uint8_t;
 
@@ -298,7 +305,7 @@ using TTMoveHistory = StatsEntry<std::int16_t, 8192>;
 // the indexing more efficient.
 struct SharedHistories {
     SharedHistories(size_t threadCount) :
-        correctionHistory(threadCount),
+        correctionHistory(std::min(threadCount, CORRHIST_MAX_THREADS)),
         pawnHistory(threadCount) {
         assert((threadCount & (threadCount - 1)) == 0 && threadCount != 0);
         sizeMinus1         = correctionHistory.get_size() - 1;
