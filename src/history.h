@@ -41,11 +41,18 @@ constexpr int CORRHIST_BASE_SIZE       = UINT_16_HISTORY_SIZE;
 constexpr int CORRECTION_HISTORY_LIMIT = 1024;
 constexpr int LOW_PLY_HISTORY_SIZE     = 5;
 
+constexpr int      HASHED_CONTCORR_INDEX_BITS = 17;
+constexpr size_t   HASHED_CONTCORR_BASE_SIZE  = size_t(1) << HASHED_CONTCORR_INDEX_BITS;
+constexpr uint32_t HASHED_CONTCORR_INDEX_MASK = uint32_t(HASHED_CONTCORR_BASE_SIZE - 1);
+
 static_assert((PAWN_HISTORY_BASE_SIZE & (PAWN_HISTORY_BASE_SIZE - 1)) == 0,
               "PAWN_HISTORY_BASE_SIZE has to be a power of 2");
 
 static_assert((CORRHIST_BASE_SIZE & (CORRHIST_BASE_SIZE - 1)) == 0,
               "CORRHIST_BASE_SIZE has to be a power of 2");
+
+static_assert((HASHED_CONTCORR_BASE_SIZE & (HASHED_CONTCORR_BASE_SIZE - 1)) == 0,
+              "HASHED_CONTCORR_BASE_SIZE has to be a power of 2");
 
 // StatsEntry is the container of various numerical statistics. We use a class
 // instead of a naked value to directly call history update operator<<() on
@@ -214,6 +221,64 @@ template<CorrHistType T>
 using CorrectionHistory = typename Detail::CorrHistTypedef<T>::type;
 
 using TTMoveHistory = StatsEntry<std::int16_t, 8192>;
+
+// Packed slot for the tagged thread-local hashed continuation-correction history.
+// 11-bit signed value in bits [0..10] in range [-1024, +1023]; 5-bit tag in bits
+// [11..15]. Stored as one uint16_t word so read/write compile to one 16-bit load
+// and one 16-bit store. Tag 0 is the empty-slot sentinel; tag generation remaps 0 to 1.
+struct alignas(2) HashedContCorrSlot {
+    using Tag = std::uint8_t;
+
+    static constexpr int     TAG_BITS = 5;
+    static constexpr Tag     TAG_MASK = Tag((1u << TAG_BITS) - 1);
+    static constexpr int16_t INIT     = 6;
+    static constexpr int16_t NOK      = 8;
+
+    static constexpr int      WORD_BITS  = 16;
+    static constexpr int      VALUE_BITS = WORD_BITS - TAG_BITS;
+    static constexpr int      SIGN_SHIFT = WORD_BITS - VALUE_BITS;
+    static constexpr uint16_t VALUE_MASK = uint16_t((uint16_t(1) << VALUE_BITS) - 1u);
+    static constexpr int      VALUE_MAX  = (1 << (VALUE_BITS - 1)) - 1;
+    static constexpr int      VALUE_MIN  = -(1 << (VALUE_BITS - 1));
+    static_assert(VALUE_BITS == 11, "HashedContCorrSlot value field must be 11 bits");
+    static_assert(CORRECTION_HISTORY_LIMIT <= 1024,
+                  "value is an 11-bit saturated signed field; widen the field or "
+                  "lower CORRECTION_HISTORY_LIMIT if this grows");
+
+    std::uint16_t word;
+
+    int value() const { return std::int16_t(word << SIGN_SHIFT) >> SIGN_SHIFT; }
+    Tag tag() const { return Tag(word >> VALUE_BITS); }
+
+    static uint16_t pack(int v, Tag t) {
+        assert(VALUE_MIN <= v && v <= VALUE_MAX);
+        assert((t & TAG_MASK) == t);
+        return uint16_t((uint16_t(v) & VALUE_MASK) | uint16_t(uint16_t(t) << VALUE_BITS));
+    }
+
+    // Branchless read: sign-extends the slot's value, blends with INIT
+    // on tag mismatch.
+    static int read(uint16_t w, Tag t) {
+        const HashedContCorrSlot s{w};
+
+        const int     v    = s.value();
+        const int32_t mask = -int32_t(s.tag() != t);
+        return (v & ~mask) | (int(INIT) & mask);
+    }
+
+    static void update(HashedContCorrSlot& s, Tag t, int b) {
+        const HashedContCorrSlot sv = s;
+
+        int v = sv.tag() == t ? sv.value() : int(INIT);
+        v     = v + b - v * std::abs(b) / CORRECTION_HISTORY_LIMIT;
+        v     = std::min(v, int(VALUE_MAX));
+        assert(VALUE_MIN <= v && v <= VALUE_MAX);
+        s.word = pack(v, t);
+    }
+};
+static_assert(sizeof(HashedContCorrSlot) == 2, "HashedContCorrSlot must be 2 bytes");
+
+using HashedContCorrHistory = std::array<HashedContCorrSlot, HASHED_CONTCORR_BASE_SIZE>;
 
 // Set of histories shared between groups of threads. To avoid excessive
 // cross-node data transfer, histories are shared only between threads
