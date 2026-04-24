@@ -1493,8 +1493,11 @@ moves_loop:  // When in check, search starts here
     if (!ss->inCheck && !(bestMove && pos.capture(bestMove))
         && (bestValue > ss->staticEval) == bool(bestMove))
     {
-        auto bonus =
-          std::clamp(int(bestValue - ss->staticEval) * depth * (bestMove ? 12 : 17) / 128,
+        constexpr int depthCap    = 17;
+        const int     over        = std::max(0, depth - depthCap);
+        const int     depthMult3x = 3 * depth - 2 * over;
+        auto          bonus =
+          std::clamp(int(bestValue - ss->staticEval) * depthMult3x * (bestMove ? 12 : 17) / 384,
                      -CORRECTION_HISTORY_LIMIT / 4, CORRECTION_HISTORY_LIMIT / 4);
         update_correction_history(pos, ss, *this, 1069 * bonus / 1024);
     }
