@@ -188,28 +188,25 @@ struct LowPly {
     }
     static constexpr std::uint32_t empty_data() { return pack(INIT, 0); }
     static constexpr int           extract(std::uint32_t data, std::uint16_t tag) {
-        const int v = int(std::int16_t(data & 0xFFFF));
-        // mask is 0 on tag match, -1 on mismatch; blends v with INIT branchlessly.
+        const int          v    = int(std::int16_t(data & 0xFFFF));
         const std::int32_t mask = -std::int32_t(std::uint16_t(data >> 16) != tag);
         return (v & ~mask) | (int(INIT) & mask);
     }
 
     static int read(const LowPlyHistory& t, int ply, std::uint16_t move_raw) {
-        const std::uint64_t h    = mix(input(ply, move_raw));
-        const std::uint32_t idx  = idx_from(h);
-        const std::uint32_t data = t[idx].data;
-        const std::uint16_t tag  = tag_from(h);
-        return extract(data, tag);
+        const std::uint64_t h   = mix(input(ply, move_raw));
+        const std::uint32_t idx = idx_from(h);
+        const std::uint16_t tag = tag_from(h);
+        return extract(t[idx].data, tag);
     }
 
     static void update(LowPlyHistory& t, int ply, std::uint16_t move_raw, int bonus) {
         const std::uint64_t h            = mix(input(ply, move_raw));
         const std::uint32_t idx          = idx_from(h);
-        LowPlySlot&         s            = t[idx];
-        const std::uint32_t data         = s.data;
         const std::uint16_t tag          = tag_from(h);
         const int           clampedBonus = std::clamp(bonus, -VALUE_LIMIT, VALUE_LIMIT);
-        int                 v            = extract(data, tag);
+        LowPlySlot&         s            = t[idx];
+        int                 v            = extract(s.data, tag);
         v += clampedBonus - v * std::abs(clampedBonus) / VALUE_LIMIT;
         assert(std::abs(v) <= VALUE_LIMIT);
         s.data = pack(v, tag);
