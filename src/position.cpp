@@ -1043,10 +1043,10 @@ void Position::do_move(Move                      m,
     if (history)
     {
         prefetch(&history->pawn_entry(*this)[pc][to]);
-        prefetch(&history->pawn_correction_entry(*this));
-        prefetch(&history->minor_piece_correction_entry(*this));
-        prefetch(&history->nonpawn_correction_entry<WHITE>(*this));
-        prefetch(&history->nonpawn_correction_entry<BLACK>(*this));
+        prefetch(CorrhistReadAccess::pawn(*history, *this).slot);
+        prefetch(CorrhistReadAccess::minor(*history, *this).slot);
+        prefetch(CorrhistReadAccess::nonpawn<WHITE>(*history, *this).slot);
+        prefetch(CorrhistReadAccess::nonpawn<BLACK>(*history, *this).slot);
     }
 
     // Set capture piece
