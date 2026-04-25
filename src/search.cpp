@@ -315,7 +315,10 @@ bool Search::Worker::iterative_deepening() {
     int  searchAgainCounter = 0;
     bool uciPvSent          = false;
 
-    lowPlyHistory.fill(98);
+    lowPlyHistory.fill({LowPly::empty_data()});
+    assert(LowPly::extract(lowPlyHistory.front().data, 0) == LowPly::INIT);
+    assert(LowPly::extract(lowPlyHistory.front().data, 1) == LowPly::INIT);
+    assert(LowPly::extract(lowPlyHistory.back().data, 0) == LowPly::INIT);
 
     for (Color c : {WHITE, BLACK})
         for (int i = 0; i < UINT_16_HISTORY_SIZE; i++)
@@ -1429,7 +1432,11 @@ moves_loop:  // When in check, search starts here
             if (capture)
                 capturesSearched.push_back(move);
             else
+            {
                 quietsSearched.push_back(move);
+                if (ss->ply < LOW_PLY_HISTORY_SIZE)
+                    prefetch(LowPlyAccess::access(lowPlyHistory, ss->ply, move.raw()).slot);
+            }
         }
     }
 
@@ -1927,7 +1934,7 @@ void update_quiet_histories(
     workerThread.mainHistory[us][move.raw()] << bonus;  // Untuned to prevent duplicate effort
 
     if (ss->ply < LOW_PLY_HISTORY_SIZE)
-        workerThread.lowPlyHistory[ss->ply][move.raw()] << bonus * 682 / 1024;
+        LowPlyAccess::access(workerThread.lowPlyHistory, ss->ply, move.raw()) << bonus * 682 / 1024;
 
     update_continuation_histories(ss, pos.moved_piece(move), move.to_sq(), bonus * 894 / 1024);
 
