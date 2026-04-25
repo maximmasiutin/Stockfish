@@ -89,6 +89,88 @@ enum StatsType {
     Captures
 };
 
+constexpr int           CORRHIST_VALUE_MIN      = -1024;
+constexpr int           CORRHIST_VALUE_MAX      = -CORRHIST_VALUE_MIN - 1;
+constexpr int           CORRHIST_INIT_VALUE     = 0;
+constexpr std::size_t   CORRHIST_SLOT_BITS      = sizeof(std::uint16_t) * 8;
+constexpr std::size_t   CORRHIST_VALUE_BITS     = ilog2(std::size_t(-CORRHIST_VALUE_MIN)) + 1;
+constexpr std::size_t   CORRHIST_TAG_BITS       = CORRHIST_SLOT_BITS - CORRHIST_VALUE_BITS;
+constexpr std::size_t   CORRHIST_KEY_BITS       = sizeof(std::uint64_t) * 8;
+constexpr std::size_t   CORRHIST_TAG_KEY_SHIFT  = CORRHIST_KEY_BITS - CORRHIST_TAG_BITS;
+constexpr std::uint16_t CORRHIST_VALUE_MASK     = std::uint16_t((1u << CORRHIST_VALUE_BITS) - 1u);
+constexpr std::uint16_t CORRHIST_VALUE_SIGN_BIT = std::uint16_t(1u << (CORRHIST_VALUE_BITS - 1u));
+constexpr std::uint16_t CORRHIST_TAG_RAW_MASK   = std::uint16_t((1u << CORRHIST_TAG_BITS) - 1u);
+
+constexpr std::size_t CORRHIST_INDEX_BASE_BITS     = ilog2(std::size_t(CORRHIST_BASE_SIZE));
+constexpr std::size_t CORRHIST_DOMAIN_LOG2_PAWN    = 26;
+constexpr std::size_t CORRHIST_DOMAIN_LOG2_MINOR   = 23;
+constexpr std::size_t CORRHIST_DOMAIN_LOG2_NONPAWN = 25;
+constexpr std::size_t CORRHIST_DOMAIN_LOG2_MAX     = CORRHIST_DOMAIN_LOG2_PAWN;
+
+constexpr std::uint64_t CORRHIST_MAX_THREADS_STRUCT =
+  std::uint64_t(1) << (CORRHIST_TAG_KEY_SHIFT - CORRHIST_INDEX_BASE_BITS);
+constexpr std::uint64_t CORRHIST_MAX_THREADS_DATA =
+  std::uint64_t(1) << (CORRHIST_DOMAIN_LOG2_MAX - CORRHIST_INDEX_BASE_BITS);
+constexpr std::size_t CORRHIST_MAX_THREADS =
+  std::size_t(std::min(CORRHIST_MAX_THREADS_STRUCT, CORRHIST_MAX_THREADS_DATA));
+
+using CorrhistTag = std::uint8_t;
+
+static_assert(CORRHIST_VALUE_BITS + CORRHIST_TAG_BITS == CORRHIST_SLOT_BITS);
+static_assert(CORRHIST_TAG_BITS >= 1);
+static_assert(CORRHIST_TAG_BITS <= sizeof(CorrhistTag) * 8);
+static_assert(-CORRHIST_VALUE_MIN == CORRECTION_HISTORY_LIMIT);
+static_assert(CORRHIST_INIT_VALUE == 0);
+static_assert(CORRHIST_INDEX_BASE_BITS <= CORRHIST_TAG_KEY_SHIFT);
+static_assert(CORRHIST_INDEX_BASE_BITS <= CORRHIST_DOMAIN_LOG2_MAX);
+
+inline CorrhistTag corrhist_tag_from(std::uint64_t key) {
+    return CorrhistTag((key >> CORRHIST_TAG_KEY_SHIFT) & CORRHIST_TAG_RAW_MASK);
+}
+
+struct alignas(2) CorrhistTaggedSlot {
+    std::atomic<std::int16_t> word{0};
+
+    void operator=(int v) {
+        assert(v == 0);
+        (void) v;
+        word.store(0, std::memory_order_relaxed);
+    }
+
+    int read(CorrhistTag tag) const {
+        const int          u         = word.load(std::memory_order_relaxed);
+        const int          storedTag = u & int(CORRHIST_TAG_RAW_MASK);
+        const int          v         = u >> int(CORRHIST_TAG_BITS);
+        const std::int32_t mask      = -std::int32_t(storedTag != int(tag));
+        return v & ~mask;
+    }
+
+    inline sf_always_inline void update(CorrhistTag tag, int bonus) {
+        assert((tag & ~CORRHIST_TAG_RAW_MASK) == 0);
+        constexpr int D = -CORRHIST_VALUE_MIN;
+        assert(std::abs(bonus) <= D);
+        const int u         = word.load(std::memory_order_relaxed);
+        const int storedTag = u & int(CORRHIST_TAG_RAW_MASK);
+        const int v_old     = u >> int(CORRHIST_TAG_BITS);
+        int       v         = (storedTag == int(tag)) ? v_old : CORRHIST_INIT_VALUE;
+        v                   = v + bonus - v * std::abs(bonus) / D;
+        v                   = std::min(v, CORRHIST_VALUE_MAX);
+        assert(v >= CORRHIST_VALUE_MIN);
+        const std::uint32_t newBits = (std::uint32_t(v) << CORRHIST_TAG_BITS) | std::uint32_t(tag);
+        word.store(std::int16_t(newBits), std::memory_order_relaxed);
+    }
+};
+static_assert(sizeof(CorrhistTaggedSlot) == 2);
+
+struct CorrhistAccess {
+    CorrhistTaggedSlot* slot;
+    CorrhistTag         tag;
+
+    inline sf_always_inline int  read() const { return slot->read(tag); }
+    inline sf_always_inline void operator<<(int bonus) const { slot->update(tag, bonus); }
+    inline sf_always_inline      operator int() const { return read(); }
+};
+
 template<typename T, int D, std::size_t... Sizes>
 using Stats = MultiArray<StatsEntry<T, D>, Sizes...>;
 
@@ -167,16 +249,21 @@ enum CorrHistType {
 
 template<typename T, int D>
 struct CorrectionBundle {
-    StatsEntry<T, D, true> pawn;
-    StatsEntry<T, D, true> minor;
-    StatsEntry<T, D, true> nonPawnWhite;
-    StatsEntry<T, D, true> nonPawnBlack;
+    static_assert(std::is_same_v<T, std::int16_t> && D == CORRECTION_HISTORY_LIMIT,
+                  "Tagged CorrectionBundle supports only int16_t and CORRECTION_HISTORY_LIMIT");
+
+    CorrhistTaggedSlot pawn;
+    CorrhistTaggedSlot minor;
+    CorrhistTaggedSlot nonPawnWhite;
+    CorrhistTaggedSlot nonPawnBlack;
 
     void operator=(T val) {
-        pawn         = val;
-        minor        = val;
-        nonPawnWhite = val;
-        nonPawnBlack = val;
+        assert(val == 0);
+        (void) val;
+        pawn         = 0;
+        minor        = 0;
+        nonPawnWhite = 0;
+        nonPawnBlack = 0;
     }
 };
 
@@ -221,7 +308,7 @@ using TTMoveHistory = StatsEntry<std::int16_t, 8192>;
 // the indexing more efficient.
 struct SharedHistories {
     SharedHistories(size_t threadCount) :
-        correctionHistory(threadCount),
+        correctionHistory(std::min(threadCount, CORRHIST_MAX_THREADS)),
         pawnHistory(threadCount) {
         assert((threadCount & (threadCount - 1)) == 0 && threadCount != 0);
         sizeMinus1         = correctionHistory.get_size() - 1;
@@ -260,11 +347,34 @@ struct SharedHistories {
         return correctionHistory[pos.non_pawn_key(c) & sizeMinus1];
     }
 
+    CorrhistAccess pawn_correction_access(const Position& pos, Color us) {
+        const std::uint64_t k = pos.pawn_key();
+        return {&get_bundle(k, us).pawn, corrhist_tag_from(k)};
+    }
+    CorrhistAccess minor_correction_access(const Position& pos, Color us) {
+        const std::uint64_t k = pos.minor_piece_key();
+        return {&get_bundle(k, us).minor, corrhist_tag_from(k)};
+    }
+    template<Color Us>
+    CorrhistAccess nonpawn_correction_access(const Position& pos, Color us) {
+        const std::uint64_t k      = pos.non_pawn_key(Us);
+        auto&               bundle = get_bundle(k, us);
+        if constexpr (Us == WHITE)
+            return {&bundle.nonPawnWhite, corrhist_tag_from(k)};
+        else
+            return {&bundle.nonPawnBlack, corrhist_tag_from(k)};
+    }
+
     UnifiedCorrectionHistory correctionHistory;
     PawnHistory              pawnHistory;
 
 
    private:
+    CorrectionBundle<std::int16_t, CORRECTION_HISTORY_LIMIT>& get_bundle(std::uint64_t key,
+                                                                         Color         us) {
+        return correctionHistory[key & sizeMinus1][us];
+    }
+
     size_t sizeMinus1, pawnHistSizeMinus1;
 };
 
