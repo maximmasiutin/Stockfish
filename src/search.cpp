@@ -84,17 +84,24 @@ using SearchedList                  = ValueList<Move, SEARCHEDLIST_CAPACITY>;
 int correction_value(const Worker& w, const Position& pos, const Stack* const ss) {
     const Color us     = pos.side_to_move();
     const auto  m      = (ss - 1)->currentMove;
-    const auto& shared = w.sharedHistory;
-    const int   pcv    = shared.pawn_correction_entry(pos)[us].pawn;
-    const int   micv   = shared.minor_piece_correction_entry(pos)[us].minor;
-    const int   wnpcv  = shared.nonpawn_correction_entry<WHITE>(pos)[us].nonPawnWhite;
-    const int   bnpcv  = shared.nonpawn_correction_entry<BLACK>(pos)[us].nonPawnBlack;
-    const int   cntcv =
+    auto&       shared = w.sharedHistory;
+
+    const auto a_p = shared.pawn_correction_access(pos, us);
+    const auto a_m = shared.minor_correction_access(pos, us);
+    const auto a_w = shared.nonpawn_correction_access<WHITE>(pos, us);
+    const auto a_b = shared.nonpawn_correction_access<BLACK>(pos, us);
+
+    const int pcv   = a_p.read();
+    const int micv  = a_m.read();
+    const int wnpcv = a_w.read();
+    const int bnpcv = a_b.read();
+
+    const int cntcv =
       m.is_ok() ? (*(ss - 2)->continuationCorrectionHistory)[pos.piece_on(m.to_sq())][m.to_sq()]
                     + (*(ss - 4)->continuationCorrectionHistory)[pos.piece_on(m.to_sq())][m.to_sq()]
-                  : 8;
+                : 8;
 
-    return 12153 * pcv + 8620 * micv + 12355 * (wnpcv + bnpcv) + 7982 * cntcv;
+    return 12919 * pcv + 9189 * micv + 14097 * wnpcv + 13838 * bnpcv + 7982 * cntcv;
 }
 
 // Add correctionHistory value to raw staticEval and guarantee evaluation
@@ -110,13 +117,17 @@ void update_correction_history(const Position& pos,
     const Move  m  = (ss - 1)->currentMove;
     const Color us = pos.side_to_move();
 
-    constexpr int nonPawnWeight = 187;
-    auto&         shared        = workerThread.sharedHistory;
+    auto& shared = workerThread.sharedHistory;
 
-    shared.pawn_correction_entry(pos)[us].pawn << bonus;
-    shared.minor_piece_correction_entry(pos)[us].minor << bonus * 153 / 128;
-    shared.nonpawn_correction_entry<WHITE>(pos)[us].nonPawnWhite << bonus * nonPawnWeight / 128;
-    shared.nonpawn_correction_entry<BLACK>(pos)[us].nonPawnBlack << bonus * nonPawnWeight / 128;
+    const auto a_p = shared.pawn_correction_access(pos, us);
+    const auto a_m = shared.minor_correction_access(pos, us);
+    const auto a_w = shared.nonpawn_correction_access<WHITE>(pos, us);
+    const auto a_b = shared.nonpawn_correction_access<BLACK>(pos, us);
+
+    a_p << bonus * 131 / 128;
+    a_m << bonus * 156 / 128;
+    a_w << bonus * 196 / 128;
+    a_b << bonus * 194 / 128;
 
     if (m.is_ok())
     {
