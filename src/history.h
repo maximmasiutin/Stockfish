@@ -41,11 +41,20 @@ constexpr int CORRHIST_BASE_SIZE       = UINT_16_HISTORY_SIZE;
 constexpr int CORRECTION_HISTORY_LIMIT = 1024;
 constexpr int LOW_PLY_HISTORY_SIZE     = 5;
 
+constexpr int      HASHED_LOW_PLY_INDEX_BITS = 17;
+constexpr size_t   HASHED_LOW_PLY_BASE_SIZE  = size_t(1) << HASHED_LOW_PLY_INDEX_BITS;
+constexpr uint32_t HASHED_LOW_PLY_INDEX_MASK = uint32_t(HASHED_LOW_PLY_BASE_SIZE - 1);
+constexpr int16_t  HASHED_LOW_PLY_INIT       = 98;
+constexpr uint32_t HASHED_LOW_PLY_EMPTY_DATA = uint32_t(uint16_t(HASHED_LOW_PLY_INIT));
+
 static_assert((PAWN_HISTORY_BASE_SIZE & (PAWN_HISTORY_BASE_SIZE - 1)) == 0,
               "PAWN_HISTORY_BASE_SIZE has to be a power of 2");
 
 static_assert((CORRHIST_BASE_SIZE & (CORRHIST_BASE_SIZE - 1)) == 0,
               "CORRHIST_BASE_SIZE has to be a power of 2");
+
+static_assert((HASHED_LOW_PLY_BASE_SIZE & (HASHED_LOW_PLY_BASE_SIZE - 1)) == 0,
+              "HASHED_LOW_PLY_BASE_SIZE has to be a power of 2");
 
 // StatsEntry is the container of various numerical statistics. We use a class
 // instead of a naked value to directly call history update operator<<() on
@@ -134,9 +143,91 @@ struct DynStats {
 // see https://www.chessprogramming.org/Butterfly_Boards
 using ButterflyHistory = Stats<std::int16_t, 7183, COLOR_NB, UINT_16_HISTORY_SIZE>;
 
-// LowPlyHistory is addressed by ply and move's from and to squares, used
-// to improve move ordering near the root
-using LowPlyHistory = Stats<std::int16_t, 7183, LOW_PLY_HISTORY_SIZE, UINT_16_HISTORY_SIZE>;
+// LowPlyHistory: tagged hashed table keyed by (ply, move.raw()).
+struct alignas(4) LowPlySlot {
+    std::uint32_t data{HASHED_LOW_PLY_EMPTY_DATA};
+};
+static_assert(sizeof(LowPlySlot) == 4, "LowPlySlot must be 4 bytes");
+static_assert(LowPlySlot{}.data == HASHED_LOW_PLY_EMPTY_DATA,
+              "Default-constructed LowPlySlot must hold HASHED_LOW_PLY_EMPTY_DATA");
+
+using LowPlyHistory = std::array<LowPlySlot, HASHED_LOW_PLY_BASE_SIZE>;
+
+struct LowPly {
+    static constexpr int     VALUE_LIMIT = 7183;
+    static constexpr int16_t INIT        = HASHED_LOW_PLY_INIT;
+
+    static_assert(-VALUE_LIMIT >= std::numeric_limits<std::int16_t>::min()
+                    && VALUE_LIMIT <= std::numeric_limits<std::int16_t>::max(),
+                  "LowPly::VALUE_LIMIT must fit in int16_t for packed-slot storage");
+    static_assert(INIT >= std::numeric_limits<std::int16_t>::min()
+                    && INIT <= std::numeric_limits<std::int16_t>::max(),
+                  "LowPly::INIT must fit in int16_t");
+
+    static std::uint32_t input(int ply, std::uint16_t move_raw) {
+        assert(0 <= ply && ply < LOW_PLY_HISTORY_SIZE);
+        return (std::uint32_t(unsigned(ply)) << 16) | move_raw;
+    }
+    static std::uint64_t mix(std::uint32_t in) {
+        std::uint64_t k = in;
+        k *= 0x9E3779B97F4A7C15ULL;
+        k ^= k >> 32;
+        k *= 0xBF58476D1CE4E5B9ULL;
+        k ^= k >> 27;
+        return k;
+    }
+    static std::uint32_t idx_from(std::uint64_t h) {
+        return std::uint32_t(h) & HASHED_LOW_PLY_INDEX_MASK;
+    }
+    static std::uint16_t tag_from(std::uint64_t h) {
+        return std::uint16_t(h >> HASHED_LOW_PLY_INDEX_BITS);
+    }
+    static constexpr std::uint32_t pack(int v, std::uint16_t tag) {
+        return std::uint32_t(std::uint16_t(v)) | (std::uint32_t(tag) << 16);
+    }
+    static constexpr std::uint32_t empty_data() { return pack(INIT, 0); }
+    static constexpr int           extract(std::uint32_t data, std::uint16_t tag) {
+        const int          v    = int(std::int16_t(data & 0xFFFF));
+        const std::int32_t mask = -std::int32_t(std::uint16_t(data >> 16) != tag);
+        return (v & ~mask) | (int(INIT) & mask);
+    }
+
+    static int read(const LowPlyHistory& t, int ply, std::uint16_t move_raw) {
+        const std::uint64_t h   = mix(input(ply, move_raw));
+        const std::uint32_t idx = idx_from(h);
+        const std::uint16_t tag = tag_from(h);
+        return extract(t[idx].data, tag);
+    }
+
+    static void update(LowPlyHistory& t, int ply, std::uint16_t move_raw, int bonus) {
+        const std::uint64_t h            = mix(input(ply, move_raw));
+        const std::uint32_t idx          = idx_from(h);
+        const std::uint16_t tag          = tag_from(h);
+        const int           clampedBonus = std::clamp(bonus, -VALUE_LIMIT, VALUE_LIMIT);
+        LowPlySlot&         s            = t[idx];
+        int                 v            = extract(s.data, tag);
+        v += clampedBonus - v * std::abs(clampedBonus) / VALUE_LIMIT;
+        assert(std::abs(v) <= VALUE_LIMIT);
+        s.data = pack(v, tag);
+    }
+};
+
+static_assert(HASHED_LOW_PLY_EMPTY_DATA == LowPly::empty_data(),
+              "Namespace-scope HASHED_LOW_PLY_EMPTY_DATA must equal LowPly::empty_data()");
+static_assert(LowPlySlot{}.data == LowPly::empty_data(),
+              "Default-constructed LowPlySlot must hold empty_data so reads return INIT");
+static_assert(LowPly::extract(LowPlySlot{}.data, 0) == LowPly::INIT,
+              "Default LowPlySlot read with tag=0 must return INIT (match path on cleared slot)");
+static_assert(LowPly::extract(LowPlySlot{}.data, 1) == LowPly::INIT,
+              "Default LowPlySlot read with non-zero tag must return INIT (mismatch blend)");
+static_assert(LowPly::extract(LowPly::empty_data(), 0) == LowPly::INIT,
+              "empty_data must return INIT for tag 0");
+static_assert(LowPly::extract(LowPly::empty_data(), 1) == LowPly::INIT,
+              "empty_data must return INIT for non-zero tag");
+static_assert(LowPly::extract(LowPly::pack(LowPly::VALUE_LIMIT, 1), 1) == LowPly::VALUE_LIMIT,
+              "extract(pack(v, tag), tag) must round-trip positive VALUE_LIMIT");
+static_assert(LowPly::extract(LowPly::pack(-LowPly::VALUE_LIMIT, 1), 1) == -LowPly::VALUE_LIMIT,
+              "extract(pack(v, tag), tag) must round-trip negative VALUE_LIMIT");
 
 // CapturePieceToHistory is addressed by a move's [piece][to][captured piece type]
 using CapturePieceToHistory = Stats<std::int16_t, 10692, PIECE_NB, SQUARE_NB, PIECE_TYPE_NB>;
