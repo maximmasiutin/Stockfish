@@ -570,7 +570,14 @@ void Search::Worker::do_move(
     nodes.store(nodes.load(std::memory_order_relaxed) + 1, std::memory_order_relaxed);
 
     auto [dirtyPiece, dirtyThreats] = accumulatorStack.push();
-    pos.do_move(move, st, givesCheck, dirtyPiece, dirtyThreats, &tt, &sharedHistory);
+    pos.do_move(move, st, givesCheck, dirtyPiece, dirtyThreats);
+
+    prefetch(tt.first_entry(pos.key()));
+    prefetch(&sharedHistory.pawn_entry(pos)[dirtyPiece.pc][move.to_sq()]);
+    prefetch(&sharedHistory.pawn_correction_entry(pos));
+    prefetch(&sharedHistory.minor_piece_correction_entry(pos));
+    prefetch(&sharedHistory.nonpawn_correction_entry<WHITE>(pos));
+    prefetch(&sharedHistory.nonpawn_correction_entry<BLACK>(pos));
 
     if (ss != nullptr)
     {
@@ -2194,7 +2201,7 @@ bool RootMove::extract_ponder_from_tt(const TranspositionTable& tt, Position& po
     assert(pv.size() == 1 && pv[0] != Move::none());
 
     StateInfo st;
-    pos.do_move(pv[0], st, &tt);
+    pos.do_move(pv[0], st);
 
     if (!pos.is_draw(1))
     {

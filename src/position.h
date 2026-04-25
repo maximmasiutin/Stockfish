@@ -34,9 +34,6 @@
 
 namespace Stockfish {
 
-class TranspositionTable;
-struct SharedHistories;
-
 // StateInfo struct stores information needed to restore a Position object to
 // its previous state when we retract a move. Whenever a move is made on the
 // board (by calling Position::do_move), a StateInfo object must be passed.
@@ -142,14 +139,8 @@ class Position {
     Piece captured_piece() const;
 
     // Doing and undoing moves
-    void do_move(Move m, StateInfo& newSt, const TranspositionTable* tt);
-    void do_move(Move                      m,
-                 StateInfo&                newSt,
-                 bool                      givesCheck,
-                 DirtyPiece&               dp,
-                 DirtyThreats&             dts,
-                 const TranspositionTable* tt,
-                 const SharedHistories*    worker);
+    void do_move(Move m, StateInfo& newSt);
+    void do_move(Move m, StateInfo& newSt, bool givesCheck, DirtyPiece& dp, DirtyThreats& dts);
     void undo_move(Move m);
     void do_null_move(StateInfo& newSt);
     void undo_null_move();
@@ -410,9 +401,9 @@ inline void Position::swap_piece(Square s, Piece pc, DirtyThreats* const dts) {
         update_piece_threats<true, false>(pc, s, dts);
 }
 
-inline void Position::do_move(Move m, StateInfo& newSt, const TranspositionTable* tt = nullptr) {
+inline void Position::do_move(Move m, StateInfo& newSt) {
     new (&scratch_dts) DirtyThreats;
-    do_move(m, newSt, gives_check(m), scratch_dp, scratch_dts, tt, nullptr);
+    do_move(m, newSt, gives_check(m), scratch_dp, scratch_dts);
 }
 
 inline StateInfo* Position::state() const { return st; }
