@@ -181,33 +181,34 @@ struct LowPly {
         return std::uint32_t(h) & HASHED_LOW_PLY_INDEX_MASK;
     }
     static std::uint16_t tag_from(std::uint64_t h) {
-        std::uint16_t t = std::uint16_t(h >> HASHED_LOW_PLY_INDEX_BITS);
-        return t == 0 ? std::uint16_t(1) : t;
+        return std::uint16_t(h >> HASHED_LOW_PLY_INDEX_BITS);
     }
     static std::uint32_t pack(int v, std::uint16_t tag) {
         return std::uint32_t(std::uint16_t(v)) | (std::uint32_t(tag) << 16);
     }
-    static int extract(std::uint32_t data, std::uint16_t tag) {
-        const int v = int(std::int16_t(data & 0xFFFF));
-        // mask is 0 on tag match, -1 on mismatch; blends v with INIT branchlessly.
+    static constexpr std::uint32_t empty_data() { return std::uint32_t(std::uint16_t(INIT)); }
+    static int                     extract(std::uint32_t data, std::uint16_t tag) {
+        const int          v = int(std::int16_t(data & 0xFFFF));
         const std::int32_t mask = -std::int32_t(std::uint16_t(data >> 16) != tag);
         return (v & ~mask) | (int(INIT) & mask);
     }
 
     static int read(const LowPlyHistory& t, int ply, std::uint16_t move_raw) {
-        const std::uint64_t h   = mix(input(ply, move_raw));
-        const std::uint32_t idx = idx_from(h);
-        const std::uint16_t tag = tag_from(h);
-        return extract(t[idx].data, tag);
+        const std::uint64_t h    = mix(input(ply, move_raw));
+        const std::uint32_t idx  = idx_from(h);
+        const std::uint32_t data = t[idx].data;
+        const std::uint16_t tag  = tag_from(h);
+        return extract(data, tag);
     }
 
     static void update(LowPlyHistory& t, int ply, std::uint16_t move_raw, int bonus) {
         const std::uint64_t h            = mix(input(ply, move_raw));
         const std::uint32_t idx          = idx_from(h);
-        const std::uint16_t tag          = tag_from(h);
         LowPlySlot&         s            = t[idx];
+        const std::uint32_t data         = s.data;
+        const std::uint16_t tag          = tag_from(h);
         const int           clampedBonus = std::clamp(bonus, -VALUE_LIMIT, VALUE_LIMIT);
-        int                 v            = extract(s.data, tag);
+        int                 v            = extract(data, tag);
         v += clampedBonus - v * std::abs(clampedBonus) / VALUE_LIMIT;
         assert(std::abs(v) <= VALUE_LIMIT);
         s.data = pack(v, tag);

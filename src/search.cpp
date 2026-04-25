@@ -315,7 +315,7 @@ bool Search::Worker::iterative_deepening() {
     int  searchAgainCounter = 0;
     bool uciPvSent          = false;
 
-    lowPlyHistory.fill({0});  // tag==0 is the empty-slot sentinel; reads return INIT
+    lowPlyHistory.fill({LowPly::empty_data()});
 
     for (Color c : {WHITE, BLACK})
         for (int i = 0; i < UINT_16_HISTORY_SIZE; i++)
