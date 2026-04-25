@@ -183,12 +183,13 @@ struct LowPly {
     static std::uint16_t tag_from(std::uint64_t h) {
         return std::uint16_t(h >> HASHED_LOW_PLY_INDEX_BITS);
     }
-    static std::uint32_t pack(int v, std::uint16_t tag) {
+    static constexpr std::uint32_t pack(int v, std::uint16_t tag) {
         return std::uint32_t(std::uint16_t(v)) | (std::uint32_t(tag) << 16);
     }
-    static constexpr std::uint32_t empty_data() { return std::uint32_t(std::uint16_t(INIT)); }
-    static int                     extract(std::uint32_t data, std::uint16_t tag) {
-        const int          v = int(std::int16_t(data & 0xFFFF));
+    static constexpr std::uint32_t empty_data() { return pack(INIT, 0); }
+    static constexpr int           extract(std::uint32_t data, std::uint16_t tag) {
+        const int v = int(std::int16_t(data & 0xFFFF));
+        // mask is 0 on tag match, -1 on mismatch; blends v with INIT branchlessly.
         const std::int32_t mask = -std::int32_t(std::uint16_t(data >> 16) != tag);
         return (v & ~mask) | (int(INIT) & mask);
     }
