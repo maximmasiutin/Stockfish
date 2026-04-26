@@ -139,9 +139,40 @@ ExtMove* MovePicker::score(const MoveList<Type>& ml) {
         threatByLesser[KING]  = 0;
     }
 
+    constexpr size_t prefetchLookahead = 2;
+    LowPlyReadAccess lpAccess[MAX_MOVES];
+    size_t           idx = 0;
+
+    if constexpr (Type == QUIETS)
+    {
+        if (ply < LOW_PLY_HISTORY_SIZE)
+        {
+            for (auto move : ml)
+            {
+                lpAccess[idx] = LowPlyReadAccess::access(*lowPlyHistory, ply, move.raw());
+                if (idx < prefetchLookahead)
+                    prefetch(lpAccess[idx].slot);
+                ++idx;
+            }
+        }
+    }
+
+    size_t pfIndex     = prefetchLookahead;
+    size_t pfRemaining = idx > prefetchLookahead ? idx - prefetchLookahead : 0;
+
     ExtMove* it = cur;
+    size_t   i  = 0;
     for (auto move : ml)
     {
+        if constexpr (Type == QUIETS)
+        {
+            if (pfRemaining > 0)
+            {
+                --pfRemaining;
+                prefetch(lpAccess[pfIndex++].slot);
+            }
+        }
+
         ExtMove& m = *it++;
         m          = move;
 
@@ -176,7 +207,7 @@ ExtMove* MovePicker::score(const MoveList<Type>& ml) {
 
 
             if (ply < LOW_PLY_HISTORY_SIZE)
-                m.value += 8 * (*lowPlyHistory)[ply][m.raw()] / (1 + ply);
+                m.value += 8 * lpAccess[i].read() / (1 + ply);
         }
 
         else  // Type == EVASIONS
@@ -186,6 +217,8 @@ ExtMove* MovePicker::score(const MoveList<Type>& ml) {
             else
                 m.value = (*mainHistory)[us][m.raw()] + (*continuationHistory[0])[pc][to];
         }
+
+        ++i;
     }
     return it;
 }
