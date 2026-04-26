@@ -155,6 +155,13 @@ bool is_shuffling(Move move, Stack* const ss, const Position& pos) {
 
 }  // namespace
 
+void Search::Worker::prefetch_correction_history(const Position& pos) const {
+    prefetch(&sharedHistory.pawn_correction_entry(pos));
+    prefetch(&sharedHistory.minor_piece_correction_entry(pos));
+    prefetch(&sharedHistory.nonpawn_correction_entry<WHITE>(pos));
+    prefetch(&sharedHistory.nonpawn_correction_entry<BLACK>(pos));
+}
+
 Search::Worker::Worker(SharedState&                    sharedState,
                        std::unique_ptr<ISearchManager> sm,
                        size_t                          threadId,
@@ -735,6 +742,8 @@ Value Search::Worker::search(
     (ss - 1)->reduction = 0;
     ss->statScore       = 0;
     (ss + 2)->cutoffCnt = 0;
+
+    prefetch_correction_history(pos);
 
     // Step 4. Transposition table lookup
     excludedMove                   = ss->excludedMove;
@@ -1497,6 +1506,12 @@ moves_loop:  // When in check, search starts here
     if (bestValue <= alpha)
         ss->ttPv = ss->ttPv || (ss - 1)->ttPv;
 
+    const bool corrHistGate = !ss->inCheck && !(bestMove && pos.capture(bestMove))
+                           && (bestValue > ss->staticEval) == bool(bestMove);
+
+    if (corrHistGate)
+        prefetch_correction_history(pos);
+
     // Write gathered information in transposition table. Note that the
     // static evaluation is saved as it was before correction history.
     if (!excludedMove && !(rootNode && pvIdx))
@@ -1509,8 +1524,7 @@ moves_loop:  // When in check, search starts here
 
     // Adjust correction history if the best move is not a capture
     // and the error direction matches whether we are above/below bounds.
-    if (!ss->inCheck && !(bestMove && pos.capture(bestMove))
-        && (bestValue > ss->staticEval) == bool(bestMove))
+    if (corrHistGate)
     {
         auto bonus =
           std::clamp(int(bestValue - ss->staticEval) * depth * (bestMove ? 12 : 17) / 128,
@@ -1574,6 +1588,9 @@ Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta)
     // Step 2. Check for an immediate draw or maximum ply reached
     if (pos.is_draw(ss->ply) || ss->ply >= MAX_PLY)
         return (ss->ply >= MAX_PLY && !ss->inCheck) ? evaluate(pos) : VALUE_DRAW;
+
+    if (!ss->inCheck)
+        prefetch_correction_history(pos);
 
     assert(0 <= ss->ply && ss->ply < MAX_PLY);
 

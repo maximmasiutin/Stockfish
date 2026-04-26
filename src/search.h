@@ -358,6 +358,8 @@ class Worker {
 
     int reduction(bool i, Depth d, int mn, int delta) const;
 
+    void prefetch_correction_history(const Position& pos) const;
+
     // Pointer to the search manager, only allowed to be called by the main thread
     SearchManager* main_manager() const {
         assert(threadIdx == 0);
