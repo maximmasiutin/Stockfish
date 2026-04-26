@@ -113,10 +113,20 @@ void update_correction_history(const Position& pos,
     constexpr int nonPawnWeight = 187;
     auto&         shared        = workerThread.sharedHistory;
 
-    shared.pawn_correction_entry(pos)[us].pawn << bonus;
-    shared.minor_piece_correction_entry(pos)[us].minor << bonus * 153 / 128;
-    shared.nonpawn_correction_entry<WHITE>(pos)[us].nonPawnWhite << bonus * nonPawnWeight / 128;
-    shared.nonpawn_correction_entry<BLACK>(pos)[us].nonPawnBlack << bonus * nonPawnWeight / 128;
+    auto& pawn_e    = shared.pawn_correction_entry(pos)[us].pawn;
+    auto& minor_e   = shared.minor_piece_correction_entry(pos)[us].minor;
+    auto& nonpawn_w = shared.nonpawn_correction_entry<WHITE>(pos)[us].nonPawnWhite;
+    auto& nonpawn_b = shared.nonpawn_correction_entry<BLACK>(pos)[us].nonPawnBlack;
+
+    prefetch<PrefetchRw::WRITE>(&pawn_e);
+    prefetch<PrefetchRw::WRITE>(&minor_e);
+    prefetch<PrefetchRw::WRITE>(&nonpawn_w);
+    prefetch<PrefetchRw::WRITE>(&nonpawn_b);
+
+    pawn_e << bonus;
+    minor_e << bonus * 153 / 128;
+    nonpawn_w << bonus * nonPawnWeight / 128;
+    nonpawn_b << bonus * nonPawnWeight / 128;
 
     if (m.is_ok())
     {
@@ -656,6 +666,14 @@ Value Search::Worker::search(
     // Dive into quiescence search when the depth reaches zero
     if (depth <= 0)
         return qsearch<PvNode ? PV : NonPV>(pos, ss, alpha, beta);
+
+    {
+        const Color us = pos.side_to_move();
+        prefetch(&sharedHistory.pawn_correction_entry(pos)[us].pawn);
+        prefetch(&sharedHistory.minor_piece_correction_entry(pos)[us].minor);
+        prefetch(&sharedHistory.nonpawn_correction_entry<WHITE>(pos)[us].nonPawnWhite);
+        prefetch(&sharedHistory.nonpawn_correction_entry<BLACK>(pos)[us].nonPawnBlack);
+    }
 
     // Limit the depth if extensions made it too large
     depth = std::min(depth, MAX_PLY - 1);
