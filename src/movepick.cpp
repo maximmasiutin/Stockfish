@@ -139,6 +139,37 @@ ExtMove* MovePicker::score(const MoveList<Type>& ml) {
         threatByLesser[KING]  = 0;
     }
 
+    [[maybe_unused]] const Move* const mv_end   = ml.end();
+    [[maybe_unused]] const Move*       mv_ahead = ml.begin();
+
+    // Single 64-bit rolling cache: low 32 bits = (tag<<16 | idx) for current move,
+    // high 32 bits = same packing for next move. Advance with shr 32 then OR-in new packed.
+    [[maybe_unused]] uint64_t hashes = 0;
+
+    auto packHashAt = [&](const Move* p) -> uint32_t {
+        const uint64_t h = LowPly::mix(LowPly::input(ply, p->raw()));
+        return (uint32_t(LowPly::tag_from(h)) << 16) | LowPly::idx_from(h);
+    };
+
+    if constexpr (Type == QUIETS)
+        if (ply < LOW_PLY_HISTORY_SIZE)
+        {
+            if (mv_ahead != mv_end)
+            {
+                const uint32_t pack0 = packHashAt(mv_ahead);
+                hashes               = pack0;
+                prefetch(&(*lowPlyHistory)[uint16_t(pack0)]);
+                ++mv_ahead;
+                if (mv_ahead != mv_end)
+                {
+                    const uint32_t pack1 = packHashAt(mv_ahead);
+                    hashes |= uint64_t(pack1) << 32;
+                    prefetch(&(*lowPlyHistory)[uint16_t(pack1)]);
+                    ++mv_ahead;
+                }
+            }
+        }
+
     ExtMove* it = cur;
     for (auto move : ml)
     {
@@ -176,7 +207,20 @@ ExtMove* MovePicker::score(const MoveList<Type>& ml) {
 
 
             if (ply < LOW_PLY_HISTORY_SIZE)
-                m.value += 8 * (*lowPlyHistory)[ply][m.raw()] / (1 + ply);
+            {
+                const LowPlyReadAccess r{&(*lowPlyHistory)[uint16_t(hashes)],
+                                         uint16_t(hashes >> 16)};
+                m.value += 8 * int(r) / (1 + ply);
+
+                hashes >>= 32;
+                if (mv_ahead != mv_end)
+                {
+                    const uint32_t packNew = packHashAt(mv_ahead);
+                    hashes |= uint64_t(packNew) << 32;
+                    prefetch(&(*lowPlyHistory)[uint16_t(packNew)]);
+                    ++mv_ahead;
+                }
+            }
         }
 
         else  // Type == EVASIONS
