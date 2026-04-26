@@ -18,9 +18,20 @@
 
 #include "movepick.h"
 
+#include <array>
+#include <atomic>
 #include <cassert>
+#include <cstdio>
+#include <cstdlib>
 #include <limits>
 #include <utility>
+#ifdef _WIN32
+    #include <process.h>
+    #define QDIST_GETPID() ((unsigned long) _getpid())
+#else
+    #include <unistd.h>
+    #define QDIST_GETPID() ((unsigned long) getpid())
+#endif
 
 #include "bitboard.h"
 #include "misc.h"
@@ -29,6 +40,35 @@
 namespace Stockfish {
 
 namespace {
+
+// Quiet-move count distribution at low plies. Indexed by [ply][min(n, 255)].
+// Dumped to QDIST_DIR/qdist-<pid>.csv at process exit (or stderr if unset).
+struct QDist {
+    std::array<std::array<std::atomic<std::uint64_t>, 256>, 5> hist{};
+    ~QDist() {
+        const char* dir = std::getenv("QDIST_DIR");
+        char        path[1024];
+        FILE*       f = nullptr;
+        if (dir)
+        {
+            std::snprintf(path, sizeof path, "%s/qdist-%lu.csv", dir, QDIST_GETPID());
+            f = std::fopen(path, "wb");
+        }
+        if (!f)
+            f = stderr;
+        std::fprintf(f, "ply,n,count\n");
+        for (int p = 0; p < 5; ++p)
+            for (int n = 0; n < 256; ++n)
+            {
+                std::uint64_t v = hist[p][n].load(std::memory_order_relaxed);
+                if (v > 0)
+                    std::fprintf(f, "%d,%d,%llu\n", p, n, (unsigned long long) v);
+            }
+        if (f != stderr)
+            std::fclose(f);
+    }
+};
+QDist qdist;
 
 enum Stages {
     // generate main search moves
@@ -137,6 +177,12 @@ ExtMove* MovePicker::score(const MoveList<Type>& ml) {
           pos.attacks_by<KNIGHT>(~us) | pos.attacks_by<BISHOP>(~us) | threatByLesser[KNIGHT];
         threatByLesser[QUEEN] = pos.attacks_by<ROOK>(~us) | threatByLesser[ROOK];
         threatByLesser[KING]  = 0;
+
+        if (ply < LOW_PLY_HISTORY_SIZE)
+        {
+            const std::size_t n = static_cast<std::size_t>(ml.end() - ml.begin());
+            qdist.hist[ply][n < 256 ? n : 255].fetch_add(1, std::memory_order_relaxed);
+        }
     }
 
     ExtMove* it = cur;
