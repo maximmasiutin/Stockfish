@@ -82,17 +82,23 @@ using SearchedList                  = ValueList<Move, SEARCHEDLIST_CAPACITY>;
 // optimized for require verifications at longer time controls
 
 int correction_value(const Worker& w, const Position& pos, const Stack* const ss) {
-    const Color us     = pos.side_to_move();
-    const auto  m      = (ss - 1)->currentMove;
-    const auto& shared = w.sharedHistory;
-    const int   pcv    = shared.pawn_correction_entry(pos)[us].pawn;
-    const int   micv   = shared.minor_piece_correction_entry(pos)[us].minor;
-    const int   wnpcv  = shared.nonpawn_correction_entry<WHITE>(pos)[us].nonPawnWhite;
-    const int   bnpcv  = shared.nonpawn_correction_entry<BLACK>(pos)[us].nonPawnBlack;
-    const int   cntcv =
+    const auto m      = (ss - 1)->currentMove;
+    auto&      shared = w.sharedHistory;
+
+    const auto a_p = CorrhistReadAccess::pawn(shared, pos);
+    const auto a_m = CorrhistReadAccess::minor(shared, pos);
+    const auto a_w = CorrhistReadAccess::nonpawn<WHITE>(shared, pos);
+    const auto a_b = CorrhistReadAccess::nonpawn<BLACK>(shared, pos);
+
+    const int pcv   = a_p.read();
+    const int micv  = a_m.read();
+    const int wnpcv = a_w.read();
+    const int bnpcv = a_b.read();
+
+    const int cntcv =
       m.is_ok() ? (*(ss - 2)->continuationCorrectionHistory)[pos.piece_on(m.to_sq())][m.to_sq()]
                     + (*(ss - 4)->continuationCorrectionHistory)[pos.piece_on(m.to_sq())][m.to_sq()]
-                  : 8;
+                : 8;
 
     return 12153 * pcv + 8620 * micv + 12355 * (wnpcv + bnpcv) + 7982 * cntcv;
 }
@@ -107,16 +113,25 @@ void update_correction_history(const Position& pos,
                                Stack* const    ss,
                                Search::Worker& workerThread,
                                const int       bonus) {
-    const Move  m  = (ss - 1)->currentMove;
-    const Color us = pos.side_to_move();
+    const Move m = (ss - 1)->currentMove;
 
     constexpr int nonPawnWeight = 187;
     auto&         shared        = workerThread.sharedHistory;
 
-    shared.pawn_correction_entry(pos)[us].pawn << bonus;
-    shared.minor_piece_correction_entry(pos)[us].minor << bonus * 153 / 128;
-    shared.nonpawn_correction_entry<WHITE>(pos)[us].nonPawnWhite << bonus * nonPawnWeight / 128;
-    shared.nonpawn_correction_entry<BLACK>(pos)[us].nonPawnBlack << bonus * nonPawnWeight / 128;
+    const auto a_p = CorrhistAccess::pawn(shared, pos);
+    const auto a_m = CorrhistAccess::minor(shared, pos);
+    const auto a_w = CorrhistAccess::nonpawn<WHITE>(shared, pos);
+    const auto a_b = CorrhistAccess::nonpawn<BLACK>(shared, pos);
+
+    prefetch<PrefetchRw::WRITE>(a_p.slot);
+    prefetch<PrefetchRw::WRITE>(a_m.slot);
+    prefetch<PrefetchRw::WRITE>(a_w.slot);
+    prefetch<PrefetchRw::WRITE>(a_b.slot);
+
+    a_p << bonus;
+    a_m << bonus * 153 / 128;
+    a_w << bonus * nonPawnWeight / 128;
+    a_b << bonus * nonPawnWeight / 128;
 
     if (m.is_ok())
     {
@@ -656,6 +671,14 @@ Value Search::Worker::search(
     // Dive into quiescence search when the depth reaches zero
     if (depth <= 0)
         return qsearch<PvNode ? PV : NonPV>(pos, ss, alpha, beta);
+
+    {
+        const auto& shared = sharedHistory;
+        prefetch(CorrhistReadAccess::pawn(shared, pos).slot);
+        prefetch(CorrhistReadAccess::minor(shared, pos).slot);
+        prefetch(CorrhistReadAccess::nonpawn<WHITE>(shared, pos).slot);
+        prefetch(CorrhistReadAccess::nonpawn<BLACK>(shared, pos).slot);
+    }
 
     // Limit the depth if extensions made it too large
     depth = std::min(depth, MAX_PLY - 1);
