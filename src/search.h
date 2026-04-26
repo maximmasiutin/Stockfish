@@ -358,6 +358,8 @@ class Worker {
 
     int reduction(bool i, Depth d, int mn, int delta) const;
 
+    void prefetch_pawn_entry_for_prev(const Position& pos, Square prevSq) const;
+
     // Pointer to the search manager, only allowed to be called by the main thread
     SearchManager* main_manager() const {
         assert(threadIdx == 0);

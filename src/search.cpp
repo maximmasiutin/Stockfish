@@ -155,6 +155,10 @@ bool is_shuffling(Move move, Stack* const ss, const Position& pos) {
 
 }  // namespace
 
+void Search::Worker::prefetch_pawn_entry_for_prev(const Position& pos, Square prevSq) const {
+    prefetch(&sharedHistory.pawn_entry(pos)[pos.piece_on(prevSq)][prevSq]);
+}
+
 Search::Worker::Worker(SharedState&                    sharedState,
                        std::unique_ptr<ISearchManager> sm,
                        size_t                          threadId,
@@ -729,9 +733,17 @@ Value Search::Worker::search(
 
     assert(0 <= ss->ply && ss->ply < MAX_PLY);
 
-    Square prevSq  = ((ss - 1)->currentMove).is_ok() ? ((ss - 1)->currentMove).to_sq() : SQ_NONE;
-    bestMove       = Move::none();
-    priorReduction = (ss - 1)->reduction;
+    Square prevSq = ((ss - 1)->currentMove).is_ok() ? ((ss - 1)->currentMove).to_sq() : SQ_NONE;
+
+    const auto prevQuietBonusGate = [&priorCapture, &prevSq] {
+        return !priorCapture && prevSq != SQ_NONE;
+    };
+
+    if (prevQuietBonusGate())
+        prefetch_pawn_entry_for_prev(pos, prevSq);
+
+    bestMove            = Move::none();
+    priorReduction      = (ss - 1)->reduction;
     (ss - 1)->reduction = 0;
     ss->statScore       = 0;
     (ss + 2)->cutoffCnt = 0;
@@ -1458,7 +1470,7 @@ moves_loop:  // When in check, search starts here
     }
 
     // Bonus for prior quiet countermove that caused the fail low
-    else if (!priorCapture && prevSq != SQ_NONE)
+    else if (prevQuietBonusGate())
     {
         int bonusScale = -232;
         bonusScale -= (ss - 1)->statScore / 108;
