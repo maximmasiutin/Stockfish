@@ -139,6 +139,28 @@ ExtMove* MovePicker::score(const MoveList<Type>& ml) {
         threatByLesser[KING]  = 0;
     }
 
+    [[maybe_unused]] const Move* const mv_end   = ml.end();
+    [[maybe_unused]] const Move*       mv_ahead = ml.begin();
+
+    // Rolling K=4 cache: 4 packed (tag<<16 | idx) words. hashes[head & 3] holds
+    // the current move's pack; (head + k) & 3 holds the move k iterations ahead.
+    [[maybe_unused]] uint32_t hashes[4] = {0, 0, 0, 0};
+    [[maybe_unused]] unsigned head      = 0;
+
+    auto packHashAt = [&](const Move* p) -> uint32_t {
+        const uint64_t h = LowPly::mix(LowPly::input(ply, p->raw()));
+        return (uint32_t(LowPly::tag_from(h)) << 16) | LowPly::idx_from(h);
+    };
+
+    if constexpr (Type == QUIETS)
+        if (ply < LOW_PLY_HISTORY_SIZE)
+            for (unsigned k = 0; k < 4 && mv_ahead != mv_end; ++k, ++mv_ahead)
+            {
+                const uint32_t pk = packHashAt(mv_ahead);
+                hashes[k]         = pk;
+                prefetch(&(*lowPlyHistory)[uint16_t(pk)]);
+            }
+
     ExtMove* it = cur;
     for (auto move : ml)
     {
@@ -176,7 +198,21 @@ ExtMove* MovePicker::score(const MoveList<Type>& ml) {
 
 
             if (ply < LOW_PLY_HISTORY_SIZE)
-                m.value += 8 * (*lowPlyHistory)[ply][m.raw()] / (1 + ply);
+            {
+                const uint32_t         packedHash = hashes[head & 3];
+                const LowPlyReadAccess r{&(*lowPlyHistory)[uint16_t(packedHash)],
+                                         uint16_t(packedHash >> 16)};
+                m.value += 8 * int(r) / (1 + ply);
+
+                if (mv_ahead != mv_end)
+                {
+                    const uint32_t pk = packHashAt(mv_ahead);
+                    hashes[head & 3]  = pk;
+                    prefetch(&(*lowPlyHistory)[uint16_t(pk)]);
+                    ++mv_ahead;
+                }
+                ++head;
+            }
         }
 
         else  // Type == EVASIONS
