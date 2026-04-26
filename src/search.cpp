@@ -638,6 +638,14 @@ Value Search::Worker::search(
     if (depth <= 0)
         return qsearch<PvNode ? PV : NonPV>(pos, ss, alpha, beta);
 
+    {
+        const Color us = pos.side_to_move();
+        prefetch(&sharedHistory.pawn_correction_entry(pos)[us].pawn);
+        prefetch(&sharedHistory.minor_piece_correction_entry(pos)[us].minor);
+        prefetch(&sharedHistory.nonpawn_correction_entry<WHITE>(pos)[us].nonPawnWhite);
+        prefetch(&sharedHistory.nonpawn_correction_entry<BLACK>(pos)[us].nonPawnBlack);
+    }
+
     // Limit the depth if extensions made it too large
     depth = std::min(depth, MAX_PLY - 1);
 
