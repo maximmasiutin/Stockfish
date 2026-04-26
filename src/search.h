@@ -103,21 +103,21 @@ struct PVMoves {
 // shallower and deeper in the tree during the search. Each search thread has
 // its own array of Stack objects, indexed by the current ply.
 struct Stack {
-    PVMoves*                    pv;
-    PieceToHistory*             continuationHistory;
-    CorrectionHistory<PieceTo>* continuationCorrectionHistory;
-    int                         ply;
-    Move                        currentMove;
-    Move                        excludedMove;
-    Value                       staticEval;
-    int                         statScore;
-    int                         moveCount;
-    bool                        inCheck;
-    bool                        ttPv;
-    bool                        ttHit;
-    bool                        followPV;
-    int                         cutoffCnt;
-    int                         reduction;
+    PVMoves*        pv;
+    PieceToHistory* continuationHistory;
+    int             statScore;
+    Move            currentMove;
+    Move            excludedMove;
+    Value           staticEval;
+    uint16_t        moveCount;
+    uint16_t        contcorrIndex;
+    int16_t         cutoffCnt;
+    int16_t         reduction;
+    uint16_t        ply;
+    bool            inCheck;
+    bool            ttPv;
+    bool            ttHit;
+    bool            followPV;
 };
 
 
@@ -331,9 +331,9 @@ class Worker {
     ButterflyHistory mainHistory;
     LowPlyHistory    lowPlyHistory;
 
-    CapturePieceToHistory           captureHistory;
-    ContinuationHistory             continuationHistory[2][2];
-    CorrectionHistory<Continuation> continuationCorrectionHistory;
+    CapturePieceToHistory captureHistory;
+    ContinuationHistory   continuationHistory[2][2];
+    HashedContCorrHistory hashedContCorrHistory;
 
     TTMoveHistory    ttMoveHistory;
     SharedHistories& sharedHistory;
@@ -357,6 +357,8 @@ class Worker {
     Value qsearch(Position& pos, Stack* ss, Value alpha, Value beta);
 
     int reduction(bool i, Depth d, int mn, int delta) const;
+
+    void prefetch_hashed_contcorr_history(const Position& pos, const Stack* const ss) const;
 
     // Pointer to the search manager, only allowed to be called by the main thread
     SearchManager* main_manager() const {

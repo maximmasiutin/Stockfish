@@ -81,18 +81,68 @@ using SearchedList                  = ValueList<Move, SEARCHEDLIST_CAPACITY>;
 // (*Scaler) All tuned parameters at time controls shorter than
 // optimized for require verifications at longer time controls
 
+// Encode a (piece, square) pair into a 10-bit contcorrIndex for the
+// hashed continuation-correction hash. NO_PIECE paired with SQ_A1 is the canonical
+// zero sentinel used before the root.
+static_assert(unsigned(NO_PIECE) == 0 && unsigned(SQ_A1) == 0,
+              "contcorr zero sentinel assumes NO_PIECE on SQ_A1 encodes to 0");
+static_assert(unsigned(PIECE_NB) * unsigned(SQUARE_NB) <= (1u << 10),
+              "contcorr_index must fit in 10 bits");
+unsigned contcorr_index(Piece pc, Square sq) {
+    return unsigned(pc) * unsigned(SQUARE_NB) + unsigned(sq);
+}
+
+// 64-bit mixer producing both a table index and a verification tag from
+// two 10-bit contcorrIndex inputs.
+uint64_t contcorr_mix(uint32_t a, uint32_t b) {
+    uint64_t k = (uint64_t(a) << 10) | b;
+    k *= 0x9E3779B97F4A7C15ULL;
+    k ^= k >> 32;
+    k *= 0xBF58476D1CE4E5B9ULL;
+    k ^= k >> 27;
+    return k;
+}
+
+uint32_t contcorr_idx_from(uint64_t h) { return uint32_t(h) & HASHED_CONTCORR_INDEX_MASK; }
+
+HashedContCorrSlot::Tag contcorr_tag_from(uint64_t h) {
+    const HashedContCorrSlot::Tag t = HashedContCorrSlot::Tag(
+      uint32_t(h >> HASHED_CONTCORR_INDEX_BITS) & HashedContCorrSlot::TAG_MASK);
+    return t == 0 ? HashedContCorrSlot::Tag(1) : t;
+}
+
 int correction_value(const Worker& w, const Position& pos, const Stack* const ss) {
     const Color us     = pos.side_to_move();
-    const auto  m      = (ss - 1)->currentMove;
     const auto& shared = w.sharedHistory;
     const int   pcv    = shared.pawn_correction_entry(pos)[us].pawn;
     const int   micv   = shared.minor_piece_correction_entry(pos)[us].minor;
     const int   wnpcv  = shared.nonpawn_correction_entry<WHITE>(pos)[us].nonPawnWhite;
     const int   bnpcv  = shared.nonpawn_correction_entry<BLACK>(pos)[us].nonPawnBlack;
-    const int   cntcv =
-      m.is_ok() ? (*(ss - 2)->continuationCorrectionHistory)[pos.piece_on(m.to_sq())][m.to_sq()]
-                    + (*(ss - 4)->continuationCorrectionHistory)[pos.piece_on(m.to_sq())][m.to_sq()]
-                  : 8;
+
+    int        cntcv;
+    const Move m = (ss - 1)->currentMove;
+    if (m.is_ok())
+    {
+        const auto&  table = w.hashedContCorrHistory;
+        const Square to    = m.to_sq();
+        const Piece  pc    = pos.piece_on(to);
+
+        const auto contcorrIndex = contcorr_index(pc, to);
+
+        const auto hashA = contcorr_mix(contcorrIndex, (ss - 2)->contcorrIndex);
+        const auto hashB = contcorr_mix(contcorrIndex, (ss - 4)->contcorrIndex);
+        const auto idxA  = contcorr_idx_from(hashA);
+        const auto idxB  = contcorr_idx_from(hashB);
+        const auto tagA  = contcorr_tag_from(hashA);
+        const auto tagB  = contcorr_tag_from(hashB);
+
+        const HashedContCorrReadAccess accA{&table[idxA], tagA};
+        const HashedContCorrReadAccess accB{&table[idxB], tagB};
+
+        cntcv = accA.read() + accB.read();
+    }
+    else
+        cntcv = HashedContCorrSlot::NOK;
 
     return 12153 * pcv + 8620 * micv + 12355 * (wnpcv + bnpcv) + 7982 * cntcv;
 }
@@ -107,7 +157,6 @@ void update_correction_history(const Position& pos,
                                Stack* const    ss,
                                Search::Worker& workerThread,
                                const int       bonus) {
-    const Move  m  = (ss - 1)->currentMove;
     const Color us = pos.side_to_move();
 
     constexpr int nonPawnWeight = 187;
@@ -118,12 +167,27 @@ void update_correction_history(const Position& pos,
     shared.nonpawn_correction_entry<WHITE>(pos)[us].nonPawnWhite << bonus * nonPawnWeight / 128;
     shared.nonpawn_correction_entry<BLACK>(pos)[us].nonPawnBlack << bonus * nonPawnWeight / 128;
 
+    const Move m = (ss - 1)->currentMove;
     if (m.is_ok())
     {
-        const Square to = m.to_sq();
-        const Piece  pc = pos.piece_on(to);
-        (*(ss - 2)->continuationCorrectionHistory)[pc][to] << bonus * 126 / 128;
-        (*(ss - 4)->continuationCorrectionHistory)[pc][to] << bonus * 63 / 128;
+        auto&        table = workerThread.hashedContCorrHistory;
+        const Square to    = m.to_sq();
+        const Piece  pc    = pos.piece_on(to);
+
+        const auto contcorrIndex = contcorr_index(pc, to);
+
+        const auto hashA = contcorr_mix(contcorrIndex, (ss - 2)->contcorrIndex);
+        const auto hashB = contcorr_mix(contcorrIndex, (ss - 4)->contcorrIndex);
+        const auto idxA  = contcorr_idx_from(hashA);
+        const auto idxB  = contcorr_idx_from(hashB);
+        const auto tagA  = contcorr_tag_from(hashA);
+        const auto tagB  = contcorr_tag_from(hashB);
+
+        HashedContCorrAccess accA{&table[idxA], tagA};
+        HashedContCorrAccess accB{&table[idxB], tagB};
+
+        accA << bonus * 126 / 128;
+        accB << bonus * 63 / 128;
     }
 }
 
@@ -154,6 +218,24 @@ bool is_shuffling(Move move, Stack* const ss, const Position& pos) {
 }
 
 }  // namespace
+
+void Search::Worker::prefetch_hashed_contcorr_history(const Position&    pos,
+                                                      const Stack* const ss) const {
+    const Move m = (ss - 1)->currentMove;
+    if (!m.is_ok())
+        return;
+
+    const Square to = m.to_sq();
+
+    // Use the post-promotion piece from pos.piece_on so the prefetched slot matches
+    // the one used by correction_value and update_correction_history.
+    const Piece pc            = pos.piece_on(to);
+    const auto  contcorrIndex = contcorr_index(pc, to);
+    const auto  hashA         = contcorr_mix(contcorrIndex, (ss - 2)->contcorrIndex);
+    const auto  hashB         = contcorr_mix(contcorrIndex, (ss - 4)->contcorrIndex);
+    prefetch(&hashedContCorrHistory[contcorr_idx_from(hashA)]);
+    prefetch(&hashedContCorrHistory[contcorr_idx_from(hashB)]);
+}
 
 Search::Worker::Worker(SharedState&                    sharedState,
                        std::unique_ptr<ISearchManager> sm,
@@ -285,12 +367,13 @@ bool Search::Worker::iterative_deepening() {
     {
         (ss - i)->continuationHistory =
           &continuationHistory[0][0][NO_PIECE][0];  // Use as a sentinel
-        (ss - i)->continuationCorrectionHistory = &continuationCorrectionHistory[NO_PIECE][0];
-        (ss - i)->staticEval                    = VALUE_NONE;
+        (ss - i)->contcorrIndex = 0;
+        (ss - i)->staticEval    = VALUE_NONE;
     }
+    ss->contcorrIndex = 0;
 
     for (int i = 0; i <= MAX_PLY + 2; ++i)
-        (ss + i)->ply = i;
+        (ss + i)->ply = uint16_t(i);
 
     ss->pv = &pv;
 
@@ -596,16 +679,15 @@ void Search::Worker::do_move(
         ss->currentMove = move;
         ss->continuationHistory =
           &continuationHistory[ss->inCheck][capture][dirtyPiece.pc][move.to_sq()];
-        ss->continuationCorrectionHistory =
-          &continuationCorrectionHistory[dirtyPiece.pc][move.to_sq()];
+        ss->contcorrIndex = uint16_t(contcorr_index(dirtyPiece.pc, move.to_sq()));
     }
 }
 
 void Search::Worker::do_null_move(Position& pos, StateInfo& st, Stack* const ss) {
     pos.do_null_move(st);
-    ss->currentMove                   = Move::null();
-    ss->continuationHistory           = &continuationHistory[0][0][NO_PIECE][0];
-    ss->continuationCorrectionHistory = &continuationCorrectionHistory[NO_PIECE][0];
+    ss->currentMove         = Move::null();
+    ss->continuationHistory = &continuationHistory[0][0][NO_PIECE][0];
+    ss->contcorrIndex       = 0;
 }
 
 void Search::Worker::undo_move(Position& pos, const Move move) {
@@ -627,9 +709,7 @@ void Search::Worker::clear() {
 
     ttMoveHistory = 0;
 
-    for (auto& to : continuationCorrectionHistory)
-        for (auto& h : to)
-            h.fill(6);
+    hashedContCorrHistory.fill(HashedContCorrSlot{HashedContCorrSlot::empty_data()});
 
     for (bool inCheck : {false, true})
         for (StatsType c : {NoCaptures, Captures})
@@ -735,6 +815,8 @@ Value Search::Worker::search(
     (ss - 1)->reduction = 0;
     ss->statScore       = 0;
     (ss + 2)->cutoffCnt = 0;
+
+    prefetch_hashed_contcorr_history(pos, ss);
 
     // Step 4. Transposition table lookup
     excludedMove                   = ss->excludedMove;
@@ -1497,6 +1579,12 @@ moves_loop:  // When in check, search starts here
     if (bestValue <= alpha)
         ss->ttPv = ss->ttPv || (ss - 1)->ttPv;
 
+    const bool corrHistGate = !ss->inCheck && !(bestMove && pos.capture(bestMove))
+                           && (bestValue > ss->staticEval) == bool(bestMove);
+
+    if (corrHistGate)
+        prefetch_hashed_contcorr_history(pos, ss);
+
     // Write gathered information in transposition table. Note that the
     // static evaluation is saved as it was before correction history.
     if (!excludedMove && !(rootNode && pvIdx))
@@ -1509,8 +1597,7 @@ moves_loop:  // When in check, search starts here
 
     // Adjust correction history if the best move is not a capture
     // and the error direction matches whether we are above/below bounds.
-    if (!ss->inCheck && !(bestMove && pos.capture(bestMove))
-        && (bestValue > ss->staticEval) == bool(bestMove))
+    if (corrHistGate)
     {
         auto bonus =
           std::clamp(int(bestValue - ss->staticEval) * depth * (bestMove ? 12 : 17) / 128,
@@ -1574,6 +1661,9 @@ Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta)
     // Step 2. Check for an immediate draw or maximum ply reached
     if (pos.is_draw(ss->ply) || ss->ply >= MAX_PLY)
         return (ss->ply >= MAX_PLY && !ss->inCheck) ? evaluate(pos) : VALUE_DRAW;
+
+    if (!ss->inCheck)
+        prefetch_hashed_contcorr_history(pos, ss);
 
     assert(0 <= ss->ply && ss->ply < MAX_PLY);
 
