@@ -18,6 +18,7 @@
 
 #include "movepick.h"
 
+#include "pawnhist_miss_instr.h"
 #include <cassert>
 #include <limits>
 #include <utility>
@@ -159,7 +160,9 @@ ExtMove* MovePicker::score(const MoveList<Type>& ml) {
         {
             // histories
             m.value = 2 * (*mainHistory)[us][m.raw()];
-            m.value += 2 * sharedHistory->pawn_entry(pos)[pc][to];
+            m.value += 2
+                     * PAWNHIST_INSTR_READ(sharedHistory->pawn_entry(pos)[pc][to],
+                                           Stockfish::PawnhistInstr::SITE_PAWN_ENTRY);
             m.value += (*continuationHistory[0])[pc][to];
             m.value += (*continuationHistory[1])[pc][to];
             m.value += (*continuationHistory[2])[pc][to];

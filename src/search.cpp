@@ -18,6 +18,7 @@
 
 #include "search.h"
 
+#include "pawnhist_miss_instr.h"
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -85,14 +86,20 @@ int correction_value(const Worker& w, const Position& pos, const Stack* const ss
     const Color us     = pos.side_to_move();
     const auto  m      = (ss - 1)->currentMove;
     const auto& shared = w.sharedHistory;
-    const int   pcv    = shared.pawn_correction_entry(pos)[us].pawn;
-    const int   micv   = shared.minor_piece_correction_entry(pos)[us].minor;
-    const int   wnpcv  = shared.nonpawn_correction_entry<WHITE>(pos)[us].nonPawnWhite;
-    const int   bnpcv  = shared.nonpawn_correction_entry<BLACK>(pos)[us].nonPawnBlack;
-    const int   cntcv =
+    const int   pcv    = PAWNHIST_INSTR_READ(shared.pawn_correction_entry(pos)[us].pawn,
+                                             Stockfish::PawnhistInstr::SITE_PAWN_CORR);
+    const int   micv   = PAWNHIST_INSTR_READ(shared.minor_piece_correction_entry(pos)[us].minor,
+                                             Stockfish::PawnhistInstr::SITE_MINOR_CORR);
+    const int   wnpcv =
+      PAWNHIST_INSTR_READ(shared.nonpawn_correction_entry<WHITE>(pos)[us].nonPawnWhite,
+                          Stockfish::PawnhistInstr::SITE_NONPAWN_W);
+    const int bnpcv =
+      PAWNHIST_INSTR_READ(shared.nonpawn_correction_entry<BLACK>(pos)[us].nonPawnBlack,
+                          Stockfish::PawnhistInstr::SITE_NONPAWN_B);
+    const int cntcv =
       m.is_ok() ? (*(ss - 2)->continuationCorrectionHistory)[pos.piece_on(m.to_sq())][m.to_sq()]
                     + (*(ss - 4)->continuationCorrectionHistory)[pos.piece_on(m.to_sq())][m.to_sq()]
-                  : 8;
+                : 8;
 
     return 12153 * pcv + 8620 * micv + 12355 * (wnpcv + bnpcv) + 7982 * cntcv;
 }

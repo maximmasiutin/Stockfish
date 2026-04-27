@@ -18,6 +18,7 @@
 
 #include "position.h"
 
+#include "pawnhist_pf_config.h"
 #include <algorithm>
 #include <array>
 #include <cassert>
@@ -1041,7 +1042,12 @@ void Position::do_move(Move                      m,
 
     if (history)
     {
+#if PAWNHIST_PF_VARIANT == 0
         prefetch(&history->pawn_entry(*this)[pc][to]);
+#elif PAWNHIST_PF_VARIANT == 2
+        _mm_prefetch(reinterpret_cast<const char*>(&history->pawn_entry(*this)[pc][to]),
+                     _MM_HINT_T2);
+#endif
         prefetch(&history->pawn_correction_entry(*this));
         prefetch(&history->minor_piece_correction_entry(*this));
         prefetch(&history->nonpawn_correction_entry<WHITE>(*this));
