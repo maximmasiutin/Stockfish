@@ -121,7 +121,7 @@ MovePicker::MovePicker(const Position& p, Move ttm, int th, const CapturePieceTo
 // Assigns a numerical value to each move in a list, used for sorting.
 // Captures are ordered by Most Valuable Victim (MVV), preferring captures
 // with a good history. Quiets moves are ordered using the history tables.
-template<GenType Type>
+template<GenType Type, bool LowPly>
 ExtMove* MovePicker::score(const MoveList<Type>& ml) {
 
     static_assert(Type == CAPTURES || Type == QUIETS || Type == EVASIONS, "Wrong type");
@@ -175,7 +175,7 @@ ExtMove* MovePicker::score(const MoveList<Type>& ml) {
             m.value += PieceValue[pt] * v;
 
 
-            if (ply < LOW_PLY_HISTORY_SIZE)
+            if constexpr (LowPly)
                 m.value += 8 * (*lowPlyHistory)[ply][m.raw()] / (1 + ply);
         }
 
@@ -225,7 +225,7 @@ top:
         MoveList<CAPTURES> ml(pos);
 
         cur = endBadCaptures = moves;
-        endCur = endCaptures = score<CAPTURES>(ml);
+        endCur = endCaptures = score<CAPTURES, false>(ml);
 
         partial_insertion_sort(cur, endCur, std::numeric_limits<int>::min());
         ++stage;
@@ -249,7 +249,8 @@ top:
         {
             MoveList<QUIETS> ml(pos);
 
-            endCur = endGenerated = score<QUIETS>(ml);
+            endCur = endGenerated =
+              ply < LOW_PLY_HISTORY_SIZE ? score<QUIETS, true>(ml) : score<QUIETS, false>(ml);
 
             partial_insertion_sort(cur, endCur, -3560 * depth);
         }
@@ -289,7 +290,7 @@ top:
         MoveList<EVASIONS> ml(pos);
 
         cur    = moves;
-        endCur = endGenerated = score<EVASIONS>(ml);
+        endCur = endGenerated = score<EVASIONS, false>(ml);
 
         partial_insertion_sort(cur, endCur, std::numeric_limits<int>::min());
         ++stage;
