@@ -145,16 +145,24 @@ using ButterflyHistory = Stats<std::int16_t, 7183, COLOR_NB, UINT_16_HISTORY_SIZ
 
 // LowPlyHistory is addressed by ply and move's from and to squares, used
 // to improve move ordering near the root
-struct __attribute__((packed)) LowPlySlot {
-    std::int16_t value;
-    std::uint8_t tag;
+//
+// Slot is a 3-byte byte array. Layout (little-endian uint32_t view):
+//   bytes[0] = low  byte of int16_t value
+//   bytes[1] = high byte of int16_t value
+//   bytes[2] = uint8_t tag
+// Using a byte array (rather than a struct of `int16_t value; uint8_t tag;`
+// with `__attribute__((packed))`) keeps `sizeof == 3, alignof == 1` without
+// any compiler-specific packing attribute.
+struct LowPlySlot {
+    std::uint8_t bytes[3];
 
     constexpr LowPlySlot() noexcept :
-        value(HASHED_LOW_PLY_VALUE_DEFAULT),
-        tag(HASHED_LOW_PLY_EMPTY_TAG) {}
+        bytes{std::uint8_t(std::uint16_t(HASHED_LOW_PLY_VALUE_DEFAULT) & 0xFFu),
+              std::uint8_t((std::uint16_t(HASHED_LOW_PLY_VALUE_DEFAULT) >> 8) & 0xFFu),
+              HASHED_LOW_PLY_EMPTY_TAG} {}
     constexpr LowPlySlot(std::int16_t v, std::uint8_t t) noexcept :
-        value(v),
-        tag(t) {}
+        bytes{std::uint8_t(std::uint16_t(v) & 0xFFu), std::uint8_t((std::uint16_t(v) >> 8) & 0xFFu),
+              t} {}
 };
 static_assert(sizeof(LowPlySlot) == 3, "LowPlySlot must be 3 bytes");
 static_assert(alignof(LowPlySlot) == 1, "LowPlySlot must be byte-aligned for 3-byte stride");
