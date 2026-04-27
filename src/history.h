@@ -157,8 +157,22 @@ struct __attribute__((packed)) LowPlySlot {
         tag(t) {}
 };
 static_assert(sizeof(LowPlySlot) == 3, "LowPlySlot must be 3 bytes");
+static_assert(alignof(LowPlySlot) == 1, "LowPlySlot must be byte-aligned for 3-byte stride");
 
-using LowPlyHistory = std::array<LowPlySlot, HASHED_LOW_PLY_BASE_SIZE>;
+static_assert(__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__,
+              "LowPlySlot 32-bit read/write path assumes little-endian byte order");
+
+// One trailing slot of pad: the read/write fast path issues a 32-bit
+// load (and store) that overlaps the next slot's first byte; at the
+// last valid index that byte must be in-bounds storage.
+using LowPlyHistory = std::array<LowPlySlot, HASHED_LOW_PLY_BASE_SIZE + 1>;
+static_assert(sizeof(LowPlyHistory) >= sizeof(LowPlySlot) * HASHED_LOW_PLY_BASE_SIZE + 1,
+              "LowPlyHistory storage must extend at least 1 byte beyond the last "
+              "valid slot for the 32-bit tail load/store at index BASE_SIZE-1");
+
+// may_alias allows the compiler to type-pun a LowPlySlot through a
+// uint32_t pointer without violating strict aliasing.
+typedef std::uint32_t LowPlySlotRaw __attribute__((may_alias));
 
 struct LowPly {
     static constexpr int     VALUE_LIMIT   = 7183;
@@ -190,8 +204,13 @@ struct LowPly {
         const std::uint8_t t = std::uint8_t(h >> HASHED_LOW_PLY_INDEX_BITS);
         return t == 0 ? std::uint8_t(1) : t;
     }
-    static inline sf_always_inline constexpr int extract(const LowPlySlot& slot, std::uint8_t tag) {
-        return slot.tag == tag ? int(slot.value) : int(VALUE_DEFAULT);
+    static inline sf_always_inline constexpr std::uint32_t pack(int v, std::uint8_t tag) {
+        return std::uint32_t(std::uint16_t(v)) | (std::uint32_t(tag) << 16);
+    }
+    static inline sf_always_inline constexpr int extract(std::uint32_t raw, std::uint8_t tag) {
+        const std::int16_t v         = std::int16_t(std::uint16_t(raw));
+        const std::uint8_t storedTag = std::uint8_t(raw >> 16);
+        return storedTag == tag ? int(v) : int(VALUE_DEFAULT);
     }
 };
 
@@ -199,8 +218,11 @@ struct LowPlyReadAccess {
     const LowPlySlot* slot;
     std::uint8_t      tag;
 
-    inline sf_always_inline int read() const { return LowPly::extract(*slot, tag); }
-    inline sf_always_inline     operator int() const { return read(); }
+    inline sf_always_inline int read() const {
+        const std::uint32_t raw = *reinterpret_cast<const LowPlySlotRaw*>(slot);
+        return LowPly::extract(raw, tag);
+    }
+    inline sf_always_inline operator int() const { return read(); }
 
     static inline sf_always_inline LowPlyReadAccess access(const LowPlyHistory& t,
                                                            int                  ply,
@@ -215,12 +237,15 @@ struct LowPlyAccess {
     std::uint8_t tag;
 
     inline sf_always_inline void operator<<(int bonus) {
-        const int clampedBonus = std::clamp(bonus, -LowPly::VALUE_LIMIT, LowPly::VALUE_LIMIT);
-        int       v            = LowPly::extract(*slot, tag);
+        auto* const   rawPtr       = reinterpret_cast<LowPlySlotRaw*>(slot);
+        std::uint32_t raw          = *rawPtr;
+        int           v            = LowPly::extract(raw, tag);
+        const int     clampedBonus = std::clamp(bonus, -LowPly::VALUE_LIMIT, LowPly::VALUE_LIMIT);
         v += clampedBonus - v * std::abs(clampedBonus) / LowPly::VALUE_LIMIT;
         assert(std::abs(v) <= LowPly::VALUE_LIMIT);
-        slot->value = std::int16_t(v);
-        slot->tag   = tag;
+        // Preserve the high 8 bits (next slot's first byte, or trailing
+        // pad) and update the low 24 bits with the new (value, tag).
+        *rawPtr = (raw & 0xFF000000u) | LowPly::pack(v, tag);
     }
 
     static inline sf_always_inline LowPlyAccess access(LowPlyHistory& t,
@@ -231,16 +256,14 @@ struct LowPlyAccess {
     }
 };
 
-static_assert(LowPly::extract(LowPlySlot{0, 0}, 0) == 0,
-              "extract on matching tag must return slot value");
-static_assert(LowPly::extract(LowPlySlot{0, 0}, 1) == LowPly::VALUE_DEFAULT,
+static_assert(LowPly::extract(LowPly::pack(0, 0), 0) == 0,
+              "extract(pack(0, 0), 0) must round-trip 0");
+static_assert(LowPly::extract(LowPly::pack(0, 0), 1) == LowPly::VALUE_DEFAULT,
               "extract on tag mismatch must return VALUE_DEFAULT");
-static_assert(LowPly::extract(LowPlySlot{LowPly::VALUE_LIMIT, 1}, 1) == LowPly::VALUE_LIMIT,
+static_assert(LowPly::extract(LowPly::pack(LowPly::VALUE_LIMIT, 1), 1) == LowPly::VALUE_LIMIT,
               "extract must round-trip positive VALUE_LIMIT");
-static_assert(LowPly::extract(LowPlySlot{-LowPly::VALUE_LIMIT, 1}, 1) == -LowPly::VALUE_LIMIT,
+static_assert(LowPly::extract(LowPly::pack(-LowPly::VALUE_LIMIT, 1), 1) == -LowPly::VALUE_LIMIT,
               "extract must round-trip negative VALUE_LIMIT");
-static_assert(LowPly::extract(LowPlySlot{}, 1) == LowPly::VALUE_DEFAULT,
-              "default-constructed slot must return VALUE_DEFAULT for any non-empty query tag");
 
 // CapturePieceToHistory is addressed by a move's [piece][to][captured piece type]
 using CapturePieceToHistory = Stats<std::int16_t, 10692, PIECE_NB, SQUARE_NB, PIECE_TYPE_NB>;

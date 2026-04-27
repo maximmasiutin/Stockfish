@@ -317,6 +317,14 @@ bool Search::Worker::iterative_deepening() {
 
     lowPlyHistory.fill(LowPlySlot{});
 
+    // Dynamic check: 32-bit load at the last valid slot index. The +1
+    // trailing pad in LowPlyHistory keeps this load in-bounds.
+    {
+        const std::uint32_t lastSlotProbe =
+          *reinterpret_cast<const LowPlySlotRaw*>(&lowPlyHistory[HASHED_LOW_PLY_BASE_SIZE - 1]);
+        assert(LowPly::extract(lastSlotProbe, HASHED_LOW_PLY_EMPTY_TAG) == LowPly::VALUE_DEFAULT);
+    }
+
     for (Color c : {WHITE, BLACK})
         for (int i = 0; i < UINT_16_HISTORY_SIZE; i++)
             mainHistory[c][i] = mainHistory[c][i] * 820 / 1024;
