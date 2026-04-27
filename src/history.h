@@ -162,13 +162,27 @@ static_assert(alignof(LowPlySlot) == 1, "LowPlySlot must be byte-aligned for 3-b
 static_assert(__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__,
               "LowPlySlot 32-bit read/write path assumes little-endian byte order");
 
-// One trailing slot of pad: the read/write fast path issues a 32-bit
-// load (and store) that overlaps the next slot's first byte; at the
-// last valid index that byte must be in-bounds storage.
-using LowPlyHistory = std::array<LowPlySlot, HASHED_LOW_PLY_BASE_SIZE + 1>;
-static_assert(sizeof(LowPlyHistory) >= sizeof(LowPlySlot) * HASHED_LOW_PLY_BASE_SIZE + 1,
-              "LowPlyHistory storage must extend at least 1 byte beyond the last "
-              "valid slot for the 32-bit tail load/store at index BASE_SIZE-1");
+// LowPlyHistory wraps BASE_SIZE valid 3-byte slots plus 1 byte of
+// trailing pad: the read/write fast path issues a 32-bit load (and
+// store) that overlaps the next slot's first byte, and at the last
+// valid index that byte sits inside the trailing pad.
+struct LowPlyHistory {
+    std::array<LowPlySlot, HASHED_LOW_PLY_BASE_SIZE> data;
+    std::uint8_t                                     pad;
+
+    sf_always_inline constexpr LowPlySlot& operator[](std::size_t i) noexcept { return data[i]; }
+    sf_always_inline constexpr const LowPlySlot& operator[](std::size_t i) const noexcept {
+        return data[i];
+    }
+    sf_always_inline constexpr void fill(const LowPlySlot& v) noexcept {
+        data.fill(v);
+        pad = 0;
+    }
+};
+static_assert(sizeof(LowPlyHistory) == HASHED_LOW_PLY_BASE_SIZE * 3 + 1,
+              "LowPlyHistory must be exactly BASE_SIZE * 3 + 1 bytes "
+              "(BASE_SIZE 3-byte slots + 1 trailing pad byte for the "
+              "32-bit tail load/store at index BASE_SIZE-1)");
 
 // may_alias allows the compiler to type-pun a LowPlySlot through a
 // uint32_t pointer without violating strict aliasing.
@@ -242,10 +256,15 @@ struct LowPlyAccess {
         int           v            = LowPly::extract(raw, tag);
         const int     clampedBonus = std::clamp(bonus, -LowPly::VALUE_LIMIT, LowPly::VALUE_LIMIT);
         v += clampedBonus - v * std::abs(clampedBonus) / LowPly::VALUE_LIMIT;
+        // Pre-store bounds check: value to be assigned must fit within
+        // VALUE_LIMIT (and therefore within int16_t for packed storage).
         assert(std::abs(v) <= LowPly::VALUE_LIMIT);
         // Preserve the high 8 bits (next slot's first byte, or trailing
         // pad) and update the low 24 bits with the new (value, tag).
         *rawPtr = (raw & 0xFF000000u) | LowPly::pack(v, tag);
+        // Post-store round-trip: the slot now reads back the value we
+        // just wrote when queried with the same tag.
+        assert(LowPly::extract(*rawPtr, tag) == v);
     }
 
     static inline sf_always_inline LowPlyAccess access(LowPlyHistory& t,
