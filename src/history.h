@@ -23,10 +23,13 @@
 #include <array>
 #include <atomic>
 #include <cassert>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
+#include <fstream>
 #include <limits>
+#include <sstream>
 #include <type_traits>  // IWYU pragma: keep
 
 #include "memory.h"
@@ -41,11 +44,20 @@ constexpr int CORRHIST_BASE_SIZE       = UINT_16_HISTORY_SIZE;
 constexpr int CORRECTION_HISTORY_LIMIT = 1024;
 constexpr int LOW_PLY_HISTORY_SIZE     = 5;
 
+constexpr int      HASHED_LOW_PLY_INDEX_BITS = 16;
+constexpr size_t   HASHED_LOW_PLY_BASE_SIZE  = size_t(1) << HASHED_LOW_PLY_INDEX_BITS;
+constexpr uint32_t HASHED_LOW_PLY_INDEX_MASK = uint32_t(HASHED_LOW_PLY_BASE_SIZE - 1);
+constexpr int16_t  HASHED_LOW_PLY_INIT       = 98;
+constexpr uint32_t HASHED_LOW_PLY_EMPTY_DATA = uint32_t(uint16_t(HASHED_LOW_PLY_INIT));
+
 static_assert((PAWN_HISTORY_BASE_SIZE & (PAWN_HISTORY_BASE_SIZE - 1)) == 0,
               "PAWN_HISTORY_BASE_SIZE has to be a power of 2");
 
 static_assert((CORRHIST_BASE_SIZE & (CORRHIST_BASE_SIZE - 1)) == 0,
               "CORRHIST_BASE_SIZE has to be a power of 2");
+
+static_assert((HASHED_LOW_PLY_BASE_SIZE & (HASHED_LOW_PLY_BASE_SIZE - 1)) == 0,
+              "HASHED_LOW_PLY_BASE_SIZE has to be a power of 2");
 
 // StatsEntry is the container of various numerical statistics. We use a class
 // instead of a naked value to directly call history update operator<<() on
@@ -134,9 +146,197 @@ struct DynStats {
 // see https://www.chessprogramming.org/Butterfly_Boards
 using ButterflyHistory = Stats<std::int16_t, 7183, COLOR_NB, UINT_16_HISTORY_SIZE>;
 
-// LowPlyHistory is addressed by ply and move's from and to squares, used
-// to improve move ordering near the root
-using LowPlyHistory = Stats<std::int16_t, 7183, LOW_PLY_HISTORY_SIZE, UINT_16_HISTORY_SIZE>;
+// Instrumentation for lowply hashed table magnitude-evict analysis.
+// Mirrors ContCorrInstrument but with lowply value range (VALUE_LIMIT=7183).
+namespace LowPlyInstrument {
+
+inline constexpr int N_BUCKETS        = 16;  // bucket size 512, range 0..8191
+inline constexpr int BUCKET_SIZE      = 512;
+inline constexpr int LOCK_THRESH_HALF = 7183 / 2;      // 3591
+inline constexpr int LOCK_THRESH_3Q   = 7183 * 3 / 4;  // 5387
+
+inline std::atomic<std::uint64_t> n_writes{0};
+inline std::atomic<std::uint64_t> n_writes_collision{0};
+inline std::atomic<std::uint64_t> n_blocked_strict{0};
+inline std::atomic<std::uint64_t> n_blocked_2x{0};
+inline std::atomic<std::uint64_t> n_blocked_3x{0};
+inline std::atomic<std::uint64_t> n_collision_locked_half{0};
+inline std::atomic<std::uint64_t> n_collision_locked_3q{0};
+
+inline std::atomic<std::uint64_t> hist_vold[N_BUCKETS]{};
+inline std::atomic<std::uint64_t> hist_vfresh[N_BUCKETS]{};
+
+inline std::string dump_path() {
+    auto now = std::chrono::system_clock::now();
+    auto ns  = std::chrono::duration_cast<std::chrono::nanoseconds>(now.time_since_epoch()).count();
+    std::ostringstream oss;
+    oss << "S:/q/stockfish-nnue/scratchpad/lowply-instrument/dump-" << ns << ".txt";
+    return oss.str();
+}
+
+inline void dump_to_file() {
+    std::ofstream out(dump_path(), std::ios::out);
+    if (!out.is_open())
+        return;
+    auto t = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+    out << "# lowply-hashed-pf-low-instrumentation dump\n";
+    out << "# timestamp_unix=" << static_cast<long long>(t) << "\n";
+    out << "writes_total=" << n_writes.load() << "\n";
+    out << "writes_collision=" << n_writes_collision.load() << "\n";
+    out << "blocked_strict=" << n_blocked_strict.load() << "\n";
+    out << "blocked_2x=" << n_blocked_2x.load() << "\n";
+    out << "blocked_3x=" << n_blocked_3x.load() << "\n";
+    out << "collision_locked_half=" << n_collision_locked_half.load() << "\n";
+    out << "collision_locked_3q=" << n_collision_locked_3q.load() << "\n";
+    out << "hist_vold_bucket512=";
+    for (int i = 0; i < N_BUCKETS; ++i)
+        out << (i ? "," : "") << hist_vold[i].load();
+    out << "\n";
+    out << "hist_vfresh_bucket512=";
+    for (int i = 0; i < N_BUCKETS; ++i)
+        out << (i ? "," : "") << hist_vfresh[i].load();
+    out << "\n";
+}
+
+struct AtExitDumper {
+    ~AtExitDumper() { dump_to_file(); }
+};
+inline AtExitDumper g_dumper;
+
+}  // namespace LowPlyInstrument
+
+// LowPlyHistory: tagged hashed table keyed by (ply, move.raw()).
+struct alignas(4) LowPlySlot {
+    std::uint32_t data{HASHED_LOW_PLY_EMPTY_DATA};
+};
+static_assert(sizeof(LowPlySlot) == 4, "LowPlySlot must be 4 bytes");
+static_assert(LowPlySlot{}.data == HASHED_LOW_PLY_EMPTY_DATA,
+              "Default-constructed LowPlySlot must hold HASHED_LOW_PLY_EMPTY_DATA");
+
+using LowPlyHistory = std::array<LowPlySlot, HASHED_LOW_PLY_BASE_SIZE>;
+
+struct LowPly {
+    static constexpr int     VALUE_LIMIT = 7183;
+    static constexpr int16_t INIT        = HASHED_LOW_PLY_INIT;
+
+    static_assert(-VALUE_LIMIT >= std::numeric_limits<std::int16_t>::min()
+                    && VALUE_LIMIT <= std::numeric_limits<std::int16_t>::max(),
+                  "LowPly::VALUE_LIMIT must fit in int16_t for packed-slot storage");
+    static_assert(INIT >= std::numeric_limits<std::int16_t>::min()
+                    && INIT <= std::numeric_limits<std::int16_t>::max(),
+                  "LowPly::INIT must fit in int16_t");
+
+    static inline sf_always_inline std::uint32_t input(int ply, std::uint16_t move_raw) {
+        assert(0 <= ply && ply < LOW_PLY_HISTORY_SIZE);
+        return (std::uint32_t(unsigned(ply)) << 16) | move_raw;
+    }
+    static inline sf_always_inline std::uint64_t mix(std::uint32_t in) {
+        std::uint64_t k = in;
+        k *= 0x9E3779B97F4A7C15ULL;
+        k ^= k >> 32;
+        k *= 0xBF58476D1CE4E5B9ULL;
+        k ^= k >> 27;
+        return k;
+    }
+    static inline sf_always_inline std::uint32_t idx_from(std::uint64_t h) {
+        return std::uint32_t(h) & HASHED_LOW_PLY_INDEX_MASK;
+    }
+    static inline sf_always_inline std::uint16_t tag_from(std::uint64_t h) {
+        const std::uint16_t t = std::uint16_t(h >> HASHED_LOW_PLY_INDEX_BITS);
+        return t == 0 ? std::uint16_t(1) : t;
+    }
+    static inline sf_always_inline constexpr std::uint32_t pack(int v, std::uint16_t tag) {
+        return std::uint32_t(std::uint16_t(v)) | (std::uint32_t(tag) << 16);
+    }
+    static inline sf_always_inline constexpr std::uint32_t empty_data() { return pack(INIT, 0); }
+    static inline sf_always_inline constexpr int extract(std::uint32_t data, std::uint16_t tag) {
+        const std::uint32_t v    = std::uint32_t(std::uint16_t(data & 0xFFFF));
+        const std::uint32_t mask = std::uint32_t(-std::int32_t(std::uint16_t(data >> 16) != tag));
+        return int(std::int16_t((v & ~mask) | (std::uint32_t(std::uint16_t(INIT)) & mask)));
+    }
+};
+
+struct LowPlyReadAccess {
+    const LowPlySlot* slot;
+    std::uint16_t     tag;
+
+    inline sf_always_inline int read() const { return LowPly::extract(slot->data, tag); }
+    inline sf_always_inline     operator int() const { return read(); }
+
+    static inline sf_always_inline LowPlyReadAccess access(const LowPlyHistory& t,
+                                                           int                  ply,
+                                                           std::uint16_t        move_raw) {
+        const std::uint64_t h = LowPly::mix(LowPly::input(ply, move_raw));
+        return {&t[LowPly::idx_from(h)], LowPly::tag_from(h)};
+    }
+};
+
+struct LowPlyAccess {
+    LowPlySlot*   slot;
+    std::uint16_t tag;
+
+    inline sf_always_inline void operator<<(int bonus) {
+        const int clampedBonus = std::clamp(bonus, -LowPly::VALUE_LIMIT, LowPly::VALUE_LIMIT);
+
+        const std::uint16_t storedTag = std::uint16_t(slot->data >> 16);
+        const int           v_stored  = int(std::int16_t(slot->data & 0xFFFF));
+
+        LowPlyInstrument::n_writes.fetch_add(1, std::memory_order_relaxed);
+        if (clampedBonus != 0 && storedTag != tag)
+        {
+            int v_fresh = int(LowPly::INIT) + clampedBonus
+                        - int(LowPly::INIT) * std::abs(clampedBonus) / LowPly::VALUE_LIMIT;
+            const int abs_old = std::abs(v_stored);
+            const int abs_new = std::abs(v_fresh);
+            LowPlyInstrument::n_writes_collision.fetch_add(1, std::memory_order_relaxed);
+            if (abs_new <= abs_old)
+                LowPlyInstrument::n_blocked_strict.fetch_add(1, std::memory_order_relaxed);
+            if (abs_old > 2 * abs_new)
+                LowPlyInstrument::n_blocked_2x.fetch_add(1, std::memory_order_relaxed);
+            if (abs_old > 3 * abs_new)
+                LowPlyInstrument::n_blocked_3x.fetch_add(1, std::memory_order_relaxed);
+            if (abs_old > LowPlyInstrument::LOCK_THRESH_HALF)
+                LowPlyInstrument::n_collision_locked_half.fetch_add(1, std::memory_order_relaxed);
+            if (abs_old > LowPlyInstrument::LOCK_THRESH_3Q)
+                LowPlyInstrument::n_collision_locked_3q.fetch_add(1, std::memory_order_relaxed);
+            const int b_old =
+              std::min(abs_old / LowPlyInstrument::BUCKET_SIZE, LowPlyInstrument::N_BUCKETS - 1);
+            const int b_new =
+              std::min(abs_new / LowPlyInstrument::BUCKET_SIZE, LowPlyInstrument::N_BUCKETS - 1);
+            LowPlyInstrument::hist_vold[b_old].fetch_add(1, std::memory_order_relaxed);
+            LowPlyInstrument::hist_vfresh[b_new].fetch_add(1, std::memory_order_relaxed);
+        }
+
+        int v = LowPly::extract(slot->data, tag);
+        v += clampedBonus - v * std::abs(clampedBonus) / LowPly::VALUE_LIMIT;
+        assert(std::abs(v) <= LowPly::VALUE_LIMIT);
+        slot->data = LowPly::pack(v, tag);
+    }
+
+    static inline sf_always_inline LowPlyAccess access(LowPlyHistory& t,
+                                                       int            ply,
+                                                       std::uint16_t  move_raw) {
+        const std::uint64_t h = LowPly::mix(LowPly::input(ply, move_raw));
+        return {&t[LowPly::idx_from(h)], LowPly::tag_from(h)};
+    }
+};
+
+static_assert(HASHED_LOW_PLY_EMPTY_DATA == LowPly::empty_data(),
+              "Namespace-scope HASHED_LOW_PLY_EMPTY_DATA must equal LowPly::empty_data()");
+static_assert(LowPlySlot{}.data == LowPly::empty_data(),
+              "Default-constructed LowPlySlot must hold empty_data so reads return INIT");
+static_assert(LowPly::extract(LowPlySlot{}.data, 0) == LowPly::INIT,
+              "Default LowPlySlot read with tag=0 must return INIT (match path on cleared slot)");
+static_assert(LowPly::extract(LowPlySlot{}.data, 1) == LowPly::INIT,
+              "Default LowPlySlot read with non-zero tag must return INIT (mismatch blend)");
+static_assert(LowPly::extract(LowPly::empty_data(), 0) == LowPly::INIT,
+              "empty_data must return INIT for tag 0");
+static_assert(LowPly::extract(LowPly::empty_data(), 1) == LowPly::INIT,
+              "empty_data must return INIT for non-zero tag");
+static_assert(LowPly::extract(LowPly::pack(LowPly::VALUE_LIMIT, 1), 1) == LowPly::VALUE_LIMIT,
+              "extract(pack(v, tag), tag) must round-trip positive VALUE_LIMIT");
+static_assert(LowPly::extract(LowPly::pack(-LowPly::VALUE_LIMIT, 1), 1) == -LowPly::VALUE_LIMIT,
+              "extract(pack(v, tag), tag) must round-trip negative VALUE_LIMIT");
 
 // CapturePieceToHistory is addressed by a move's [piece][to][captured piece type]
 using CapturePieceToHistory = Stats<std::int16_t, 10692, PIECE_NB, SQUARE_NB, PIECE_TYPE_NB>;
