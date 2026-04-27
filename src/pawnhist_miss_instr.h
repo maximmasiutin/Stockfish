@@ -89,15 +89,15 @@ inline std::uint64_t rdtscp_now() {
     return __rdtscp(&aux);
 }
 
-template<typename T>
-inline T timed_read(const T* addr, int site) {
+template<typename F>
+inline auto timed_call(F&& f, int site) -> decltype(f()) {
     auto& s = tls();
     if (++s.read_phase % READ_SAMPLE_STRIDE != 0)
-        return *addr;
+        return f();
     _mm_lfence();
     std::uint64_t t0 = rdtscp_now();
     _mm_lfence();
-    T v = *addr;
+    auto v = f();
     _mm_lfence();
     std::uint64_t t1 = rdtscp_now();
     record(s.read_hist, site, t1 - t0);
@@ -106,7 +106,8 @@ inline T timed_read(const T* addr, int site) {
 
 }  // namespace Stockfish::PawnhistInstr
 
-    #define PAWNHIST_INSTR_READ(EXPR, SITE) Stockfish::PawnhistInstr::timed_read(&(EXPR), (SITE))
+    #define PAWNHIST_INSTR_READ(EXPR, SITE) \
+        Stockfish::PawnhistInstr::timed_call([&]() { return (EXPR); }, (SITE))
 
 #else  // !PAWNHIST_MISS_INSTRUMENT
 
