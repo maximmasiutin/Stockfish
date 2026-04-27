@@ -139,6 +139,7 @@ ExtMove* MovePicker::score(const MoveList<Type>& ml) {
         threatByLesser[KING]  = 0;
     }
 
+#if LOWPLY_PF_READ_SITE == 2
     [[maybe_unused]] const Move* const mv_end   = ml.end();
     [[maybe_unused]] const Move*       mv_ahead = ml.begin();
 
@@ -169,6 +170,39 @@ ExtMove* MovePicker::score(const MoveList<Type>& ml) {
                 }
             }
         }
+#elif LOWPLY_PF_READ_SITE == 1
+    if constexpr (Type == QUIETS)
+        if (ply < LOW_PLY_HISTORY_SIZE)
+            for (const auto& mv : ml)
+                _mm_prefetch(reinterpret_cast<const char*>(
+                               LowPlyReadAccess::access(*lowPlyHistory, ply, mv.raw()).slot),
+                             LOWPLY_PF_READ_HINT);
+#elif LOWPLY_PF_READ_SITE == 3
+    if constexpr (Type == QUIETS)
+        if (ply < LOW_PLY_HISTORY_SIZE)
+        {
+            int idx = 0;
+            for (const auto& mv : ml)
+            {
+                const auto* slot = LowPlyReadAccess::access(*lowPlyHistory, ply, mv.raw()).slot;
+                if (idx < LOWPLY_PF_READ_HI_COUNT)
+                    _mm_prefetch(reinterpret_cast<const char*>(slot), _MM_HINT_T0);
+    #if LOWPLY_PF_READ_LO_COUNT == -1
+                else
+                    _mm_prefetch(reinterpret_cast<const char*>(slot), _MM_HINT_T2);
+    #elif LOWPLY_PF_READ_LO_COUNT > 0
+                else if (idx < LOWPLY_PF_READ_HI_COUNT + LOWPLY_PF_READ_LO_COUNT)
+                    _mm_prefetch(reinterpret_cast<const char*>(slot), _MM_HINT_T2);
+                else
+                    break;
+    #else
+                else
+                    break;
+    #endif
+                ++idx;
+            }
+        }
+#endif
 
     ExtMove* it = cur;
     for (auto move : ml)
@@ -208,9 +242,11 @@ ExtMove* MovePicker::score(const MoveList<Type>& ml) {
 
             if (ply < LOW_PLY_HISTORY_SIZE)
             {
-                const LowPlyReadAccess r{&(*lowPlyHistory)[uint16_t(hashes)],
-                                         uint16_t(hashes >> 16)};
-                m.value += 8 * int(r) / (1 + ply);
+#if LOWPLY_PF_READ_SITE == 2
+                const auto&         slotRef = (*lowPlyHistory)[uint16_t(hashes)];
+                const std::uint16_t tag     = uint16_t(hashes >> 16);
+                const std::uint32_t d       = LOWPLY_INSTR_READ(slotRef.data, ply);
+                m.value += 8 * LowPly::extract(d, tag) / (1 + ply);
 
                 hashes >>= 32;
                 if (mv_ahead != mv_end)
@@ -220,6 +256,11 @@ ExtMove* MovePicker::score(const MoveList<Type>& ml) {
                     prefetch(&(*lowPlyHistory)[uint16_t(packNew)]);
                     ++mv_ahead;
                 }
+#else
+                const auto          access = LowPlyReadAccess::access(*lowPlyHistory, ply, m.raw());
+                const std::uint32_t d      = LOWPLY_INSTR_READ(access.slot->data, ply);
+                m.value += 8 * LowPly::extract(d, access.tag) / (1 + ply);
+#endif
             }
         }
 

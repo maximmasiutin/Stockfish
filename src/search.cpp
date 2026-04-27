@@ -1429,7 +1429,15 @@ moves_loop:  // When in check, search starts here
             if (capture)
                 capturesSearched.push_back(move);
             else
+            {
                 quietsSearched.push_back(move);
+#if LOWPLY_PF_WRITE_SITE == 4
+                if (ss->ply < LOW_PLY_HISTORY_SIZE)
+                    _mm_prefetch(reinterpret_cast<const char*>(
+                                   LowPlyAccess::access(lowPlyHistory, ss->ply, move.raw()).slot),
+                                 LOWPLY_PF_WRITE_HINT);
+#endif
+            }
         }
     }
 
@@ -1858,12 +1866,35 @@ void update_all_stats(const Position& pos,
 
     if (!pos.capture_stage(bestMove))
     {
+#if LOWPLY_PF_WRITE_SITE == 1
+        if (ss->ply < LOW_PLY_HISTORY_SIZE)
+        {
+            _mm_prefetch(
+              reinterpret_cast<const char*>(
+                LowPlyAccess::access(workerThread.lowPlyHistory, ss->ply, bestMove.raw()).slot),
+              LOWPLY_PF_WRITE_HINT);
+            for (Move qm : quietsSearched)
+                _mm_prefetch(
+                  reinterpret_cast<const char*>(
+                    LowPlyAccess::access(workerThread.lowPlyHistory, ss->ply, qm.raw()).slot),
+                  LOWPLY_PF_WRITE_HINT);
+        }
+#endif
         update_quiet_histories(pos, ss, workerThread, bestMove, bonus * 806 / 1024);
 
         int actualMalus = malus * 1113 / 1024;
         // Decrease stats for all non-best quiet moves
-        for (Move move : quietsSearched)
+        for (size_t qi = 0; qi < quietsSearched.size(); ++qi)
         {
+            Move move = quietsSearched[qi];
+#if LOWPLY_PF_WRITE_SITE == 2
+            if (qi + 1 < quietsSearched.size() && ss->ply < LOW_PLY_HISTORY_SIZE)
+                _mm_prefetch(reinterpret_cast<const char*>(
+                               LowPlyAccess::access(workerThread.lowPlyHistory, ss->ply,
+                                                    quietsSearched[qi + 1].raw())
+                                 .slot),
+                             LOWPLY_PF_WRITE_HINT);
+#endif
             actualMalus = actualMalus * 977 / 1024;
             update_quiet_histories(pos, ss, workerThread, move, -actualMalus);
         }
@@ -1923,11 +1954,22 @@ void update_continuation_histories(Stack* ss, Piece pc, Square to, int bonus) {
 void update_quiet_histories(
   const Position& pos, Stack* ss, Search::Worker& workerThread, Move move, int bonus) {
 
+#if LOWPLY_PF_WRITE_SITE == 3
+    if (ss->ply < LOW_PLY_HISTORY_SIZE)
+        _mm_prefetch(reinterpret_cast<const char*>(
+                       LowPlyAccess::access(workerThread.lowPlyHistory, ss->ply, move.raw()).slot),
+                     LOWPLY_PF_WRITE_HINT);
+#endif
+
     Color us = pos.side_to_move();
     workerThread.mainHistory[us][move.raw()] << bonus;  // Untuned to prevent duplicate effort
 
     if (ss->ply < LOW_PLY_HISTORY_SIZE)
-        LowPlyAccess::access(workerThread.lowPlyHistory, ss->ply, move.raw()) << bonus * 682 / 1024;
+    {
+        auto lpa = LowPlyAccess::access(workerThread.lowPlyHistory, ss->ply, move.raw());
+        LOWPLY_INSTR_OBSERVE_WRITE(lpa.slot->data, ss->ply);
+        lpa << bonus * 682 / 1024;
+    }
 
     update_continuation_histories(ss, pos.moved_piece(move), move.to_sq(), bonus * 894 / 1024);
 
