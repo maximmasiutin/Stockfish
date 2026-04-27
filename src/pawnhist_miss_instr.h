@@ -107,7 +107,7 @@ inline auto timed_call(F&& f, int site) -> decltype(f()) {
 }  // namespace Stockfish::PawnhistInstr
 
     #define PAWNHIST_INSTR_READ(EXPR, SITE) \
-        Stockfish::PawnhistInstr::timed_call([&]() { return (EXPR); }, (SITE))
+        Stockfish::PawnhistInstr::timed_call([&]() -> int { return int(EXPR); }, (SITE))
 
 #else  // !PAWNHIST_MISS_INSTRUMENT
 
