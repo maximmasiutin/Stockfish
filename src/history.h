@@ -41,6 +41,48 @@ constexpr int CORRHIST_BASE_SIZE       = UINT_16_HISTORY_SIZE;
 constexpr int CORRECTION_HISTORY_LIMIT = 1024;
 constexpr int LOW_PLY_HISTORY_SIZE     = 5;
 
+// Compact 15-bit packing of Move::raw() into the LowPlyHistory second
+// dimension. Only quiet moves and non-capturing under-promotions reach
+// LowPlyHistory; queen promotions and EN_PASSANT are filtered out by
+// capture_stage() before update_quiet_histories runs and are never
+// produced by generate<QUIETS> on the read side. Layout per ply:
+//   NORMAL     [0x0000, 0x1000)  4096 slots  (type 00, low 12 bits)
+//   CASTLING   [0x1000, 0x2000)  4096 slots  (type 11)
+//   EN_PASSANT [0x2000, 0x3000)  4096 slots  (type 10, bucket reserved
+//                                              for packing completeness,
+//                                              not visited at runtime)
+//   PROMOTION  [0x3000, 0x7000) 16384 slots  (type 01, 4 promo pieces)
+// Used: 28672 slots. Power-of-2 envelope: 32768 = 2^15.
+constexpr std::size_t LOW_PLY_MOVE_BITS  = 15;
+constexpr std::size_t LOW_PLY_MOVE_SLOTS = std::size_t{1} << LOW_PLY_MOVE_BITS;
+
+static_assert(0x7000u <= LOW_PLY_MOVE_SLOTS, "LOW_PLY_MOVE_SLOTS must cover the PROMOTION bucket");
+
+inline std::size_t low_ply_move_index(Move m) {
+    const std::uint32_t r     = m.raw();
+    const std::uint32_t type  = (r >> 14) & 3u;
+    const std::uint32_t low12 = r & 0xFFFu;
+    std::size_t         idx;
+    switch (type)
+    {
+    case 0 :
+        idx = low12;  // NORMAL
+        break;
+    case 3 :
+        idx = 0x1000u | low12;  // CASTLING
+        break;
+    case 1 :
+        idx = 0x3000u + (r & 0x3000u) + low12;  // PROMOTION
+        break;
+    default :  // EN_PASSANT (type 2): never reaches LowPlyHistory.
+        assert(false && "EN_PASSANT must not reach LowPlyHistory");
+        idx = 0x2000u | low12;
+        break;
+    }
+    assert(idx < LOW_PLY_MOVE_SLOTS);
+    return idx;
+}
+
 static_assert((PAWN_HISTORY_BASE_SIZE & (PAWN_HISTORY_BASE_SIZE - 1)) == 0,
               "PAWN_HISTORY_BASE_SIZE has to be a power of 2");
 
@@ -134,9 +176,9 @@ struct DynStats {
 // see https://www.chessprogramming.org/Butterfly_Boards
 using ButterflyHistory = Stats<std::int16_t, 7183, COLOR_NB, UINT_16_HISTORY_SIZE>;
 
-// LowPlyHistory is addressed by ply and move's from and to squares, used
-// to improve move ordering near the root
-using LowPlyHistory = Stats<std::int16_t, 7183, LOW_PLY_HISTORY_SIZE, UINT_16_HISTORY_SIZE>;
+// LowPlyHistory is addressed by ply and a 15-bit packing of the move,
+// used to improve move ordering near the root. See low_ply_move_index().
+using LowPlyHistory = Stats<std::int16_t, 7183, LOW_PLY_HISTORY_SIZE, LOW_PLY_MOVE_SLOTS>;
 
 // CapturePieceToHistory is addressed by a move's [piece][to][captured piece type]
 using CapturePieceToHistory = Stats<std::int16_t, 10692, PIECE_NB, SQUARE_NB, PIECE_TYPE_NB>;
