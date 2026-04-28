@@ -46,6 +46,15 @@
 
 namespace Stockfish {
 
+constexpr std::size_t ilog2(const std::size_t x) {
+    assert(x >= 1);
+    std::size_t y = x;
+    std::size_t n = 0;
+    while (y >>= 1)
+        ++n;
+    return n;
+}
+
 std::string engine_version_info();
 std::string engine_info(bool to_uci = false);
 std::string compiler_info();
