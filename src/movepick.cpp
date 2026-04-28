@@ -19,7 +19,6 @@
 #include "movepick.h"
 
 #include <cassert>
-#include <limits>
 #include <utility>
 
 #include "bitboard.h"
@@ -57,9 +56,21 @@ enum Stages {
 };
 
 
+// Sort moves in descending order.
+sf_noinline void insertion_sort(ExtMove* begin, ExtMove* end) {
+
+    for (ExtMove* p = begin + 1; p < end; ++p)
+    {
+        ExtMove tmp = *p, *q;
+        for (q = p; q != begin && *(q - 1) < tmp; --q)
+            *q = *(q - 1);
+        *q = tmp;
+    }
+}
+
 // Sort moves in descending order up to and including a given limit.
 // The order of moves smaller than the limit is left unspecified.
-void partial_insertion_sort(ExtMove* begin, ExtMove* end, int limit) {
+sf_noinline void partial_insertion_sort(ExtMove* begin, ExtMove* end, int limit) {
 
     for (ExtMove *sortedEnd = begin, *p = begin + 1; p < end; ++p)
         if (p->value >= limit)
@@ -227,7 +238,7 @@ top:
         cur = endBadCaptures = moves;
         endCur = endCaptures = score<CAPTURES>(ml);
 
-        partial_insertion_sort(cur, endCur, std::numeric_limits<int>::min());
+        insertion_sort(cur, endCur);
         ++stage;
         goto top;
     }
@@ -291,7 +302,7 @@ top:
         cur    = moves;
         endCur = endGenerated = score<EVASIONS>(ml);
 
-        partial_insertion_sort(cur, endCur, std::numeric_limits<int>::min());
+        insertion_sort(cur, endCur);
         ++stage;
         [[fallthrough]];
     }
