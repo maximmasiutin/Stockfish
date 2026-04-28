@@ -139,6 +139,27 @@ ExtMove* MovePicker::score(const MoveList<Type>& ml) {
         threatByLesser[KING]  = 0;
     }
 
+    const Move* mv_end   = nullptr;
+    const Move* mv_ahead = nullptr;
+
+    if constexpr (Type == QUIETS)
+        if (ply < LOW_PLY_HISTORY_SIZE)
+        {
+            mv_end          = ml.end();
+            mv_ahead        = ml.begin();
+            const auto& lph = (*lowPlyHistory)[ply];
+            if (mv_ahead != mv_end)
+            {
+                prefetch(&lph[mv_ahead->raw()]);
+                ++mv_ahead;
+                if (mv_ahead != mv_end)
+                {
+                    prefetch(&lph[mv_ahead->raw()]);
+                    ++mv_ahead;
+                }
+            }
+        }
+
     ExtMove* it = cur;
     for (auto move : ml)
     {
@@ -176,7 +197,15 @@ ExtMove* MovePicker::score(const MoveList<Type>& ml) {
 
 
             if (ply < LOW_PLY_HISTORY_SIZE)
-                m.value += 8 * (*lowPlyHistory)[ply][m.raw()] / (1 + ply);
+            {
+                const auto& lph = (*lowPlyHistory)[ply];
+                m.value += 8 * lph[m.raw()] / (1 + ply);
+                if (mv_ahead != mv_end)
+                {
+                    prefetch(&lph[mv_ahead->raw()]);
+                    ++mv_ahead;
+                }
+            }
         }
 
         else  // Type == EVASIONS
