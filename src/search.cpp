@@ -82,17 +82,24 @@ using SearchedList                  = ValueList<Move, SEARCHEDLIST_CAPACITY>;
 // optimized for require verifications at longer time controls
 
 int correction_value(const Worker& w, const Position& pos, const Stack* const ss) {
-    const Color us     = pos.side_to_move();
-    const auto  m      = (ss - 1)->currentMove;
+    const Color  us = pos.side_to_move();
+    const Move   m  = (ss - 1)->currentMove;
+    const Square to = m.to_sq_unchecked();
+    const Piece  pc = pos.piece_on(to);
+
+    const auto& cch2 = *(ss - 2)->continuationCorrectionHistory;
+    const auto& cch4 = *(ss - 4)->continuationCorrectionHistory;
+    prefetch(&cch2[pc][to]);
+    prefetch(&cch4[pc][to]);
+
     const auto& shared = w.sharedHistory;
     const int   pcv    = shared.pawn_correction_entry(pos)[us].pawn;
     const int   micv   = shared.minor_piece_correction_entry(pos)[us].minor;
     const int   wnpcv  = shared.nonpawn_correction_entry<WHITE>(pos)[us].nonPawnWhite;
     const int   bnpcv  = shared.nonpawn_correction_entry<BLACK>(pos)[us].nonPawnBlack;
-    const int   cntcv =
-      m.is_ok() ? (*(ss - 2)->continuationCorrectionHistory)[pos.piece_on(m.to_sq())][m.to_sq()]
-                    + (*(ss - 4)->continuationCorrectionHistory)[pos.piece_on(m.to_sq())][m.to_sq()]
-                  : 8;
+
+    const int rawSum = cch2[pc][to] + cch4[pc][to];
+    const int cntcv  = 8 + (rawSum - 8) * int(m.is_ok());
 
     return 12153 * pcv + 8620 * micv + 12355 * (wnpcv + bnpcv) + 7982 * cntcv;
 }
@@ -107,8 +114,15 @@ void update_correction_history(const Position& pos,
                                Stack* const    ss,
                                Search::Worker& workerThread,
                                const int       bonus) {
-    const Move  m  = (ss - 1)->currentMove;
-    const Color us = pos.side_to_move();
+    const Move   m  = (ss - 1)->currentMove;
+    const Color  us = pos.side_to_move();
+    const Square to = m.to_sq_unchecked();
+    const Piece  pc = pos.piece_on(to);
+
+    auto& cch2 = *(ss - 2)->continuationCorrectionHistory;
+    auto& cch4 = *(ss - 4)->continuationCorrectionHistory;
+    prefetch(&cch2[pc][to]);
+    prefetch(&cch4[pc][to]);
 
     constexpr int nonPawnWeight = 187;
     auto&         shared        = workerThread.sharedHistory;
@@ -118,13 +132,9 @@ void update_correction_history(const Position& pos,
     shared.nonpawn_correction_entry<WHITE>(pos)[us].nonPawnWhite << bonus * nonPawnWeight / 128;
     shared.nonpawn_correction_entry<BLACK>(pos)[us].nonPawnBlack << bonus * nonPawnWeight / 128;
 
-    if (m.is_ok())
-    {
-        const Square to = m.to_sq();
-        const Piece  pc = pos.piece_on(to);
-        (*(ss - 2)->continuationCorrectionHistory)[pc][to] << bonus * 126 / 128;
-        (*(ss - 4)->continuationCorrectionHistory)[pc][to] << bonus * 63 / 128;
-    }
+    const int gatedBonus = int(m.is_ok()) * bonus;
+    cch2[pc][to] << gatedBonus * 126 / 128;
+    cch4[pc][to] << gatedBonus * 63 / 128;
 }
 
 // Add a small random component to draw evaluations to avoid 3-fold blindness
