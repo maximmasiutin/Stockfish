@@ -19,8 +19,12 @@
 #include "movepick.h"
 
 #include <cassert>
-#include <limits>
+#include <cstdint>
 #include <utility>
+
+#if defined(USE_AVX512ICL)
+    #include <immintrin.h>
+#endif
 
 #include "bitboard.h"
 #include "misc.h"
@@ -57,19 +61,76 @@ enum Stages {
 };
 
 
-// Sort moves in descending order up to and including a given limit.
-// The order of moves smaller than the limit is left unspecified.
-void partial_insertion_sort(ExtMove* begin, ExtMove* end, int limit) {
+#if defined(USE_AVX512ICL)
 
-    for (ExtMove *sortedEnd = begin, *p = begin + 1; p < end; ++p)
-        if (p->value >= limit)
-        {
-            ExtMove tmp = *p, *q;
-            *p          = *++sortedEnd;
-            for (q = sortedEnd; q != begin && *(q - 1) < tmp; --q)
-                *q = *(q - 1);
-            *q = tmp;
-        }
+void swap_with(__m512i& data, __m512i shuffled, __mmask8 Mask) {
+    __m512i max = _mm512_max_epi64(shuffled, data);
+    __m512i min = _mm512_min_epi64(shuffled, data);
+    data        = _mm512_mask_mov_epi64(max, Mask, min);
+}
+
+template<int I0, int I1, int I2, int I3>
+void sort_256(__m256i& data) {
+    __m256i shuffled =
+      _mm256_permutex_epi64(data, I0 << 2 * I1 | I1 << 2 * I0 | I2 << 2 * I3 | I3 << 2 * I2);
+    constexpr __mmask8 Mask = 1 << I1 | 1 << I3;
+    __m256i            max  = _mm256_max_epi64(shuffled, data);
+    __m256i            min  = _mm256_min_epi64(shuffled, data);
+    data                    = _mm256_mask_mov_epi64(max, Mask, min);
+}
+
+template<int I0, int I1, int I2, int I3>
+void sort_512_256(__m512i& data) {
+    __m512i shuffled =
+      _mm512_permutex_epi64(data, I0 << 2 * I1 | I1 << 2 * I0 | I2 << 2 * I3 | I3 << 2 * I2);
+    swap_with(data, shuffled, 0x11 << I1 | 0x11 << I3);
+}
+
+bool simd_sort(ExtMove* begin, ExtMove* end) {
+    if (end - begin <= 1)
+        return true;
+    if (end - begin <= 4)
+    {
+        __mmask8 mask = (1 << (end - begin)) - 1;
+        __m256i  data = _mm256_mask_loadu_epi64(_mm256_set1_epi64x(INT64_MIN), mask, begin);
+        sort_256<0, 2, 1, 3>(data);
+        sort_256<0, 1, 2, 3>(data);
+        sort_256<1, 2, 0, 3>(data);
+        _mm256_mask_storeu_epi64(begin, mask, data);
+        return true;
+    }
+    if (end - begin <= 31)
+    {
+        __mmask8 mask = (__mmask8) ((1U << (end - begin)) - 1);
+        __m512i  data = _mm512_mask_loadu_epi64(_mm512_set1_epi64(INT64_MIN), mask, begin);
+        sort_512_256<0, 2, 1, 3>(data);
+        swap_with(data, _mm512_shuffle_i64x2(data, data, 0b01001110), 0b11110000);
+        sort_512_256<0, 1, 2, 3>(data);
+        swap_with(data, _mm512_shuffle_i64x2(data, data, 0b11011000), 0b11110000);
+        swap_with(data, _mm512_permutexvar_epi64(_mm512_setr_epi64(0, 4, 2, 6, 1, 5, 3, 7), data),
+                  0b11110000);
+        swap_with(data, _mm512_permutexvar_epi64(_mm512_setr_epi64(0, 2, 1, 4, 3, 6, 5, 7), data),
+                  0b11010100);
+        _mm512_mask_storeu_epi64(begin, mask, data);
+        return end - begin <= 8;
+    }
+    return false;
+}
+
+#endif
+
+sf_noinline void insertion_sort(ExtMove* begin, ExtMove* end) {
+#if defined(USE_AVX512ICL)
+    if (simd_sort(begin, end))
+        return;
+#endif
+    for (ExtMove* p = begin + 1; p < end; ++p)
+    {
+        ExtMove tmp = *p, *q;
+        for (q = p; q != begin && *(q - 1) < tmp; --q)
+            *q = *(q - 1);
+        *q = tmp;
+    }
 }
 
 }  // namespace
@@ -121,8 +182,11 @@ MovePicker::MovePicker(const Position& p, Move ttm, int th, const CapturePieceTo
 // Assigns a numerical value to each move in a list, used for sorting.
 // Captures are ordered by Most Valuable Victim (MVV), preferring captures
 // with a good history. Quiets moves are ordered using the history tables.
+// For QUIETS, performs a partition during scoring: moves with value >= partition_quiets
+// are written to the front (encounter order), the rest to the back (reverse encounter
+// order). Returns the partition boundary.
 template<GenType Type>
-ExtMove* MovePicker::score(const MoveList<Type>& ml) {
+ExtMove* MovePicker::score(const MoveList<Type>& ml, [[maybe_unused]] int partition_quiets) {
 
     static_assert(Type == CAPTURES || Type == QUIETS || Type == EVASIONS, "Wrong type");
 
@@ -139,11 +203,12 @@ ExtMove* MovePicker::score(const MoveList<Type>& ml) {
         threatByLesser[KING]  = 0;
     }
 
-    ExtMove* it = cur;
+    ExtMove*                  it  = cur;
+    [[maybe_unused]] ExtMove* end = cur + ml.size() - 1;
     for (auto move : ml)
     {
-        ExtMove& m = *it++;
-        m          = move;
+        ExtMove m;
+        m = move;
 
         const Square    from          = m.from_sq();
         const Square    to            = m.to_sq();
@@ -174,9 +239,15 @@ ExtMove* MovePicker::score(const MoveList<Type>& ml) {
             int v = 20 * (bool(threatByLesser[pt] & from) - bool(threatByLesser[pt] & to));
             m.value += PieceValue[pt] * v;
 
-
             if (ply < LOW_PLY_HISTORY_SIZE)
                 m.value += 8 * (*lowPlyHistory)[ply][m.raw()] / (1 + ply);
+
+            int      should_sort = m.value >= partition_quiets;
+            ExtMove* write       = should_sort ? it : end;
+            it += should_sort;
+            end -= !should_sort;
+            *write = m;
+            continue;
         }
 
         else  // Type == EVASIONS
@@ -186,6 +257,8 @@ ExtMove* MovePicker::score(const MoveList<Type>& ml) {
             else
                 m.value = (*mainHistory)[us][m.raw()] + (*continuationHistory[0])[pc][to];
         }
+
+        *it++ = m;
     }
     return it;
 }
@@ -227,7 +300,7 @@ top:
         cur = endBadCaptures = moves;
         endCur = endCaptures = score<CAPTURES>(ml);
 
-        partial_insertion_sort(cur, endCur, std::numeric_limits<int>::min());
+        insertion_sort(cur, endCur);
         ++stage;
         goto top;
     }
@@ -249,9 +322,9 @@ top:
         {
             MoveList<QUIETS> ml(pos);
 
-            endCur = endGenerated = score<QUIETS>(ml);
-
-            partial_insertion_sort(cur, endCur, -3560 * depth);
+            endCur = endGenerated  = cur + ml.size();
+            ExtMove* partition_end = score<QUIETS>(ml, -3560 * depth);
+            insertion_sort(cur, partition_end);
         }
 
         ++stage;
@@ -291,7 +364,7 @@ top:
         cur    = moves;
         endCur = endGenerated = score<EVASIONS>(ml);
 
-        partial_insertion_sort(cur, endCur, std::numeric_limits<int>::min());
+        insertion_sort(cur, endCur);
         ++stage;
         [[fallthrough]];
     }

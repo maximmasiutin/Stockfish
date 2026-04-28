@@ -21,6 +21,8 @@
 
 #include <algorithm>  // IWYU pragma: keep
 #include <cstddef>
+#include <cstdint>
+#include <cstring>
 
 #include "types.h"
 
@@ -36,17 +38,31 @@ enum GenType {
     LEGAL
 };
 
-struct ExtMove: public Move {
+struct PaddedMove: public Move {
+    uint16_t zero;
+};
+
+struct ExtMove: public PaddedMove {
     int value;
 
-    void operator=(Move m) { data = m.raw(); }
+    void operator=(Move m) {
+        zero = 0;
+        data = m.raw();
+    }
 
     // Inhibit unwanted implicit conversions to Move
     // with an ambiguity that yields to a compile error.
     operator float() const = delete;
 };
 
-inline bool operator<(const ExtMove& f, const ExtMove& s) { return f.value < s.value; }
+namespace {
+[[maybe_unused]] bool operator<(const ExtMove& f, const ExtMove& s) {
+    int64_t f_, s_;
+    std::memcpy(&f_, &f, sizeof(int64_t));
+    std::memcpy(&s_, &s, sizeof(int64_t));
+    return f_ < s_;
+}
+}  // namespace
 
 template<GenType>
 Move* generate(const Position& pos, Move* moveList);
