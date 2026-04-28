@@ -56,6 +56,7 @@ enum Stages {
 };
 
 
+// Sort moves in descending order.
 sf_noinline void insertion_sort(ExtMove* begin, ExtMove* end) {
 
     for (ExtMove* p = begin + 1; p < end; ++p)
@@ -67,6 +68,8 @@ sf_noinline void insertion_sort(ExtMove* begin, ExtMove* end) {
     }
 }
 
+// Sort moves in descending order up to and including a given limit.
+// The order of moves smaller than the limit is left unspecified.
 sf_noinline void partial_insertion_sort(ExtMove* begin, ExtMove* end, int limit) {
 
     for (ExtMove *sortedEnd = begin, *p = begin + 1; p < end; ++p)
