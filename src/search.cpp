@@ -1892,19 +1892,23 @@ void update_all_stats(const Position& pos,
 
 // Updates the continuation histories for the move pairs formed by
 // the current move and the moves played in previous plies.
-void update_continuation_histories(Stack* ss, Piece pc, Square to, int bonus) {
+template<bool InCheck>
+static sf_noinline void
+update_continuation_histories_impl(Stack* ss, Piece pc, Square to, int bonus) {
+
     static constexpr std::array<ConthistBonus, 6> conthist_bonuses = {
       {{1, 1071}, {2, 753}, {3, 329}, {4, 539}, {5, 124}, {6, 434}}};
+
+    // Only update the first 2 continuation histories if we are in check
+    constexpr std::size_t N = InCheck ? 2 : conthist_bonuses.size();
 
     // Multipliers for positive history consistency
     constexpr int CMHCMultipliers[] = {96, 100, 100, 100, 115, 118, 129};
     int           positiveCount     = 0;
 
-    for (const auto [i, weight] : conthist_bonuses)
+    for (std::size_t k = 0; k < N; ++k)
     {
-        // Only update the first 2 continuation histories if we are in check
-        if (ss->inCheck && i > 2)
-            break;
+        const auto [i, weight] = conthist_bonuses[k];
 
         if (((ss - i)->currentMove).is_ok())
         {
@@ -1916,6 +1920,13 @@ void update_continuation_histories(Stack* ss, Piece pc, Square to, int bonus) {
             historyEntry << (bonus * weight * multiplier / 131072) + 73 * (i < 2);
         }
     }
+}
+
+void update_continuation_histories(Stack* ss, Piece pc, Square to, int bonus) {
+    if (ss->inCheck)
+        update_continuation_histories_impl<true>(ss, pc, to, bonus);
+    else
+        update_continuation_histories_impl<false>(ss, pc, to, bonus);
 }
 
 // Updates move sorting heuristics
