@@ -25,6 +25,7 @@
 #include "bitboard.h"
 #include "misc.h"
 #include "position.h"
+#include "sort_instr.h"
 
 namespace Stockfish {
 
@@ -227,6 +228,7 @@ top:
         cur = endBadCaptures = moves;
         endCur = endCaptures = score<CAPTURES>(ml);
 
+        SortInstr::record(0, int(endCur - cur));
         partial_insertion_sort(cur, endCur, std::numeric_limits<int>::min());
         ++stage;
         goto top;
@@ -251,6 +253,16 @@ top:
 
             endCur = endGenerated = score<QUIETS>(ml);
 
+            {
+                int n       = int(endCur - cur);
+                int limit   = -3560 * depth;
+                int n_above = 0;
+                for (ExtMove* p = cur; p < endCur; ++p)
+                    if (p->value >= limit)
+                        ++n_above;
+                SortInstr::record(1, n);
+                SortInstr::record_above(1, n_above);
+            }
             partial_insertion_sort(cur, endCur, -3560 * depth);
         }
 
@@ -291,6 +303,7 @@ top:
         cur    = moves;
         endCur = endGenerated = score<EVASIONS>(ml);
 
+        SortInstr::record(2, int(endCur - cur));
         partial_insertion_sort(cur, endCur, std::numeric_limits<int>::min());
         ++stage;
         [[fallthrough]];

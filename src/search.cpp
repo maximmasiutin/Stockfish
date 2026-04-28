@@ -42,6 +42,7 @@
 #include "nnue/network.h"
 #include "nnue/nnue_accumulator.h"
 #include "position.h"
+#include "sort_instr.h"
 #include "syzygy/tbprobe.h"
 #include "thread.h"
 #include "timeman.h"
@@ -388,6 +389,8 @@ bool Search::Worker::iterative_deepening() {
                 // and we want to keep the same order for all the moves except the
                 // new PV that goes to the front. Note that in the case of MultiPV
                 // search the already searched PV lines are preserved.
+                SortInstr::record(3,
+                                  int((rootMoves.begin() + pvLast) - (rootMoves.begin() + pvIdx)));
                 std::stable_sort(rootMoves.begin() + pvIdx, rootMoves.begin() + pvLast);
 
                 // If search has been stopped, we break immediately. Sorting is
@@ -447,6 +450,8 @@ bool Search::Worker::iterative_deepening() {
             }
 
             // Sort the PV lines searched so far and update the GUI
+            SortInstr::record(4,
+                              int((rootMoves.begin() + pvIdx + 1) - (rootMoves.begin() + pvFirst)));
             std::stable_sort(rootMoves.begin() + pvFirst, rootMoves.begin() + pvIdx + 1);
 
             if (mainThread && !threads.stop && (pvIdx + 1 == multiPV || nodes > NODES_LIMIT_OUTPUT))
@@ -2090,6 +2095,7 @@ void syzygy_extend_pv(const OptionsMap&         options,
 
         // Sort moves according to their above assigned rank.
         // This will break ties for moves with equal DTZ in rank_root_moves.
+        SortInstr::record(5, int(legalMoves.end() - legalMoves.begin()));
         std::stable_sort(
           legalMoves.begin(), legalMoves.end(),
           [](const Search::RootMove& a, const Search::RootMove& b) { return a.tbRank > b.tbRank; });
