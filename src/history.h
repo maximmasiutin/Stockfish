@@ -41,11 +41,18 @@ constexpr int CORRHIST_BASE_SIZE       = UINT_16_HISTORY_SIZE;
 constexpr int CORRECTION_HISTORY_LIMIT = 1024;
 constexpr int LOW_PLY_HISTORY_SIZE     = 5;
 
+constexpr int      HASHED_CONTCORR_INDEX_BITS = 17;
+constexpr size_t   HASHED_CONTCORR_BASE_SIZE  = size_t(1) << HASHED_CONTCORR_INDEX_BITS;
+constexpr uint32_t HASHED_CONTCORR_INDEX_MASK = uint32_t(HASHED_CONTCORR_BASE_SIZE - 1);
+
 static_assert((PAWN_HISTORY_BASE_SIZE & (PAWN_HISTORY_BASE_SIZE - 1)) == 0,
               "PAWN_HISTORY_BASE_SIZE has to be a power of 2");
 
 static_assert((CORRHIST_BASE_SIZE & (CORRHIST_BASE_SIZE - 1)) == 0,
               "CORRHIST_BASE_SIZE has to be a power of 2");
+
+static_assert((HASHED_CONTCORR_BASE_SIZE & (HASHED_CONTCORR_BASE_SIZE - 1)) == 0,
+              "HASHED_CONTCORR_BASE_SIZE has to be a power of 2");
 
 // StatsEntry is the container of various numerical statistics. We use a class
 // instead of a naked value to directly call history update operator<<() on
@@ -214,6 +221,104 @@ template<CorrHistType T>
 using CorrectionHistory = typename Detail::CorrHistTypedef<T>::type;
 
 using TTMoveHistory = StatsEntry<std::int16_t, 8192>;
+
+struct alignas(2) HashedContCorrSlot {
+    using Tag = std::uint8_t;
+
+    static constexpr int     TAG_BITS = 5;
+    static constexpr Tag     TAG_MASK = Tag((1u << TAG_BITS) - 1);
+    static constexpr int16_t INIT     = 6;
+    static constexpr int16_t NOK      = 8;
+
+    static constexpr int WORD_BITS  = 16;
+    static constexpr int VALUE_BITS = WORD_BITS - TAG_BITS;
+    static constexpr int VALUE_MAX  = (1 << (VALUE_BITS - 1)) - 1;
+    static constexpr int VALUE_MIN  = -(1 << (VALUE_BITS - 1));
+
+    static constexpr std::size_t GRAVITY_SHIFT_BITS = ilog2(std::size_t(CORRECTION_HISTORY_LIMIT));
+
+    static_assert(VALUE_BITS == 11, "HashedContCorrSlot value field must be 11 bits");
+    static_assert(CORRECTION_HISTORY_LIMIT <= 1024,
+                  "value is an 11-bit saturated signed field; widen the field or "
+                  "lower CORRECTION_HISTORY_LIMIT if this grows");
+    static_assert((std::size_t(1) << GRAVITY_SHIFT_BITS) == std::size_t(CORRECTION_HISTORY_LIMIT),
+                  "CORRECTION_HISTORY_LIMIT must be a power of 2 for shift-based gravity");
+
+    std::uint16_t word;
+
+    static inline sf_always_inline constexpr std::uint16_t pack(int v, Tag t) {
+        return std::uint16_t((std::uint32_t(v) << TAG_BITS) | std::uint32_t(t));
+    }
+    static inline sf_always_inline constexpr std::uint16_t empty_data() {
+        return pack(INIT, Tag(0));
+    }
+
+    static inline sf_always_inline constexpr int extract(std::uint16_t w, Tag t) {
+        const std::uint32_t u         = std::uint32_t(std::uint16_t(w));
+        const std::uint32_t storedTag = u & std::uint32_t(TAG_MASK);
+        const int           v         = int(std::int16_t(w)) >> TAG_BITS;
+        const std::uint32_t mask      = std::uint32_t(-std::int32_t(storedTag != std::uint32_t(t)));
+        return int(int32_t((std::uint32_t(v) & ~mask) | (std::uint32_t(INIT) & mask)));
+    }
+
+    static inline sf_always_inline int read(std::uint16_t w, Tag t) { return extract(w, t); }
+
+    static inline sf_always_inline void update(HashedContCorrSlot& s, Tag t, int b) {
+        assert((t & ~TAG_MASK) == 0);
+        assert(std::abs(b) <= CORRECTION_HISTORY_LIMIT);
+        const std::uint16_t oldWord      = s.word;
+        const int           u            = int(std::int16_t(oldWord));
+        const int           storedTag    = u & int(TAG_MASK);
+        const int           v_old        = u >> TAG_BITS;
+        const Tag           effectiveTag = (b != 0) ? t : Tag(storedTag);
+        const bool          tagMatch     = (storedTag == int(effectiveTag));
+        int                 v            = tagMatch ? v_old : int(INIT);
+        v                                = v + b - ((v * std::abs(b)) >> GRAVITY_SHIFT_BITS);
+        v                                = std::min(v, int(VALUE_MAX));
+        assert(VALUE_MIN <= v && v <= VALUE_MAX);
+        const std::uint16_t newWord   = pack(v, effectiveTag);
+        const bool          gateAllow = tagMatch || std::abs(v) > std::abs(v_old);
+        s.word                        = gateAllow ? newWord : oldWord;
+    }
+};
+static_assert(sizeof(HashedContCorrSlot) == 2, "HashedContCorrSlot must be 2 bytes");
+static_assert(HashedContCorrSlot::extract(HashedContCorrSlot::empty_data(),
+                                          HashedContCorrSlot::Tag(0))
+                == HashedContCorrSlot::INIT,
+              "empty_data must return INIT for tag 0");
+static_assert(HashedContCorrSlot::extract(HashedContCorrSlot::empty_data(),
+                                          HashedContCorrSlot::Tag(1))
+                == HashedContCorrSlot::INIT,
+              "empty_data must return INIT for non-zero tag");
+static_assert(HashedContCorrSlot::extract(HashedContCorrSlot::pack(HashedContCorrSlot::VALUE_MAX,
+                                                                   HashedContCorrSlot::Tag(1)),
+                                          HashedContCorrSlot::Tag(1))
+                == HashedContCorrSlot::VALUE_MAX,
+              "pack/extract round-trip positive VALUE_MAX");
+static_assert(HashedContCorrSlot::extract(HashedContCorrSlot::pack(HashedContCorrSlot::VALUE_MIN,
+                                                                   HashedContCorrSlot::Tag(1)),
+                                          HashedContCorrSlot::Tag(1))
+                == HashedContCorrSlot::VALUE_MIN,
+              "pack/extract round-trip negative VALUE_MIN");
+
+struct HashedContCorrReadAccess {
+    const HashedContCorrSlot* slot;
+    HashedContCorrSlot::Tag   tag;
+
+    inline sf_always_inline int read() const { return HashedContCorrSlot::read(slot->word, tag); }
+    inline sf_always_inline     operator int() const { return read(); }
+};
+
+struct HashedContCorrAccess {
+    HashedContCorrSlot*     slot;
+    HashedContCorrSlot::Tag tag;
+
+    inline sf_always_inline void operator<<(int bonus) {
+        HashedContCorrSlot::update(*slot, tag, bonus);
+    }
+};
+
+using HashedContCorrHistory = std::array<HashedContCorrSlot, HASHED_CONTCORR_BASE_SIZE>;
 
 // Set of histories shared between groups of threads. To avoid excessive
 // cross-node data transfer, histories are shared only between threads
