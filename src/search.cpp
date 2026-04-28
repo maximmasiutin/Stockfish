@@ -1893,7 +1893,8 @@ void update_all_stats(const Position& pos,
 // Updates the continuation histories for the move pairs formed by
 // the current move and the moves played in previous plies.
 template<bool InCheck>
-static void update_continuation_histories_impl(Stack* ss, Piece pc, Square to, int bonus) {
+static sf_noinline void
+update_continuation_histories_impl(Stack* ss, Piece pc, Square to, int bonus) {
 
     static constexpr std::array<ConthistBonus, 6> conthist_bonuses = {
       {{1, 1071}, {2, 753}, {3, 329}, {4, 539}, {5, 124}, {6, 434}}};
