@@ -139,6 +139,14 @@ ExtMove* MovePicker::score(const MoveList<Type>& ml) {
         threatByLesser[KING]  = 0;
     }
 
+    if constexpr (Type == QUIETS)
+        if (ply < LOW_PLY_HISTORY_SIZE)
+        {
+            const auto& lph = (*lowPlyHistory)[ply];
+            for (const auto& mv : ml)
+                prefetch(&lph[mv.raw()]);
+        }
+
     ExtMove* it = cur;
     for (auto move : ml)
     {
