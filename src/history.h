@@ -41,6 +41,40 @@ constexpr int CORRHIST_BASE_SIZE       = UINT_16_HISTORY_SIZE;
 constexpr int CORRECTION_HISTORY_LIMIT = 1024;
 constexpr int LOW_PLY_HISTORY_SIZE     = 5;
 
+// Linear-base packing of Move::raw() for LowPlyHistory. base[type] = type << 13
+// places NORMAL at [0x0000, 0x1000), PROMOTION at [0x2000, 0x6000) (with promo
+// piece selecting the sub-bucket via raw bits 12-13), CASTLING at [0x6000, 0x7000).
+// EN_PASSANT cannot reach this table by phase invariant (see low_ply_move_index).
+constexpr int LOW_PLY_MOVE_BITS  = 15;
+constexpr int LOW_PLY_MOVE_SLOTS = 1 << LOW_PLY_MOVE_BITS;
+
+// Domain tags carried at the call site, naming which Move types and promotion
+// pieces the surrounding phase can produce.
+namespace LowPlyDomain {
+struct QuietsPhase {};  // {NORMAL, under-PROMOTION (KNIGHT/BISHOP/ROOK), CASTLING}
+}  // never EN_PASSANT, never QUEEN-promotion
+
+// Branchless 3-cycle index. The single subtraction realises base[type] = type<<13
+// because (r & 0xC000) >> 1 equals type<<13 placed at the same bit positions.
+// Move::make<>() leaves bits 12-13 of r at 0 for non-PROMOTION moves, so those
+// bits already carry the promo piece for PROMOTION and contribute 0 elsewhere.
+template<typename Domain>
+std::size_t low_ply_move_index(Move m) {
+    static_assert(std::is_same_v<Domain, LowPlyDomain::QuietsPhase>,
+                  "Add a new LowPlyDomain tag to extend the reachable set");
+
+    if constexpr (std::is_same_v<Domain, LowPlyDomain::QuietsPhase>)
+    {
+        assert(m.type_of() != EN_PASSANT);
+        assert(m.type_of() != PROMOTION || m.promotion_type() != QUEEN);
+    }
+
+    const std::uint32_t r   = m.raw();
+    const std::size_t   idx = r - ((r & 0xC000u) >> 1);
+    assert(idx < std::size_t(LOW_PLY_MOVE_SLOTS));
+    return idx;
+}
+
 static_assert((PAWN_HISTORY_BASE_SIZE & (PAWN_HISTORY_BASE_SIZE - 1)) == 0,
               "PAWN_HISTORY_BASE_SIZE has to be a power of 2");
 
@@ -134,9 +168,9 @@ struct DynStats {
 // see https://www.chessprogramming.org/Butterfly_Boards
 using ButterflyHistory = Stats<std::int16_t, 7183, COLOR_NB, UINT_16_HISTORY_SIZE>;
 
-// LowPlyHistory is addressed by ply and move's from and to squares, used
-// to improve move ordering near the root
-using LowPlyHistory = Stats<std::int16_t, 7183, LOW_PLY_HISTORY_SIZE, UINT_16_HISTORY_SIZE>;
+// LowPlyHistory is addressed by ply and a 15-bit linear-base packing of the
+// move (see low_ply_move_index), used to improve move ordering near the root.
+using LowPlyHistory = Stats<std::int16_t, 7183, LOW_PLY_HISTORY_SIZE, LOW_PLY_MOVE_SLOTS>;
 
 // CapturePieceToHistory is addressed by a move's [piece][to][captured piece type]
 using CapturePieceToHistory = Stats<std::int16_t, 10692, PIECE_NB, SQUARE_NB, PIECE_TYPE_NB>;
