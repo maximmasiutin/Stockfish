@@ -19,8 +19,13 @@
 #include "movepick.h"
 
 #include <cassert>
+#include <cstddef>
 #include <limits>
 #include <utility>
+
+#if defined(USE_AVX512ICL)
+    #include <immintrin.h>
+#endif
 
 #include "bitboard.h"
 #include "misc.h"
@@ -59,9 +64,37 @@ enum Stages {
 
 // Sort moves in descending order up to and including a given limit.
 // The order of moves smaller than the limit is left unspecified.
+// AVX-512-ICL vectorizes only the above-limit scan; inner shift is scalar.
 void partial_insertion_sort(ExtMove* begin, ExtMove* end, int limit) {
 
-    for (ExtMove *sortedEnd = begin, *p = begin + 1; p < end; ++p)
+    ExtMove* sortedEnd = begin;
+
+#if defined(USE_AVX512ICL)
+    static_assert(sizeof(ExtMove) == 8 && offsetof(ExtMove, value) == 4,
+                  "AVX-512 path assumes ExtMove is 8 bytes with value in high 32 bits");
+    int N = (int) (end - begin);
+    // vpcmpge against limit per 8-element chunk; iterate set bits with lsb.
+    __m512i lim_v = _mm512_set1_epi64(limit);
+    int     off   = 1;
+    for (; off + 8 <= N; off += 8)
+    {
+        __m512i  data   = _mm512_loadu_si512((const void*) (begin + off));
+        __m512i  values = _mm512_srai_epi64(data, 32);
+        __mmask8 ge     = _mm512_cmpge_epi64_mask(values, lim_v);
+        while (ge)
+        {
+            int bit      = lsb(Bitboard(ge));
+            ge           = (__mmask8) (ge & (ge - 1));
+            ExtMove* p   = begin + off + bit;
+            ExtMove  tmp = *p, *q;
+            *p           = *++sortedEnd;
+            for (q = sortedEnd; q != begin && *(q - 1) < tmp; --q)
+                *q = *(q - 1);
+            *q = tmp;
+        }
+    }
+    // Scalar tail.
+    for (ExtMove* p = begin + off; p < end; ++p)
         if (p->value >= limit)
         {
             ExtMove tmp = *p, *q;
@@ -70,6 +103,17 @@ void partial_insertion_sort(ExtMove* begin, ExtMove* end, int limit) {
                 *q = *(q - 1);
             *q = tmp;
         }
+#else
+    for (ExtMove* p = begin + 1; p < end; ++p)
+        if (p->value >= limit)
+        {
+            ExtMove tmp = *p, *q;
+            *p          = *++sortedEnd;
+            for (q = sortedEnd; q != begin && *(q - 1) < tmp; --q)
+                *q = *(q - 1);
+            *q = tmp;
+        }
+#endif
 }
 
 }  // namespace
