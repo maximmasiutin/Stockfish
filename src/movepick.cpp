@@ -18,9 +18,16 @@
 
 #include "movepick.h"
 
+#include <algorithm>
 #include <cassert>
+#include <cstddef>
+#include <cstring>
 #include <limits>
 #include <utility>
+
+#if defined(USE_AVX512ICL)
+    #include <immintrin.h>
+#endif
 
 #include "bitboard.h"
 #include "misc.h"
@@ -57,19 +64,70 @@ enum Stages {
 };
 
 
-// Sort moves in descending order up to and including a given limit.
-// The order of moves smaller than the limit is left unspecified.
+// Stable-partition variant: above-limit moves to front in encounter order,
+// below-limit to back in encounter order, then insertion-sort the prefix.
+// Bench-equal across archs; differs from master's displacement-chain suffix.
 void partial_insertion_sort(ExtMove* begin, ExtMove* end, int limit) {
 
-    for (ExtMove *sortedEnd = begin, *p = begin + 1; p < end; ++p)
-        if (p->value >= limit)
+    int N = (int) (end - begin);
+    if (N <= 1)
+        return;
+    assert(N <= MAX_MOVES);
+
+    ExtMove tmp[MAX_MOVES];
+    int     n_above = 0;
+
+#if defined(USE_AVX512ICL)
+    static_assert(sizeof(ExtMove) == 8 && offsetof(ExtMove, value) == 4,
+                  "AVX-512 path assumes ExtMove is 8 bytes with value in high 32 bits");
+    if (N <= 64)
+    {
+        // vpcompressq partition per 8-lane chunk; value field = high 32 bits of i64.
+        ExtMove* above   = tmp;
+        ExtMove* below   = tmp + N;  // staging region for below[], compacted later.
+        int      n_below = 0;
+        __m512i  lim_v   = _mm512_set1_epi64(limit);
+        for (int off = 0; off < N; off += 8)
         {
-            ExtMove tmp = *p, *q;
-            *p          = *++sortedEnd;
-            for (q = sortedEnd; q != begin && *(q - 1) < tmp; --q)
-                *q = *(q - 1);
-            *q = tmp;
+            int      chunk_n = std::min(8, N - off);
+            __mmask8 valid   = (__mmask8) ((1U << chunk_n) - 1);
+            __m512i  data    = _mm512_maskz_loadu_epi64(valid, (const void*) (begin + off));
+            __m512i  values  = _mm512_srai_epi64(data, 32);
+            __mmask8 ge      = _mm512_mask_cmpge_epi64_mask(valid, values, lim_v);
+            __mmask8 lt      = (__mmask8) (valid & ~ge);
+            int      n_ge    = popcount(Bitboard(ge));
+            int      n_lt    = popcount(Bitboard(lt));
+            _mm512_mask_compressstoreu_epi64(above + n_above, ge, data);
+            n_above += n_ge;
+            _mm512_mask_compressstoreu_epi64(below + n_below, lt, data);
+            n_below += n_lt;
         }
+        // above[0..n_above) and below[N..N+n_below) are non-overlapping.
+        std::memcpy(tmp + n_above, below, (size_t) n_below * sizeof(ExtMove));
+    }
+    else
+#endif
+    {
+        // Scalar partition (universal fallback; also runs on non-ICL).
+        for (int i = 0; i < N; i++)
+            if (begin[i].value >= limit)
+                tmp[n_above++] = begin[i];
+        int n_below_scalar = n_above;
+        for (int i = 0; i < N; i++)
+            if (begin[i].value < limit)
+                tmp[n_below_scalar++] = begin[i];
+    }
+
+    std::memcpy(begin, tmp, (size_t) N * sizeof(ExtMove));
+
+    // Phase 2: stable insertion sort of [begin..begin+n_above) descending.
+    for (ExtMove* p = begin + 1; p < begin + n_above; ++p)
+    {
+        ExtMove t = *p, *q;
+        for (q = p; q != begin && (q - 1)->value < t.value; --q)
+            *q = *(q - 1);
+        *q = t;
+    }
 }
 
 }  // namespace
