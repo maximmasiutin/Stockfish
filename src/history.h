@@ -41,11 +41,42 @@ constexpr int CORRHIST_BASE_SIZE       = UINT_16_HISTORY_SIZE;
 constexpr int CORRECTION_HISTORY_LIMIT = 1024;
 constexpr int LOW_PLY_HISTORY_SIZE     = 5;
 
+// Tag-free perfect hash for LowPlyHistory's move axis. The multiplier is
+// brute-force selected to be collision-free over the entire piece-pseudo-legal
+// QUIETS-phase Move::raw() universe (1928 raws: bishop diagonals + rook lines
+// + knight L for NORMAL, plus 132 under-promotions, plus 4 castlings).
+constexpr int           LOW_PLY_HASH_BITS  = 13;
+constexpr int           LOW_PLY_HASH_SLOTS = 1 << LOW_PLY_HASH_BITS;
+constexpr std::uint32_t LOW_PLY_HASH_M     = 0x12a7621du;
+
+namespace LowPlyDomain {
+struct QuietsPhase {};  // {NORMAL, under-PROMOTION (KNIGHT/BISHOP/ROOK), CASTLING}
+}  // never EN_PASSANT, never QUEEN-promotion
+
+template<typename Domain>
+std::uint32_t low_ply_index(Move m) {
+    static_assert(std::is_same_v<Domain, LowPlyDomain::QuietsPhase>,
+                  "Add a new LowPlyDomain tag to extend the reachable set");
+
+    if constexpr (std::is_same_v<Domain, LowPlyDomain::QuietsPhase>)
+    {
+        assert(m.type_of() != EN_PASSANT);
+        assert(m.type_of() != PROMOTION || m.promotion_type() != QUEEN);
+    }
+
+    const std::uint32_t idx = (std::uint32_t(m.raw()) * LOW_PLY_HASH_M) >> (32 - LOW_PLY_HASH_BITS);
+    assert(idx < std::uint32_t(LOW_PLY_HASH_SLOTS));
+    return idx;
+}
+
 static_assert((PAWN_HISTORY_BASE_SIZE & (PAWN_HISTORY_BASE_SIZE - 1)) == 0,
               "PAWN_HISTORY_BASE_SIZE has to be a power of 2");
 
 static_assert((CORRHIST_BASE_SIZE & (CORRHIST_BASE_SIZE - 1)) == 0,
               "CORRHIST_BASE_SIZE has to be a power of 2");
+
+static_assert((LOW_PLY_HASH_SLOTS & (LOW_PLY_HASH_SLOTS - 1)) == 0,
+              "LOW_PLY_HASH_SLOTS has to be a power of 2");
 
 // StatsEntry is the container of various numerical statistics. We use a class
 // instead of a naked value to directly call history update operator<<() on
@@ -134,9 +165,9 @@ struct DynStats {
 // see https://www.chessprogramming.org/Butterfly_Boards
 using ButterflyHistory = Stats<std::int16_t, 7183, COLOR_NB, UINT_16_HISTORY_SIZE>;
 
-// LowPlyHistory is addressed by ply and move's from and to squares, used
-// to improve move ordering near the root
-using LowPlyHistory = Stats<std::int16_t, 7183, LOW_PLY_HISTORY_SIZE, UINT_16_HISTORY_SIZE>;
+// LowPlyHistory is addressed by ply and a tag-free perfect hash of the move
+// (see low_ply_index), used to improve move ordering near the root.
+using LowPlyHistory = Stats<std::int16_t, 7183, LOW_PLY_HISTORY_SIZE, LOW_PLY_HASH_SLOTS>;
 
 // CapturePieceToHistory is addressed by a move's [piece][to][captured piece type]
 using CapturePieceToHistory = Stats<std::int16_t, 10692, PIECE_NB, SQUARE_NB, PIECE_TYPE_NB>;
