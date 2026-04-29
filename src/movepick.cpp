@@ -23,6 +23,7 @@
 #include <utility>
 
 #include "bitboard.h"
+#include "lowply_instr.h"
 #include "misc.h"
 #include "position.h"
 
@@ -176,7 +177,10 @@ ExtMove* MovePicker::score(const MoveList<Type>& ml) {
 
 
             if (ply < LOW_PLY_HISTORY_SIZE)
+            {
+                LowPlyInstr::record_read(ply, m.raw());
                 m.value += 8 * (*lowPlyHistory)[ply][m.raw()] / (1 + ply);
+            }
         }
 
         else  // Type == EVASIONS

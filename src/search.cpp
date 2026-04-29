@@ -36,6 +36,7 @@
 #include "bitboard.h"
 #include "evaluate.h"
 #include "history.h"
+#include "lowply_instr.h"
 #include "misc.h"
 #include "movegen.h"
 #include "movepick.h"
@@ -1927,7 +1928,10 @@ void update_quiet_histories(
     workerThread.mainHistory[us][move.raw()] << bonus;  // Untuned to prevent duplicate effort
 
     if (ss->ply < LOW_PLY_HISTORY_SIZE)
+    {
+        LowPlyInstr::record_write(ss->ply, move.raw());
         workerThread.lowPlyHistory[ss->ply][move.raw()] << bonus * 682 / 1024;
+    }
 
     update_continuation_histories(ss, pos.moved_piece(move), move.to_sq(), bonus * 894 / 1024);
 
