@@ -18,14 +18,19 @@
 
 #include "movegen.h"
 
+#include <array>
 #include <cassert>
+#include <cstddef>
+#include <cstdint>
 #include <initializer_list>
 
 #include "bitboard.h"
+#include "history.h"
+#include "misc.h"
 #include "position.h"
+#include "types.h"
 
 #if defined(USE_AVX512ICL)
-    #include <array>
     #include <algorithm>
     #include <immintrin.h>
 #endif
@@ -284,6 +289,134 @@ Move* generate<LEGAL>(const Position& pos, Move* moveList) {
             ++cur;
 
     return moveList;
+}
+
+namespace {
+
+// 32-entry hot-set lookup for the highest-frequency Move::raw values observed
+// in QUIETS scoring. Greedy-fill multiply-shift hash; on hit, return the
+// precomputed slot directly and skip the tier dispatch. On miss, fall through
+// to the formula below. Tags and addresses generated offline from per-cell
+// access counters; for each fitted tag, the address equals the value the tier
+// formula below would return, so a hit is observationally indistinguishable
+// from running the formula.
+//
+// 29 of the top-32 raws fit (93.7% of top-32 access volume); 3 raws collide
+// and fall through to the formula. Empty slots use 0xFFFF, which never
+// matches a legal Move::raw() since CASTLING requires from != to.
+constexpr std::uint32_t HOTSET_HASH_M = 0xe858e7edu;
+constexpr unsigned int  HOTSET_HASH_S = 18u;
+
+struct alignas(128) HotsetTable {
+    std::array<std::uint16_t, 32> tag;
+    std::array<std::uint16_t, 32> addr;
+};
+
+// 128 bytes total, aligned to 128 so the entire payload sits in two
+// consecutive 64-byte cache lines and never crosses a 4 KiB page boundary.
+constexpr HotsetTable hotset = {
+  std::array<std::uint16_t, 32>{0x0de7, 0x035d, 0x0459, 0x0c61, 0x018f, 0x039e, 0x0185, 0x0ba6,
+                                0x0d6d, 0x0218, 0x03df, 0xffff, 0xffff, 0x0dae, 0x0259, 0x0355,
+                                0x0c28, 0x0def, 0x0187, 0x0396, 0xffff, 0x0c69, 0x0d65, 0x0210,
+                                0x03d7, 0x059e, 0x0fbf, 0x0da6, 0x0251, 0x0b24, 0x0e39, 0x0c20},
+  std::array<std::uint16_t, 32>{31, 11, 36,  19, 152, 13, 145, 91, 26, 1,  15,  0,  0, 28, 3,   10,
+                                16, 30, 151, 12, 0,   18, 27,  0,  14, 56, 215, 29, 2, 83, 167, 17},
+};
+
+}  // namespace
+
+// Frequency-aware LowPlyHistory address. A 32-entry hot-set covers ~12% of
+// total accesses with one multiply-shift hash + tag compare; misses fall
+// through to a tier-based formula reordered so the most common case (NORMAL
+// same-file pawn push) returns first.
+sf_noinline std::size_t low_ply_freq_index(Move m) {
+    const std::uint32_t r = m.raw();
+
+    // Hot-set lookup: greedy-filled top-frequency raws. On miss, fall through.
+    {
+        const std::uint32_t idx = ((r * HOTSET_HASH_M) >> HOTSET_HASH_S) & 0x1Fu;
+        if (hotset.tag[idx] == r)
+            return hotset.addr[idx];
+    }
+
+    // NORMAL move (top 2 bits of raw == 0): hot path.
+    if (r < 0x4000u)
+    {
+        const std::uint32_t from = (r >> 6) & 0x3Fu;
+        const std::uint32_t to   = r & 0x3Fu;
+        const std::uint32_t ff   = from & 7u;
+        const std::uint32_t tf   = to & 7u;
+
+        // Same-file => pawn-push candidate (tier 0 / tier 1).
+        if (ff == tf)
+        {
+            const std::uint32_t fr = from >> 3;
+            const std::uint32_t tr = to >> 3;
+
+            // White single push (fr in [1,5], tr=fr+1): tier 0 if fr=1, else tier 1.
+            if (fr >= 1u && fr <= 5u && tr == fr + 1u)
+            {
+                if (fr == 1u)
+                    return ff * 2u;
+                return 32u + ff * 4u + (fr - 2u);
+            }
+            // Black single push (fr in [2,6], tr=fr-1): tier 0 if fr=6, else tier 1.
+            if (fr >= 2u && fr <= 6u && tr + 1u == fr)
+            {
+                if (fr == 6u)
+                    return 16u + ff * 2u;
+                return 64u + ff * 4u + (fr - 2u);
+            }
+            // White init double push (fr=1, tr=3).
+            if (fr == 1u && tr == 3u)
+                return ff * 2u + 1u;
+            // Black init double push (fr=6, tr=4).
+            if (fr == 6u && tr == 4u)
+                return 16u + ff * 2u + 1u;
+        }
+
+        // Tier 2: back-rank chebyshev-1 single-step (king and adjacent piece moves).
+        const std::uint32_t fr = from >> 3;
+        if (fr == 0u || fr == 7u)
+        {
+            const std::uint32_t tr    = to >> 3;
+            const int           fdiff = static_cast<int>(tf) - static_cast<int>(ff);
+            const int           rdiff = static_cast<int>(tr) - static_cast<int>(fr);
+            if (fdiff >= -1 && fdiff <= 1 && rdiff >= -1 && rdiff <= 1
+                && (fdiff != 0 || rdiff != 0))
+            {
+                const std::uint32_t color = fr >> 2;
+                const std::uint32_t dest  = static_cast<std::uint32_t>(fdiff + 1) * 3u
+                                         + static_cast<std::uint32_t>(rdiff + 1);
+                return 96u + color * 64u + ff * 8u + dest;
+            }
+        }
+
+        // Tier 3: rest of NORMAL with (from << 6) | to ordering.
+        return 224u + ((from << 6) | to);
+    }
+
+    const std::uint32_t type = (r >> 14) & 3u;
+    // PROMOTION: QUIETS-only invariant -> promo in {0,1,2} (queen goes via
+    // CAPTURES); file*3+promo packs into [0, 24). boardHalf = from>>5.
+    if (type == 1u)
+    {
+        const std::uint32_t from      = (r >> 6) & 0x3Fu;
+        const std::uint32_t promo     = (r >> 12) & 3u;
+        const std::uint32_t boardHalf = from >> 5;
+        const std::uint32_t file      = from & 7u;
+        return 4320u + (boardHalf << 5) + file * 3u + promo;
+    }
+
+    // CASTLING (type=3): Chess960-safe side bit via file comparison. EN_PASSANT
+    // (type=2) is generated only by CAPTURES/EVASIONS/NON_EVASIONS movegen and
+    // never reaches this QUIETS-only path.
+    assert(type == 3u);
+    const std::uint32_t from  = (r >> 6) & 0x3Fu;
+    const std::uint32_t to    = r & 0x3Fu;
+    const std::uint32_t color = from >> 5;
+    const std::uint32_t side  = static_cast<std::uint32_t>((to & 7u) > (from & 7u));
+    return 4384u + color * 2u + side;
 }
 
 }  // namespace Stockfish
