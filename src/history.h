@@ -134,9 +134,55 @@ struct DynStats {
 // see https://www.chessprogramming.org/Butterfly_Boards
 using ButterflyHistory = Stats<std::int16_t, 7183, COLOR_NB, UINT_16_HISTORY_SIZE>;
 
-// LowPlyHistory is addressed by ply and move's from and to squares, used
-// to improve move ordering near the root
-using LowPlyHistory = Stats<std::int16_t, 7183, LOW_PLY_HISTORY_SIZE, UINT_16_HISTORY_SIZE>;
+// LowPlyHistory: ply x compact bijective move packing into 4160 slots.
+// NORMAL keeps (from << 6) | to in [0, 4096), preserving per-pass cache-line
+// reuse. Non-NORMAL is bucketed by side-to-move into two 32-slot lines.
+constexpr std::size_t LOW_PLY_NORMAL_SLOTS = 4096;
+constexpr std::size_t LOW_PLY_COLOR_SLOTS  = 32;  // one cache line per color
+constexpr std::size_t LOW_PLY_MOVE_SLOTS   = LOW_PLY_NORMAL_SLOTS + 2 * LOW_PLY_COLOR_SLOTS;
+
+inline std::size_t low_ply_move_index(Move m) {
+    const std::uint32_t r     = m.raw();
+    const std::uint32_t type  = (r >> 14) & 3u;
+    const std::uint32_t low12 = r & 0xFFFu;
+
+    if (type == 0)  // NORMAL: ~99% of accesses, locality-preserving fast path
+        return low12;
+
+    const std::uint32_t from = (r >> 6) & 0x3Fu;
+
+    // Side-to-move: 0 = white, 1 = black. PROMOTION-from is on rank 7 for
+    // white (bit 5 = 1) and rank 2 for black (bit 5 = 0); CASTLING-from is
+    // E1 for white (bit 5 = 0) and E8 for black (bit 5 = 1). The two types
+    // therefore use opposite polarities of the same bit.
+    const std::uint32_t bit5  = from >> 5;
+    const std::uint32_t color = (type == 1) ? (1u - bit5) : bit5;
+    const std::uint32_t base  = LOW_PLY_NORMAL_SLOTS + (color << 5);
+
+    if (type == 1)  // PROMOTION: 8 files * 3 promo pieces = 24 entries per color
+    {
+        const std::uint32_t promo = (r >> 12) & 3u;
+        // QUIETS movegen never emits QUEEN promotions; that case would collide
+        // with the CASTLING bucket at file*3 + 3.
+        assert(promo < 3u && "QUEEN promotion must not reach LowPlyHistory");
+        const std::uint32_t file = from & 7u;
+        return base + file * 3u + promo;  // [base + 0, base + 24)
+    }
+
+    if (type == 3)  // CASTLING: 2 entries per color (queenside, kingside)
+    {
+        // Rook is encoded in `to`, king in `from`; comparing their files
+        // gives the side bit and stays correct under Chess960 placements.
+        const std::uint32_t to       = r & 0x3Fu;
+        const std::uint32_t side_bit = std::uint32_t((to & 7u) > (from & 7u));
+        return base + 24u + side_bit;  // [base + 24, base + 26)
+    }
+
+    assert(false && "EN_PASSANT must not reach LowPlyHistory");
+    return 0;
+}
+
+using LowPlyHistory = Stats<std::int16_t, 7183, LOW_PLY_HISTORY_SIZE, LOW_PLY_MOVE_SLOTS>;
 
 // CapturePieceToHistory is addressed by a move's [piece][to][captured piece type]
 using CapturePieceToHistory = Stats<std::int16_t, 10692, PIECE_NB, SQUARE_NB, PIECE_TYPE_NB>;
