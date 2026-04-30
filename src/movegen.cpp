@@ -19,9 +19,13 @@
 #include "movegen.h"
 
 #include <cassert>
+#include <cstddef>
+#include <cstdint>
 #include <initializer_list>
 
 #include "bitboard.h"
+#include "history.h"
+#include "misc.h"
 #include "position.h"
 
 #if defined(USE_AVX512ICL)
@@ -284,6 +288,23 @@ Move* generate<LEGAL>(const Position& pos, Move* moveList) {
             ++cur;
 
     return moveList;
+}
+
+sf_noinline std::size_t low_ply_freq_index_special(std::uint32_t r) {
+    const std::uint32_t type = (r >> 14) & 3u;
+    if (type == 1u)
+    {
+        const std::uint32_t from  = (r >> 6) & 0x3Fu;
+        const std::uint32_t promo = (r >> 12) & 3u;
+        const std::uint32_t color = from >> 5;
+        const std::uint32_t file  = from & 7u;
+        return 4320u + (color << 5) + file * 3u + promo;
+    }
+    const std::uint32_t from  = (r >> 6) & 0x3Fu;
+    const std::uint32_t to    = r & 0x3Fu;
+    const std::uint32_t color = from >> 5;
+    const std::uint32_t side  = std::uint32_t((to & 7u) > (from & 7u));
+    return 4384u + color * 2u + side;
 }
 
 }  // namespace Stockfish
