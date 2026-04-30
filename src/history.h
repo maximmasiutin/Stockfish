@@ -134,9 +134,13 @@ struct DynStats {
 // see https://www.chessprogramming.org/Butterfly_Boards
 using ButterflyHistory = Stats<std::int16_t, 7183, COLOR_NB, UINT_16_HISTORY_SIZE>;
 
-// LowPlyHistory is addressed by ply and move's from and to squares, used
-// to improve move ordering near the root
-using LowPlyHistory = Stats<std::int16_t, 7183, LOW_PLY_HISTORY_SIZE, UINT_16_HISTORY_SIZE>;
+// Slot count for the freq-aware tiered LowPly layout.
+constexpr std::size_t LOW_PLY_FREQ_SLOTS = 4388;
+
+// Maps Move::raw() to a frequency-tiered slot. Defined in movegen.cpp.
+std::size_t low_ply_freq_index(Move m);
+
+using LowPlyHistory = Stats<std::int16_t, 7183, LOW_PLY_HISTORY_SIZE, LOW_PLY_FREQ_SLOTS>;
 
 // CapturePieceToHistory is addressed by a move's [piece][to][captured piece type]
 using CapturePieceToHistory = Stats<std::int16_t, 10692, PIECE_NB, SQUARE_NB, PIECE_TYPE_NB>;

@@ -19,10 +19,13 @@
 #include "movegen.h"
 
 #include <cassert>
+#include <cstddef>
+#include <cstdint>
 #include <initializer_list>
 
 #include "bitboard.h"
 #include "position.h"
+#include "types.h"
 
 #if defined(USE_AVX512ICL)
     #include <array>
@@ -284,6 +287,87 @@ Move* generate<LEGAL>(const Position& pos, Move* moveList) {
             ++cur;
 
     return moveList;
+}
+
+// Frequency-aware LowPlyHistory address. Branches reordered so that the most
+// common case (NORMAL same-file pawn push) returns first; rare cases fall through.
+std::size_t low_ply_freq_index(Move m) {
+    const std::uint32_t r = m.raw();
+
+    // NORMAL move (top 2 bits of raw == 0): hot path.
+    if (r < 0x4000u)
+    {
+        const std::uint32_t from = (r >> 6) & 0x3Fu;
+        const std::uint32_t to   = r & 0x3Fu;
+        const std::uint32_t ff   = from & 7u;
+        const std::uint32_t tf   = to & 7u;
+
+        // Same-file => pawn-push candidate (tier 0 / tier 1).
+        if (ff == tf)
+        {
+            const std::uint32_t fr = from >> 3;
+            const std::uint32_t tr = to >> 3;
+
+            // White single push (fr in [1,5], tr=fr+1): tier 0 if fr=1, else tier 1.
+            if (fr >= 1u && fr <= 5u && tr == fr + 1u)
+            {
+                if (fr == 1u)
+                    return ff * 2u;
+                return 32u + ff * 4u + (fr - 2u);
+            }
+            // Black single push (fr in [2,6], tr=fr-1): tier 0 if fr=6, else tier 1.
+            if (fr >= 2u && fr <= 6u && tr + 1u == fr)
+            {
+                if (fr == 6u)
+                    return 16u + ff * 2u;
+                return 64u + ff * 4u + (fr - 2u);
+            }
+            // White init double push (fr=1, tr=3).
+            if (fr == 1u && tr == 3u)
+                return ff * 2u + 1u;
+            // Black init double push (fr=6, tr=4).
+            if (fr == 6u && tr == 4u)
+                return 16u + ff * 2u + 1u;
+        }
+
+        // Tier 2: back-rank chebyshev-1 single-step (king and adjacent piece moves).
+        const std::uint32_t fr = from >> 3;
+        if (fr == 0u || fr == 7u)
+        {
+            const std::uint32_t tr    = to >> 3;
+            const int           fdiff = static_cast<int>(tf) - static_cast<int>(ff);
+            const int           rdiff = static_cast<int>(tr) - static_cast<int>(fr);
+            if (fdiff >= -1 && fdiff <= 1 && rdiff >= -1 && rdiff <= 1
+                && (fdiff != 0 || rdiff != 0))
+            {
+                const std::uint32_t color = fr >> 2;
+                const std::uint32_t dest  = static_cast<std::uint32_t>(fdiff + 1) * 3u
+                                         + static_cast<std::uint32_t>(rdiff + 1);
+                return 96u + color * 64u + ff * 8u + dest;
+            }
+        }
+
+        // Tier 3: rest of NORMAL with master's (from << 6) | to ordering.
+        return 224u + ((from << 6) | to);
+    }
+
+    const std::uint32_t type = (r >> 14) & 3u;
+    // PROMOTION: 32-slot color bucket; within bucket file*3+promo (max 24 < 32).
+    if (type == 1u)
+    {
+        const std::uint32_t from  = (r >> 6) & 0x3Fu;
+        const std::uint32_t promo = (r >> 12) & 3u;
+        const std::uint32_t color = from >> 5;
+        const std::uint32_t file  = from & 7u;
+        return 4320u + (color << 5) + file * 3u + promo;
+    }
+
+    // CASTLING (type=3): Chess960-safe side bit via file comparison.
+    const std::uint32_t from  = (r >> 6) & 0x3Fu;
+    const std::uint32_t to    = r & 0x3Fu;
+    const std::uint32_t color = from >> 5;
+    const std::uint32_t side  = static_cast<std::uint32_t>((to & 7u) > (from & 7u));
+    return 4384u + color * 2u + side;
 }
 
 }  // namespace Stockfish
