@@ -29,6 +29,7 @@
 #include <limits>
 #include <type_traits>  // IWYU pragma: keep
 
+#include "mainhist_freq_instr.h"
 #include "memory.h"
 #include "misc.h"
 #include "position.h"
@@ -155,7 +156,10 @@ sf_noinline std::size_t main_hist_freq_index_special(std::uint32_t r);
 sf_always_inline inline std::size_t main_hist_freq_index(Move m) {
     const std::uint32_t r = std::uint32_t(m.raw());
     if (r >= 0x4000u)
+    {
+        MainHistFreqInstr::record_cold();
         return main_hist_freq_index_special(r);
+    }
 
     const std::uint32_t from = (r >> 6) & 0x3Fu;
     const std::uint32_t to   = r & 0x3Fu;
@@ -199,6 +203,14 @@ sf_always_inline inline std::size_t main_hist_freq_index(Move m) {
 
     std::uint32_t s = (king_slot & king_mask) | (tier3 & ~king_mask);
     s               = (pawn_slot & pawn_mask) | (s & ~pawn_mask);
+
+    if (pawn_hit)
+        MainHistFreqInstr::record_pawn();
+    else if (king_hit)
+        MainHistFreqInstr::record_king();
+    else
+        MainHistFreqInstr::record_tier3();
+
     return std::size_t(s);
 }
 
