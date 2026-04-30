@@ -128,11 +128,45 @@ struct DynStats {
     LargePagePtr<T[]> data;
 };
 
-// ButterflyHistory records how often quiet moves have been successful or unsuccessful
-// during the current search, and is used for reduction and move ordering decisions.
-// It uses 2 tables (one for each color) indexed by the move's from and to squares,
-// see https://www.chessprogramming.org/Butterfly_Boards
-using ButterflyHistory = Stats<std::int16_t, 7183, COLOR_NB, UINT_16_HISTORY_SIZE>;
+// ButterflyHistory: frequency-aware indexed mainHistory. Hottest move patterns
+// (initial-rank pawn pushes, continuations) share the lowest cache lines via
+// the freq-aware index; cold patterns flow into a flat tail. Hot path is a
+// branchless mask blend; non-NORMAL types and sentinels route to the cold
+// tail defined in movegen.cpp.
+//
+// Slot layout (per color slice; total 4930 slots):
+//   [0, 32)        Tier 0  NORMAL initial-rank pawn pushes
+//   [32, 96)       Tier 1  NORMAL continuation single-pushes (rank 3-6)
+//   [96, 480)      Tier 2  NORMAL chebyshev=1 from rank in {0,1,2,5,6,7}
+//   [480, 608)     unused gap
+//   [608, 4704)    Tier 3  NORMAL fallback, (from << 6) | to ordering
+//   [4704, 4768)   Tier 4  PROMOTION
+//   [4768, 4896)   Tier 5  CASTLING (DFRC-safe)
+//   [4896, 4928)   Tier 6  EN_PASSANT
+//   [4928, 4930)   Tier 7  sentinels Move::none, Move::null
+constexpr int MAINHIST_FREQ_SIZE = 4930;
+
+sf_noinline std::size_t main_hist_freq_index_cold(std::uint32_t r);
+
+sf_always_inline inline std::size_t main_hist_freq_index(Move m) {
+    const std::uint32_t r = std::uint32_t(m.raw());
+
+    const std::uint32_t ff = (r >> 6) & 7u;
+    const std::uint32_t tf = r & 7u;
+    const std::uint32_t fr = (r >> 9) & 7u;
+
+    // edge_rank mask 0xE7 = bits {0,1,2,5,6,7} set; covers tier 2 fr range.
+    const std::uint32_t same_file = std::uint32_t(ff == tf);
+    const std::uint32_t type_nz   = std::uint32_t(r > 0x3FFFu);
+    const std::uint32_t edge_rank = std::uint32_t((0xE7u >> fr) & 1u);
+
+    if (same_file | type_nz | edge_rank)
+        return main_hist_freq_index_cold(r);
+
+    return 608u + (r & 0xFFFu);
+}
+
+using ButterflyHistory = Stats<std::int16_t, 7183, COLOR_NB, MAINHIST_FREQ_SIZE>;
 
 // LowPlyHistory is addressed by ply and move's from and to squares, used
 // to improve move ordering near the root

@@ -19,9 +19,13 @@
 #include "movegen.h"
 
 #include <cassert>
+#include <cstddef>
+#include <cstdint>
 #include <initializer_list>
 
 #include "bitboard.h"
+#include "history.h"
+#include "misc.h"
 #include "position.h"
 
 #if defined(USE_AVX512ICL)
@@ -284,6 +288,68 @@ Move* generate<LEGAL>(const Position& pos, Move* moveList) {
             ++cur;
 
     return moveList;
+}
+
+// Cold tail of main_hist_freq_index. Handles sentinels, non-NORMAL move types,
+// pawn-push tiers, and the chebyshev=1 tier from rank in {0,1,2,5,6,7}.
+sf_noinline std::size_t main_hist_freq_index_cold(std::uint32_t r) {
+    if (r == 0u)
+        return 4928u;
+    if (r == 65u)
+        return 4929u;
+
+    const std::uint32_t type = (r >> 14) & 3u;
+    const std::uint32_t from = (r >> 6) & 0x3Fu;
+    const std::uint32_t to   = r & 0x3Fu;
+    const std::uint32_t ff   = from & 7u;
+    const std::uint32_t tf   = to & 7u;
+    const std::uint32_t fr   = from >> 3;
+    const std::uint32_t tr   = to >> 3;
+    // half = from >> 5 splits ranks 0-3 (0) vs 4-7 (1). Matches WHITE/BLACK for
+    // CASTLING; reversed for PROMOTION (white promotes from rank 6 -> half=1).
+    // Used as a bijection bit only.
+    const std::uint32_t half = from >> 5;
+
+    if (type == 1u)
+    {
+        const std::uint32_t promo = (r >> 12) & 3u;
+        return 4704u + (half << 5) + ff * 4u + promo;
+    }
+    if (type == 3u)
+        return 4768u + half * 64u + ff * 8u + tf;
+    if (type == 2u)
+    {
+        const std::uint32_t ep_half = std::uint32_t(fr >= 4u);
+        const std::uint32_t dir     = std::uint32_t(tf > ff);
+        return 4896u + ep_half * 16u + tf * 2u + dir;
+    }
+
+    // NORMAL with same_file: tier 0/1 pawn-push patterns or tier 3 fallback.
+    if (ff == tf)
+    {
+        if (fr == 1u && (tr == 2u || tr == 3u))
+            return ff * 2u + (tr - 2u);
+        if (fr == 6u && (tr == 5u || tr == 4u))
+            return 16u + ff * 2u + (5u - tr);
+        if (fr >= 2u && fr <= 5u && tr == fr + 1u)
+            return 32u + ff * 4u + (fr - 2u);
+        if (fr >= 2u && fr <= 5u && tr + 1u == fr)
+            return 64u + ff * 4u + (fr - 2u);
+        return 608u + ((from << 6) | to);
+    }
+
+    // ff != tf and edge_rank=1: tier 2 cheb=1 from {0,1,2,5,6,7} or tier 3.
+    const int fdiff = int(tf) - int(ff);
+    const int rdiff = int(tr) - int(fr);
+    if (fdiff >= -1 && fdiff <= 1 && rdiff >= -1 && rdiff <= 1)
+    {
+        const std::uint32_t ri   = (fr <= 2u) ? fr : (fr - 2u);
+        const std::uint32_t pos  = std::uint32_t(fdiff + 1) * 3u + std::uint32_t(rdiff + 1);
+        const std::uint32_t dest = pos < 4u ? pos : pos - 1u;
+        return 96u + ri * 64u + ff * 8u + dest;
+    }
+
+    return 608u + ((from << 6) | to);
 }
 
 }  // namespace Stockfish
