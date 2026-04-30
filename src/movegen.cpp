@@ -19,9 +19,13 @@
 #include "movegen.h"
 
 #include <cassert>
+#include <cstddef>
+#include <cstdint>
 #include <initializer_list>
 
 #include "bitboard.h"
+#include "history.h"
+#include "misc.h"
 #include "position.h"
 
 #if defined(USE_AVX512ICL)
@@ -284,6 +288,58 @@ Move* generate<LEGAL>(const Position& pos, Move* moveList) {
             ++cur;
 
     return moveList;
+}
+
+// Cold helper for low_ply_freq_index (no king tier). Handles special types
+// and same-file moves (pawn-push shape; also matches non-pawn vertical
+// moves). King back-rank moves stay on the inlined flat tier.
+sf_noinline std::size_t low_ply_freq_index_rare(std::uint32_t r) {
+    if (r >= 0x4000u)
+    {
+        const std::uint32_t type  = (r >> 14) & 3u;
+        const std::uint32_t from  = (r >> 6) & 0x3Fu;
+        const std::uint32_t to    = r & 0x3Fu;
+        const std::uint32_t promo = (r >> 12) & 3u;
+        // half = rank >> 2: ranks 1-4 -> 0, ranks 5-8 -> 1 (not the WHITE/BLACK enum).
+        const std::uint32_t half  = from >> 5;
+        const std::uint32_t fromf = from & 7u;
+        const std::uint32_t tof   = to & 7u;
+        // Only underpromotions reach here: queen promotions are captures-stage
+        // moves and are filtered upstream from lowPlyHistory, so promo is in [0,2].
+        assert(promo != 3u);
+        if (type == 1u)
+            return 4192u + (half << 5) + fromf * 3u + promo;
+        // type can only be CASTLING (3) here. EN_PASSANT (2) is a capture and
+        // never reaches lowPlyHistory.
+        assert(type == 3u);
+        const std::uint32_t side = std::uint32_t(tof > fromf);
+        return 4256u + half * 2u + side;
+    }
+
+    const std::uint32_t from = (r >> 6) & 0x3Fu;
+    const std::uint32_t to   = r & 0x3Fu;
+    const std::uint32_t fr   = from >> 3;
+    const std::uint32_t ff   = from & 7u;
+    const std::uint32_t tr   = to >> 3;
+
+    if (fr >= 1u && fr <= 5u && tr == fr + 1u)
+    {
+        if (fr == 1u)
+            return ff * 2u;
+        return 32u + ff * 4u + (fr - 2u);
+    }
+    if (fr >= 2u && fr <= 6u && tr + 1u == fr)
+    {
+        if (fr == 6u)
+            return 16u + ff * 2u;
+        return 64u + ff * 4u + (fr - 2u);
+    }
+    if (fr == 1u && tr == 3u)
+        return ff * 2u + 1u;
+    if (fr == 6u && tr == 4u)
+        return 16u + ff * 2u + 1u;
+
+    return 96u + (r & 0xFFFu);
 }
 
 }  // namespace Stockfish

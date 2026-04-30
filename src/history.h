@@ -134,9 +134,27 @@ struct DynStats {
 // see https://www.chessprogramming.org/Butterfly_Boards
 using ButterflyHistory = Stats<std::int16_t, 7183, COLOR_NB, UINT_16_HISTORY_SIZE>;
 
-// LowPlyHistory is addressed by ply and move's from and to squares, used
-// to improve move ordering near the root
-using LowPlyHistory = Stats<std::int16_t, 7183, LOW_PLY_HISTORY_SIZE, UINT_16_HISTORY_SIZE>;
+// LowPlyHistory: thin inline gate, no king tier. Hot path is one biased JCC
+// (special types OR same-file) plus tier3 LEA. Pawn pushes [0,96), flat tail
+// [96,4192) absorbs king back-rank and other NORMAL non-pawn moves.
+// PROMOTION [4192,4256), CASTLING [4256,4260).
+constexpr std::size_t LOW_PLY_FREQ_SLOTS = 4260;
+
+sf_noinline std::size_t low_ply_freq_index_rare(std::uint32_t r);
+
+sf_always_inline inline std::size_t low_ply_freq_index(Move m) {
+    const std::uint32_t r  = std::uint32_t(m.raw());
+    const std::uint32_t ff = (r >> 6) & 7u;
+    const std::uint32_t tf = r & 7u;
+
+    const std::uint32_t cold = std::uint32_t(r >= 0x4000u) | std::uint32_t(ff == tf);
+    if (cold)
+        return low_ply_freq_index_rare(r);
+
+    return 96u + (r & 0xFFFu);
+}
+
+using LowPlyHistory = Stats<std::int16_t, 7183, LOW_PLY_HISTORY_SIZE, LOW_PLY_FREQ_SLOTS>;
 
 // CapturePieceToHistory is addressed by a move's [piece][to][captured piece type]
 using CapturePieceToHistory = Stats<std::int16_t, 10692, PIECE_NB, SQUARE_NB, PIECE_TYPE_NB>;
