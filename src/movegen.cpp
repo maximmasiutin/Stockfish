@@ -19,9 +19,13 @@
 #include "movegen.h"
 
 #include <cassert>
+#include <cstddef>
+#include <cstdint>
 #include <initializer_list>
 
 #include "bitboard.h"
+#include "history.h"
+#include "misc.h"
 #include "position.h"
 
 #if defined(USE_AVX512ICL)
@@ -284,6 +288,29 @@ Move* generate<LEGAL>(const Position& pos, Move* moveList) {
             ++cur;
 
     return moveList;
+}
+
+// Branchless cold tail for the king-tier-dropped layout. PROMOTION at
+// [4192, 4256), CASTLING at [4256, 4260), EN_PASSANT shares the castling
+// path. Mask blend, no jcc.
+sf_noinline std::size_t low_ply_freq_index_special(std::uint32_t r) {
+    const std::uint32_t type  = (r >> 14) & 3u;
+    const std::uint32_t from  = (r >> 6) & 0x3Fu;
+    const std::uint32_t to    = r & 0x3Fu;
+    const std::uint32_t promo = (r >> 12) & 3u;
+    const std::uint32_t color = from >> 5;
+    const std::uint32_t fromf = from & 7u;
+    const std::uint32_t tof   = to & 7u;
+
+    const std::uint32_t promo_slot = 4192u + (color << 5) + fromf * 3u + promo;
+
+    const std::uint32_t side =
+      std::uint32_t(std::int32_t(std::int32_t(fromf) - std::int32_t(tof)) >> 31) & 1u;
+    const std::uint32_t cast_slot = 4256u + color * 2u + side;
+
+    const std::uint32_t promo_mask = std::uint32_t(std::int32_t((type ^ 1u) - 1u) >> 31);
+
+    return std::size_t((promo_slot & promo_mask) | (cast_slot & ~promo_mask));
 }
 
 }  // namespace Stockfish
