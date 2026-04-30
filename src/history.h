@@ -134,9 +134,53 @@ struct DynStats {
 // see https://www.chessprogramming.org/Butterfly_Boards
 using ButterflyHistory = Stats<std::int16_t, 7183, COLOR_NB, UINT_16_HISTORY_SIZE>;
 
-// LowPlyHistory is addressed by ply and move's from and to squares, used
-// to improve move ordering near the root
-using LowPlyHistory = Stats<std::int16_t, 7183, LOW_PLY_HISTORY_SIZE, UINT_16_HISTORY_SIZE>;
+// LowPlyHistory: simplified two-tier branchless layout. Pawn pushes occupy
+// [0, 96); everything else flows into a flat tail at 96 + ((from << 6) | to).
+// PROMOTION at [4192, 4256), CASTLING at [4256, 4260).
+constexpr std::size_t LOW_PLY_FREQ_SLOTS = 4260;
+
+sf_noinline std::size_t low_ply_freq_index_special(std::uint32_t r);
+
+sf_always_inline inline std::size_t low_ply_freq_index(Move m) {
+    const std::uint32_t r = std::uint32_t(m.raw());
+
+    if (r >= 0x4000u)
+        return low_ply_freq_index_special(r);
+
+    const std::uint32_t from = (r >> 6) & 0x3Fu;
+    const std::uint32_t to   = r & 0x3Fu;
+    const std::uint32_t fr   = from >> 3;
+    const std::uint32_t ff   = from & 7u;
+    const std::uint32_t tr   = to >> 3;
+
+    constexpr std::uint64_t PAWN_MASK = (1ULL << 10) | (1ULL << 11) | (1ULL << 17) | (1ULL << 19)
+                                      | (1ULL << 26) | (1ULL << 28) | (1ULL << 35) | (1ULL << 37)
+                                      | (1ULL << 44) | (1ULL << 46) | (1ULL << 52) | (1ULL << 53);
+    const std::uint32_t same_file = std::uint32_t(((from ^ to) & 7u) == 0u);
+    const std::uint32_t pawn_hit  = same_file & std::uint32_t((PAWN_MASK >> (fr * 8u + tr)) & 1u);
+    const std::uint32_t pawn_mask = std::uint32_t(0u) - pawn_hit;
+
+    // pawn_color: 0=white (tr>=fr, moves up), 1=black (tr<fr, moves down). Matches
+    // the WHITE/BLACK enum semantically but is deduced from move geometry rather
+    // than position state.
+    const std::uint32_t pawn_color = std::uint32_t(tr < fr);
+    const std::uint32_t is_cont    = std::uint32_t(((0x42u >> fr) & 1u) ^ 1u);
+    const std::uint32_t cont_mask  = std::uint32_t(0u) - is_cont;
+    const std::uint32_t is_double  = std::uint32_t(((tr ^ fr) & 3u) == 2u);
+    const std::uint32_t base_init  = pawn_color << 4u;
+    const std::uint32_t base_cont  = 32u + (pawn_color << 5u);
+    const std::uint32_t pawn_base  = (base_cont & cont_mask) | (base_init & ~cont_mask);
+    const std::uint32_t off_init   = is_double;
+    const std::uint32_t off_cont   = fr - 2u;
+    const std::uint32_t pawn_off   = (off_cont & cont_mask) | (off_init & ~cont_mask);
+    const std::uint32_t pawn_slot  = pawn_base + (ff << (1u + is_cont)) + pawn_off;
+
+    const std::uint32_t flat_slot = 96u + (r & 0xFFFu);
+
+    return std::size_t((pawn_slot & pawn_mask) | (flat_slot & ~pawn_mask));
+}
+
+using LowPlyHistory = Stats<std::int16_t, 7183, LOW_PLY_HISTORY_SIZE, LOW_PLY_FREQ_SLOTS>;
 
 // CapturePieceToHistory is addressed by a move's [piece][to][captured piece type]
 using CapturePieceToHistory = Stats<std::int16_t, 10692, PIECE_NB, SQUARE_NB, PIECE_TYPE_NB>;
