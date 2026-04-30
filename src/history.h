@@ -29,6 +29,7 @@
 #include <limits>
 #include <type_traits>  // IWYU pragma: keep
 
+#include "mainhist_freq_instr.h"
 #include "memory.h"
 #include "misc.h"
 #include "position.h"
@@ -150,6 +151,8 @@ sf_noinline std::size_t main_hist_freq_index_cold(std::uint32_t r);
 
 sf_always_inline inline std::size_t main_hist_freq_index(Move m) {
     const std::uint32_t r = std::uint32_t(m.raw());
+
+    MainHistFreqInstr::record_call();
 
     const std::uint32_t ff = (r >> 6) & 7u;
     const std::uint32_t tf = r & 7u;

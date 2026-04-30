@@ -293,6 +293,7 @@ Move* generate<LEGAL>(const Position& pos, Move* moveList) {
 // Cold tail of main_hist_freq_index. Handles sentinels, non-NORMAL move types,
 // pawn-push tiers, and the chebyshev=1 tier from rank in {0,1,2,5,6,7}.
 sf_noinline std::size_t main_hist_freq_index_cold(std::uint32_t r) {
+    MainHistFreqInstr::record_cold();
     if (r == 0u)
         return 4928u;
     if (r == 65u)
