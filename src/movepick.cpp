@@ -23,6 +23,7 @@
 #include <utility>
 
 #include "bitboard.h"
+#include "mainhist_instr.h"
 #include "misc.h"
 #include "position.h"
 
@@ -158,6 +159,7 @@ ExtMove* MovePicker::score(const MoveList<Type>& ml) {
         else if constexpr (Type == QUIETS)
         {
             // histories
+            MainHistInstr::record_read(us, m.raw());
             m.value = 2 * (*mainHistory)[us][m.raw()];
             m.value += 2 * sharedHistory->pawn_entry(pos)[pc][to];
             m.value += (*continuationHistory[0])[pc][to];
@@ -184,7 +186,10 @@ ExtMove* MovePicker::score(const MoveList<Type>& ml) {
             if (pos.capture_stage(m))
                 m.value = PieceValue[capturedPiece] + (1 << 28);
             else
+            {
+                MainHistInstr::record_read(us, m.raw());
                 m.value = (*mainHistory)[us][m.raw()] + (*continuationHistory[0])[pc][to];
+            }
         }
     }
     return it;
