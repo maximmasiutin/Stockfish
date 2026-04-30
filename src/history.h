@@ -134,9 +134,62 @@ struct DynStats {
 // see https://www.chessprogramming.org/Butterfly_Boards
 using ButterflyHistory = Stats<std::int16_t, 7183, COLOR_NB, UINT_16_HISTORY_SIZE>;
 
-// LowPlyHistory is addressed by ply and move's from and to squares, used
-// to improve move ordering near the root
-using LowPlyHistory = Stats<std::int16_t, 7183, LOW_PLY_HISTORY_SIZE, UINT_16_HISTORY_SIZE>;
+// Slot count for the freq-aware tiered LowPly layout.
+constexpr std::size_t LOW_PLY_FREQ_SLOTS = 4388;
+
+namespace LowPlyFreq {
+
+// AoS interleaved hot-set: each (tag, addr) pair is 4 contiguous bytes so a hit
+// reads a single 32-bit word and stays within one cache line.
+struct Entry {
+    std::uint16_t tag;
+    std::uint16_t addr;
+};
+static_assert(sizeof(Entry) == 4, "Entry must be 4 bytes for the AoS hot-set layout");
+
+struct alignas(128) Table {
+    std::array<Entry, 32> entries;
+};
+static_assert(sizeof(Table) == 128, "Table must be exactly 128 bytes");
+static_assert(alignof(Table) == 128, "Table must be aligned to 128 bytes");
+
+// Greedy-fill multiply-shift hash; 29 of the top-32 raws fit (93.7% of top-32
+// access volume); 3 raws collide and fall through to the formula. Empty slots
+// use 0xFFFF, which never matches a legal Move::raw() since CASTLING requires
+// from != to.
+inline constexpr std::uint32_t HashM  = 0xe858e7edu;
+inline constexpr unsigned int  HashS  = 18u;
+inline constexpr Table         hotset = {{{
+  {0x0de7, 31},  {0x035d, 11}, {0x0459, 36},  {0x0c61, 19}, {0x018f, 152}, {0x039e, 13},
+  {0x0185, 145}, {0x0ba6, 91}, {0x0d6d, 26},  {0x0218, 1},  {0x03df, 15},  {0xffff, 0},
+  {0xffff, 0},   {0x0dae, 28}, {0x0259, 3},   {0x0355, 10}, {0x0c28, 16},  {0x0def, 30},
+  {0x0187, 151}, {0x0396, 12}, {0xffff, 0},   {0x0c69, 18}, {0x0d65, 27},  {0x0210, 0},
+  {0x03d7, 14},  {0x059e, 56}, {0x0fbf, 215}, {0x0da6, 29}, {0x0251, 2},   {0x0b24, 83},
+  {0x0e39, 167}, {0x0c20, 17},
+}}};
+
+}  // namespace LowPlyFreq
+
+// Cold tier-formula path. sf_noinline keeps the tier dispatch out of the
+// call-site BTB; only invoked on hot-set miss. Defined in movegen.cpp.
+sf_noinline std::size_t low_ply_freq_index_slow(Move m);
+
+// Maps a quiet Move's raw() to a frequency-tiered LowPly slot. The hot-set
+// check is inlined so a hit (~12% of accesses) returns without a call. On miss
+// the tier dispatch in low_ply_freq_index_slow runs. The tier formula assumes
+// QUIETS-phase movegen invariants (no EN_PASSANT; promotions are
+// KNIGHT/BISHOP/ROOK only, never QUEEN); calling with a non-quiet move will
+// assert in debug.
+inline sf_always_inline std::size_t low_ply_freq_index(Move m) {
+    const std::uint32_t r   = m.raw();
+    const std::uint32_t idx = ((r * LowPlyFreq::HashM) >> LowPlyFreq::HashS) & 0x1Fu;
+    const auto          e   = LowPlyFreq::hotset.entries[idx];
+    if (e.tag == r)
+        return e.addr;
+    return low_ply_freq_index_slow(m);
+}
+
+using LowPlyHistory = Stats<std::int16_t, 7183, LOW_PLY_HISTORY_SIZE, LOW_PLY_FREQ_SLOTS>;
 
 // CapturePieceToHistory is addressed by a move's [piece][to][captured piece type]
 using CapturePieceToHistory = Stats<std::int16_t, 10692, PIECE_NB, SQUARE_NB, PIECE_TYPE_NB>;

@@ -18,14 +18,19 @@
 
 #include "movegen.h"
 
+#include <array>
 #include <cassert>
+#include <cstddef>
+#include <cstdint>
 #include <initializer_list>
 
 #include "bitboard.h"
+#include "history.h"
+#include "misc.h"
 #include "position.h"
+#include "types.h"
 
 #if defined(USE_AVX512ICL)
-    #include <array>
     #include <algorithm>
     #include <immintrin.h>
 #endif
@@ -284,6 +289,99 @@ Move* generate<LEGAL>(const Position& pos, Move* moveList) {
             ++cur;
 
     return moveList;
+}
+
+// Cold tier-dispatch path for the freq-aware LowPlyHistory address.
+// Reached only on a hot-set miss (the inline outer in history.h handles hits).
+// Branches reordered so the most common case (NORMAL same-file pawn push)
+// returns first; rare cases fall through.
+sf_noinline std::size_t low_ply_freq_index_slow(Move m) {
+    const std::uint32_t r = m.raw();
+
+    // NORMAL move (top 2 bits of raw == 0): hot path.
+    if (r < 0x4000u)
+    {
+        const std::uint32_t from = (r >> 6) & 0x3Fu;
+        const std::uint32_t to   = r & 0x3Fu;
+        const std::uint32_t ff   = from & 7u;
+        const std::uint32_t tf   = to & 7u;
+
+        // Same-file => pawn-push candidate (tier 0 / tier 1).
+        if (ff == tf)
+        {
+            const std::uint32_t fr = from >> 3;
+            const std::uint32_t tr = to >> 3;
+
+            // White single push (fr in [1,5], tr=fr+1): tier 0 if fr=1, else tier 1.
+            if (fr >= 1u && fr <= 5u && tr == fr + 1u)
+            {
+                if (fr == 1u)
+                    return ff * 2u;
+                return 32u + ff * 4u + (fr - 2u);
+            }
+            // Black single push (fr in [2,6], tr=fr-1): tier 0 if fr=6, else tier 1.
+            if (fr >= 2u && fr <= 6u && tr + 1u == fr)
+            {
+                if (fr == 6u)
+                    return 16u + ff * 2u;
+                return 64u + ff * 4u + (fr - 2u);
+            }
+            // White init double push (fr=1, tr=3).
+            if (fr == 1u && tr == 3u)
+                return ff * 2u + 1u;
+            // Black init double push (fr=6, tr=4).
+            if (fr == 6u && tr == 4u)
+                return 16u + ff * 2u + 1u;
+        }
+
+        // Tier 2: back-rank chebyshev-1 single-step (king and adjacent piece moves).
+        const std::uint32_t fr = from >> 3;
+        if (fr == 0u || fr == 7u)
+        {
+            const std::uint32_t tr    = to >> 3;
+            const int           fdiff = static_cast<int>(tf) - static_cast<int>(ff);
+            const int           rdiff = static_cast<int>(tr) - static_cast<int>(fr);
+            if (fdiff >= -1 && fdiff <= 1 && rdiff >= -1 && rdiff <= 1
+                && (fdiff != 0 || rdiff != 0))
+            {
+                // half = fr >> 2: 0 for back rank 1, 1 for back rank 8 (not the WHITE/BLACK enum).
+                // dest = (fdiff+1)*3 + (rdiff+1) is sparse in 0..8 (center 4 excluded).
+                // Stride 8 is collision-free per half: fr=0 cannot yield rdiff=-1 and
+                // fr=7 cannot yield rdiff=+1, so each half realizes at most 8 dest values.
+                const std::uint32_t half = fr >> 2;
+                const std::uint32_t dest = static_cast<std::uint32_t>(fdiff + 1) * 3u
+                                         + static_cast<std::uint32_t>(rdiff + 1);
+                return 96u + half * 64u + ff * 8u + dest;
+            }
+        }
+
+        // Tier 3: rest of NORMAL with (from << 6) | to ordering.
+        return 224u + ((from << 6) | to);
+    }
+
+    const std::uint32_t type = (r >> 14) & 3u;
+    // PROMOTION: QUIETS-only invariant -> promo in {0,1,2} (queen goes via
+    // CAPTURES); file*3+promo packs into [0, 24). half = from>>5
+    // (board-half index 0 or 1, not the WHITE/BLACK enum).
+    if (type == 1u)
+    {
+        const std::uint32_t from  = (r >> 6) & 0x3Fu;
+        const std::uint32_t promo = (r >> 12) & 3u;
+        const std::uint32_t half  = from >> 5;
+        const std::uint32_t file  = from & 7u;
+        assert(promo < 3u);
+        return 4320u + (half << 5) + file * 3u + promo;
+    }
+
+    // CASTLING (type=3): Chess960-safe side bit via file comparison. EN_PASSANT
+    // (type=2) is generated only by CAPTURES/EVASIONS/NON_EVASIONS movegen and
+    // never reaches this QUIETS-only path.
+    assert(type == 3u);
+    const std::uint32_t from = (r >> 6) & 0x3Fu;
+    const std::uint32_t to   = r & 0x3Fu;
+    const std::uint32_t half = from >> 5;
+    const std::uint32_t side = static_cast<std::uint32_t>((to & 7u) > (from & 7u));
+    return 4384u + half * 2u + side;
 }
 
 }  // namespace Stockfish
