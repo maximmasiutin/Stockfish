@@ -19,9 +19,13 @@
 #include "movegen.h"
 
 #include <cassert>
+#include <cstddef>
+#include <cstdint>
 #include <initializer_list>
 
 #include "bitboard.h"
+#include "history.h"
+#include "misc.h"
 #include "position.h"
 
 #if defined(USE_AVX512ICL)
@@ -284,6 +288,30 @@ Move* generate<LEGAL>(const Position& pos, Move* moveList) {
             ++cur;
 
     return moveList;
+}
+
+sf_noinline std::size_t low_ply_freq_index_special(std::uint32_t r) {
+    const std::uint32_t type = (r >> 14) & 3u;
+    // PROMOTION: 32-slot per-half bucket (half = from >> 5, not the WHITE/BLACK enum);
+    // file*3+promo packs into [0, 24) per half. Only underpromotions reach here:
+    // queen promotions are captures-stage moves filtered upstream from lowPlyHistory.
+    if (type == 1u)
+    {
+        const std::uint32_t from  = (r >> 6) & 0x3Fu;
+        const std::uint32_t promo = (r >> 12) & 3u;
+        const std::uint32_t half  = from >> 5;
+        const std::uint32_t file  = from & 7u;
+        assert(promo < 3u);
+        return 4320u + (half << 5) + file * 3u + promo;
+    }
+    // CASTLING (type=3): Chess960-safe side bit via file comparison. EN_PASSANT
+    // (type=2) is a capture and never reaches lowPlyHistory.
+    assert(type == 3u);
+    const std::uint32_t from = (r >> 6) & 0x3Fu;
+    const std::uint32_t to   = r & 0x3Fu;
+    const std::uint32_t half = from >> 5;
+    const std::uint32_t side = std::uint32_t((to & 7u) > (from & 7u));
+    return 4384u + half * 2u + side;
 }
 
 }  // namespace Stockfish
