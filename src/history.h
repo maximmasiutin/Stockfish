@@ -134,9 +134,63 @@ struct DynStats {
 // see https://www.chessprogramming.org/Butterfly_Boards
 using ButterflyHistory = Stats<std::int16_t, 7183, COLOR_NB, UINT_16_HISTORY_SIZE>;
 
-// LowPlyHistory is addressed by ply and move's from and to squares, used
-// to improve move ordering near the root
-using LowPlyHistory = Stats<std::int16_t, 7183, LOW_PLY_HISTORY_SIZE, UINT_16_HISTORY_SIZE>;
+// LowPlyHistory: tiered slot layout. Pawn fast-path uses a magic perfect hash
+// (key * MAGIC) >> 60 to map the 12 valid (fr*8+tr) keys to ranks in [0, 15],
+// then a 64-bit PACKED constant (16 x 4-bit fields) yields color/is_cont/payload.
+constexpr std::size_t LOW_PLY_FREQ_SLOTS = 4388;
+
+sf_noinline std::size_t low_ply_freq_index_special(std::uint32_t r);
+
+sf_always_inline inline std::size_t low_ply_freq_index(Move m) {
+    const std::uint32_t r = std::uint32_t(m.raw());
+    if (r >= 0x4000u)
+        return low_ply_freq_index_special(r);
+
+    const std::uint32_t from = (r >> 6) & 0x3Fu;
+    const std::uint32_t to   = r & 0x3Fu;
+    const std::uint32_t fr   = from >> 3;
+    const std::uint32_t ff   = from & 7u;
+    const std::uint32_t tr   = to >> 3;
+    const std::uint32_t tf   = to & 7u;
+
+    const std::uint32_t tier3 = 224u + (r & 0xFFFu);
+
+    constexpr std::uint64_t PAWN_MASK = (1ULL << 10) | (1ULL << 11) | (1ULL << 17) | (1ULL << 19)
+                                      | (1ULL << 26) | (1ULL << 28) | (1ULL << 35) | (1ULL << 37)
+                                      | (1ULL << 44) | (1ULL << 46) | (1ULL << 52) | (1ULL << 53);
+    const std::uint32_t key       = fr * 8u + tr;
+    const std::uint32_t same_file = std::uint32_t(((from ^ to) & 7u) == 0u);
+    const std::uint32_t pawn_hit  = same_file & std::uint32_t((PAWN_MASK >> key) & 1u);
+    const std::uint32_t pawn_mask = std::uint32_t(0u) - pawn_hit;
+
+    constexpr std::uint64_t MAGIC   = 0x98e00a6631031733ULL;
+    constexpr std::uint64_t PACKED4 = 0x0e00581d704f0c69ULL;
+    const std::uint32_t     rank4   = std::uint32_t((std::uint64_t(key) * MAGIC) >> 60);
+    const std::uint32_t     info    = std::uint32_t((PACKED4 >> (rank4 * 4u)) & 0xFu);
+    const std::uint32_t     color   = (info >> 3) & 1u;
+    const std::uint32_t     is_cont = (info >> 2) & 1u;
+    const std::uint32_t     payload = info & 3u;
+    const std::uint32_t     pawn_slot =
+      (is_cont << 5) + (color << (4u + is_cont)) + (ff << (1u + is_cont)) + payload;
+
+    const std::uint32_t fr_back   = std::uint32_t(((1u << fr) & 0x81u) != 0u);
+    const int           fdiff     = int(tf) - int(ff);
+    const int           rdiff     = int(tr) - int(fr);
+    const std::uint32_t fdiff_ok  = std::uint32_t(std::uint32_t(fdiff + 1) <= 2u);
+    const std::uint32_t rdiff_ok  = std::uint32_t(std::uint32_t(rdiff + 1) <= 2u);
+    const std::uint32_t not_null  = std::uint32_t((fdiff != 0) | (rdiff != 0));
+    const std::uint32_t king_hit  = fr_back & fdiff_ok & rdiff_ok & not_null;
+    const std::uint32_t king_mask = std::uint32_t(0u) - king_hit;
+    const std::uint32_t color_k   = fr >> 2;
+    const std::uint32_t dest      = std::uint32_t(fdiff + 1) * 3u + std::uint32_t(rdiff + 1);
+    const std::uint32_t king_slot = 96u + color_k * 64u + ff * 8u + dest;
+
+    std::uint32_t s = (king_slot & king_mask) | (tier3 & ~king_mask);
+    s               = (pawn_slot & pawn_mask) | (s & ~pawn_mask);
+    return std::size_t(s);
+}
+
+using LowPlyHistory = Stats<std::int16_t, 7183, LOW_PLY_HISTORY_SIZE, LOW_PLY_FREQ_SLOTS>;
 
 // CapturePieceToHistory is addressed by a move's [piece][to][captured piece type]
 using CapturePieceToHistory = Stats<std::int16_t, 10692, PIECE_NB, SQUARE_NB, PIECE_TYPE_NB>;
