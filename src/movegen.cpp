@@ -19,9 +19,13 @@
 #include "movegen.h"
 
 #include <cassert>
+#include <cstddef>
+#include <cstdint>
 #include <initializer_list>
 
 #include "bitboard.h"
+#include "history.h"
+#include "misc.h"
 #include "position.h"
 
 #if defined(USE_AVX512ICL)
@@ -284,6 +288,37 @@ Move* generate<LEGAL>(const Position& pos, Move* moveList) {
             ++cur;
 
     return moveList;
+}
+
+// Cold tail of main_hist_freq_index. Only entered for non-NORMAL move types
+// (PROMOTION, EN_PASSANT, CASTLING) since the hot path's `r >= 0x4000u` gate
+// catches those. Sentinels (raw=0, raw=65) are NORMAL-typed and route through
+// the inline path; the call sites in movepick/search are guarded upstream by
+// is_ok() so sentinels never reach mainHistory access.
+sf_noinline std::size_t main_hist_freq_index_special(std::uint32_t r) {
+    const std::uint32_t type = (r >> 14) & 3u;
+    const std::uint32_t from = (r >> 6) & 0x3Fu;
+    const std::uint32_t to   = r & 0x3Fu;
+    const std::uint32_t ff   = from & 7u;
+    const std::uint32_t tf   = to & 7u;
+    const std::uint32_t fr   = from >> 3;
+    // half = from >> 5 splits ranks 0-3 (0) vs 4-7 (1). Matches WHITE/BLACK for
+    // CASTLING; reversed for PROMOTION (white promotes from rank 6 -> half=1).
+    // Used as a bijection bit only.
+    const std::uint32_t half = from >> 5;
+
+    if (type == 1u)
+    {
+        const std::uint32_t promo = (r >> 12) & 3u;
+        return 4704u + (half << 5) + ff * 4u + promo;
+    }
+    if (type == 3u)
+        return 4768u + half * 64u + ff * 8u + tf;
+
+    // EN_PASSANT (type == 2): from rank 4 (white) or rank 3 (black).
+    const std::uint32_t ep_half = std::uint32_t(fr >= 4u);
+    const std::uint32_t dir     = std::uint32_t(tf > ff);
+    return 4896u + ep_half * 16u + tf * 2u + dir;
 }
 
 }  // namespace Stockfish

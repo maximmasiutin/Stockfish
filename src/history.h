@@ -128,15 +128,83 @@ struct DynStats {
     LargePagePtr<T[]> data;
 };
 
-// ButterflyHistory records how often quiet moves have been successful or unsuccessful
-// during the current search, and is used for reduction and move ordering decisions.
-// It uses 2 tables (one for each color) indexed by the move's from and to squares,
-// see https://www.chessprogramming.org/Butterfly_Boards
-using ButterflyHistory = Stats<std::int16_t, 7183, COLOR_NB, UINT_16_HISTORY_SIZE>;
+// ButterflyHistory: frequency-aware indexed mainHistory with split-mask pawn
+// slot computation. Init pawn pushes (first-row source: fr in {1,6}) at
+// [0,32) and continuation pawn pushes (fr in {2..5}) at [32,96) are computed
+// by separate slot expressions selected via mask blend rather than a unified
+// variable-shift chain. King-class chebyshev=1 (any rank) at [96,608); NORMAL
+// rest at [608,4704); PROMOTION/CASTLING/EN_PASSANT in cold tail. Hot path is
+// fully branchless inside NORMAL: a single conditional branch (the cold gate)
+// routes non-NORMAL types to a small cold tail.
+//
+// Slot layout (per color slice; total 4930 slots):
+//   [0, 32)        Tier 0  NORMAL initial-rank pawn pushes
+//   [32, 96)       Tier 1  NORMAL continuation single-pushes
+//   [96, 608)      Tier 2  NORMAL chebyshev=1 from any rank (king-class)
+//   [608, 4704)    Tier 3  NORMAL fallback, (from << 6) | to ordering
+//   [4704, 4768)   Tier 4  PROMOTION
+//   [4768, 4896)   Tier 5  CASTLING (DFRC-safe)
+//   [4896, 4928)   Tier 6  EN_PASSANT
+//   [4928, 4930)   unused (former sentinels; never reached at call sites)
+constexpr int MAINHIST_FREQ_SIZE = 4930;
+
+sf_noinline std::size_t main_hist_freq_index_special(std::uint32_t r);
+
+sf_always_inline inline std::size_t main_hist_freq_index(Move m) {
+    const std::uint32_t r = std::uint32_t(m.raw());
+    if (r >= 0x4000u)
+        return main_hist_freq_index_special(r);
+
+    const std::uint32_t from = (r >> 6) & 0x3Fu;
+    const std::uint32_t to   = r & 0x3Fu;
+    const std::uint32_t fr   = from >> 3;
+    const std::uint32_t ff   = from & 7u;
+    const std::uint32_t tr   = to >> 3;
+    const std::uint32_t tf   = to & 7u;
+
+    const std::uint32_t tier3 = 608u + (r & 0xFFFu);
+
+    constexpr std::uint64_t PAWN_MASK = 0x00305028140a0c00ULL;
+    const std::uint32_t     same_file = std::uint32_t(((from ^ to) & 7u) == 0u);
+    const std::uint32_t pawn_hit  = same_file & std::uint32_t((PAWN_MASK >> (fr * 8u + tr)) & 1u);
+    const std::uint32_t pawn_mask = std::uint32_t(0u) - pawn_hit;
+
+    // pawn_color: 0=white (tr>=fr, moves up), 1=black (tr<fr, moves down).
+    // Move-geometry inferred (matches WHITE/BLACK semantics for legal pawn pushes).
+    const std::uint32_t pawn_color = std::uint32_t(tr < fr);
+    // is_init: 1 iff fr in {1, 6} (pawn home rank). 0x42 = bits 1 and 6 set.
+    const std::uint32_t is_init   = std::uint32_t((0x42u >> fr) & 1u);
+    const std::uint32_t init_mask = std::uint32_t(0u) - is_init;
+
+    // is_double: 1 iff |tr - fr| == 2 (pawn double push). Equivalent to
+    // ((tr ^ fr) & 3) == 2 on the valid (fr, tr) tuples in PAWN_MASK.
+    const std::uint32_t is_double = std::uint32_t(((tr ^ fr) & 3u) == 2u);
+    const std::uint32_t init_slot = (pawn_color << 4u) + (ff << 1u) + is_double;
+    const std::uint32_t cont_slot = 32u + (pawn_color << 5u) + (ff << 2u) + (fr - 2u);
+    const std::uint32_t pawn_slot = (init_slot & init_mask) | (cont_slot & ~init_mask);
+
+    // King-class chebyshev=1 (any rank).
+    const int           fdiff     = int(tf) - int(ff);
+    const int           rdiff     = int(tr) - int(fr);
+    const std::uint32_t fdiff_ok  = std::uint32_t(std::uint32_t(fdiff + 1) <= 2u);
+    const std::uint32_t rdiff_ok  = std::uint32_t(std::uint32_t(rdiff + 1) <= 2u);
+    const std::uint32_t not_null  = std::uint32_t((fdiff != 0) | (rdiff != 0));
+    const std::uint32_t king_hit  = fdiff_ok & rdiff_ok & not_null;
+    const std::uint32_t king_mask = std::uint32_t(0u) - king_hit;
+    const std::uint32_t pos       = std::uint32_t(fdiff + 1) * 3u + std::uint32_t(rdiff + 1);
+    const std::uint32_t dest      = pos - std::uint32_t(pos > 3u);
+    const std::uint32_t king_slot = 96u + fr * 64u + ff * 8u + dest;
+
+    std::uint32_t s = (king_slot & king_mask) | (tier3 & ~king_mask);
+    s               = (pawn_slot & pawn_mask) | (s & ~pawn_mask);
+    return std::size_t(s);
+}
+
+using ButterflyHistory = Stats<std::int16_t, 7183, COLOR_NB, MAINHIST_FREQ_SIZE>;
 
 // LowPlyHistory is addressed by ply and move's from and to squares, used
 // to improve move ordering near the root
-using LowPlyHistory = Stats<std::int16_t, 7183, LOW_PLY_HISTORY_SIZE, UINT_16_HISTORY_SIZE>;
+using LowPlyHistory = Stats<std::int16_t, 7183, LOW_PLY_HISTORY_SIZE, MAINHIST_FREQ_SIZE>;
 
 // CapturePieceToHistory is addressed by a move's [piece][to][captured piece type]
 using CapturePieceToHistory = Stats<std::int16_t, 10692, PIECE_NB, SQUARE_NB, PIECE_TYPE_NB>;
