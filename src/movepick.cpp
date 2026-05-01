@@ -157,14 +157,16 @@ ExtMove* MovePicker::score(const MoveList<Type>& ml) {
 
         else if constexpr (Type == QUIETS)
         {
+            const std::size_t chPcIdx = cont_hist_piece_index(pc);
+
             // histories
             m.value = 2 * (*mainHistory)[us][m.raw()];
             m.value += 2 * sharedHistory->pawn_entry(pos)[pc][to];
-            m.value += (*continuationHistory[0])[pc][to];
-            m.value += (*continuationHistory[1])[pc][to];
-            m.value += (*continuationHistory[2])[pc][to];
-            m.value += (*continuationHistory[3])[pc][to];
-            m.value += (*continuationHistory[5])[pc][to];
+            m.value += (*continuationHistory[0])[chPcIdx][to];
+            m.value += (*continuationHistory[1])[chPcIdx][to];
+            m.value += (*continuationHistory[2])[chPcIdx][to];
+            m.value += (*continuationHistory[3])[chPcIdx][to];
+            m.value += (*continuationHistory[5])[chPcIdx][to];
 
             // bonus for checks
             m.value += ((pos.check_squares(pt) & to) && pos.see_ge(m, -75)) * 16384;
@@ -184,7 +186,11 @@ ExtMove* MovePicker::score(const MoveList<Type>& ml) {
             if (pos.capture_stage(m))
                 m.value = PieceValue[capturedPiece] + (1 << 28);
             else
-                m.value = (*mainHistory)[us][m.raw()] + (*continuationHistory[0])[pc][to];
+            {
+                const std::size_t chPcIdx = cont_hist_piece_index(pc);
+
+                m.value = (*mainHistory)[us][m.raw()] + (*continuationHistory[0])[chPcIdx][to];
+            }
         }
     }
     return it;

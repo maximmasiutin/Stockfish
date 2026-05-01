@@ -333,6 +333,7 @@ class Worker {
 
     CapturePieceToHistory           captureHistory;
     ContinuationHistory             continuationHistory[2][2];
+    PieceToHistory                  nullMoveContSentinel;
     CorrectionHistory<Continuation> continuationCorrectionHistory;
 
     TTMoveHistory    ttMoveHistory;

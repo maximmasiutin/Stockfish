@@ -283,8 +283,7 @@ bool Search::Worker::iterative_deepening() {
 
     for (int i = 7; i > 0; --i)
     {
-        (ss - i)->continuationHistory =
-          &continuationHistory[0][0][NO_PIECE][0];  // Use as a sentinel
+        (ss - i)->continuationHistory           = &nullMoveContSentinel;  // null-move sentinel
         (ss - i)->continuationCorrectionHistory = &continuationCorrectionHistory[NO_PIECE][0];
         (ss - i)->staticEval                    = VALUE_NONE;
     }
@@ -595,7 +594,8 @@ void Search::Worker::do_move(
     {
         ss->currentMove = move;
         ss->continuationHistory =
-          &continuationHistory[ss->inCheck][capture][dirtyPiece.pc][move.to_sq()];
+          &continuationHistory[ss->inCheck][capture][cont_hist_piece_index(dirtyPiece.pc)]
+                              [move.to_sq()];
         ss->continuationCorrectionHistory =
           &continuationCorrectionHistory[dirtyPiece.pc][move.to_sq()];
     }
@@ -604,7 +604,7 @@ void Search::Worker::do_move(
 void Search::Worker::do_null_move(Position& pos, StateInfo& st, Stack* const ss) {
     pos.do_null_move(st);
     ss->currentMove                   = Move::null();
-    ss->continuationHistory           = &continuationHistory[0][0][NO_PIECE][0];
+    ss->continuationHistory           = &nullMoveContSentinel;
     ss->continuationCorrectionHistory = &continuationCorrectionHistory[NO_PIECE][0];
 }
 
@@ -636,6 +636,8 @@ void Search::Worker::clear() {
             for (auto& to : continuationHistory[inCheck][c])
                 for (auto& h : to)
                     h.fill(-523);
+
+    nullMoveContSentinel.fill(-523);
 
     for (size_t i = 1; i < reductions.size(); ++i)
         reductions[i] = int(2763 / 128.0 * std::log(i));
@@ -810,7 +812,12 @@ Value Search::Worker::search(
 
             // Extra penalty for early quiet moves of the previous ply
             if (prevSq != SQ_NONE && (ss - 1)->moveCount < 4 && !priorCapture)
-                update_continuation_histories(ss - 1, pos.piece_on(prevSq), prevSq, -2014);
+            {
+                const Piece prevPiece = pos.piece_on(prevSq);
+
+                if (prevPiece != NO_PIECE)
+                    update_continuation_histories(ss - 1, prevPiece, prevSq, -2014);
+            }
         }
 
         // Partial workaround for the graph history interaction problem
@@ -1117,9 +1124,12 @@ moves_loop:  // When in check, search starts here
             }
             else if (!ss->followPV || !PvNode)
             {
-                int dIndex  = std::min(int(depth), int(lmrDivisor.size())) - 1;
-                int history = (*contHist[0])[movedPiece][move.to_sq()]
-                            + (*contHist[1])[movedPiece][move.to_sq()]
+                int dIndex = std::min(int(depth), int(lmrDivisor.size())) - 1;
+
+                const std::size_t chMovedIdx = cont_hist_piece_index(movedPiece);
+
+                int history = (*contHist[0])[chMovedIdx][move.to_sq()]
+                            + (*contHist[1])[chMovedIdx][move.to_sq()]
                             + sharedHistory.pawn_entry(pos)[movedPiece][move.to_sq()];
 
                 // Continuation history based pruning
@@ -1253,9 +1263,13 @@ moves_loop:  // When in check, search starts here
             ss->statScore = 863 * int(PieceValue[pos.captured_piece()]) / 128
                           + captureHistory[movedPiece][move.to_sq()][type_of(pos.captured_piece())];
         else
+        {
+            const std::size_t chMovedIdx = cont_hist_piece_index(movedPiece);
+
             ss->statScore = 2 * mainHistory[us][move.raw()]
-                          + (*contHist[0])[movedPiece][move.to_sq()]
-                          + (*contHist[1])[movedPiece][move.to_sq()];
+                          + (*contHist[0])[chMovedIdx][move.to_sq()]
+                          + (*contHist[1])[chMovedIdx][move.to_sq()];
+        }
 
         // Decrease/increase reduction for moves with a good/bad history
         r -= ss->statScore * 428 / 4096;
@@ -1472,13 +1486,17 @@ moves_loop:  // When in check, search starts here
         // scaledBonus ranges from 0 to roughly 2.3M, overflows happen for multipliers larger than 900
         const int scaledBonus = std::min(135 * depth - 80, 1400) * bonusScale;
 
-        update_continuation_histories(ss - 1, pos.piece_on(prevSq), prevSq,
-                                      scaledBonus * 221 / 16384);
+        const Piece prevPiece = pos.piece_on(prevSq);
+
+        if (prevPiece != NO_PIECE)
+        {
+            update_continuation_histories(ss - 1, prevPiece, prevSq, scaledBonus * 221 / 16384);
+
+            if (type_of(prevPiece) != PAWN && ((ss - 1)->currentMove).type_of() != PROMOTION)
+                sharedHistory.pawn_entry(pos)[prevPiece][prevSq] << scaledBonus * 290 / 8192;
+        }
 
         mainHistory[~us][((ss - 1)->currentMove).raw()] << scaledBonus * 235 / 32768;
-
-        if (type_of(pos.piece_on(prevSq)) != PAWN && ((ss - 1)->currentMove).type_of() != PROMOTION)
-            sharedHistory.pawn_entry(pos)[pos.piece_on(prevSq)][prevSq] << scaledBonus * 290 / 8192;
     }
 
     // Bonus for prior capture countermove that caused the fail low
@@ -1878,7 +1896,12 @@ void update_all_stats(const Position& pos,
     // Extra penalty for a quiet early move that was not a TT move in
     // previous ply when it gets refuted.
     if (prevSq != SQ_NONE && ((ss - 1)->moveCount == 1 + (ss - 1)->ttHit) && !pos.captured_piece())
-        update_continuation_histories(ss - 1, pos.piece_on(prevSq), prevSq, -malus * 616 / 1024);
+    {
+        const Piece prevPiece = pos.piece_on(prevSq);
+
+        if (prevPiece != NO_PIECE)
+            update_continuation_histories(ss - 1, prevPiece, prevSq, -malus * 616 / 1024);
+    }
 
     // Decrease stats for all non-best capture moves
     for (Move move : capturesSearched)
@@ -1900,6 +1923,8 @@ void update_continuation_histories(Stack* ss, Piece pc, Square to, int bonus) {
     constexpr int CMHCMultipliers[] = {96, 100, 100, 100, 115, 118, 129};
     int           positiveCount     = 0;
 
+    const std::size_t chPcIdx = cont_hist_piece_index(pc);
+
     for (const auto [i, weight] : conthist_bonuses)
     {
         // Only update the first 2 continuation histories if we are in check
@@ -1908,7 +1933,7 @@ void update_continuation_histories(Stack* ss, Piece pc, Square to, int bonus) {
 
         if (((ss - i)->currentMove).is_ok())
         {
-            auto& historyEntry = (*(ss - i)->continuationHistory)[pc][to];
+            auto& historyEntry = (*(ss - i)->continuationHistory)[chPcIdx][to];
             if (historyEntry > 0)
                 positiveCount++;
 
@@ -1929,10 +1954,19 @@ void update_quiet_histories(
     if (ss->ply < LOW_PLY_HISTORY_SIZE)
         workerThread.lowPlyHistory[ss->ply][move.raw()] << bonus * 682 / 1024;
 
-    update_continuation_histories(ss, pos.moved_piece(move), move.to_sq(), bonus * 894 / 1024);
+    const Piece movedPc = pos.moved_piece(move);
 
-    workerThread.sharedHistory.pawn_entry(pos)[pos.moved_piece(move)][move.to_sq()]
-      << bonus * (bonus > 0 ? 974 : 543) / 1024;
+    // Stale TT-move callers can supply a move whose from_sq is empty in the
+    // current position (movedPc == NO_PIECE). The 12-slot conthist Piece
+    // dim has no slot for NO_PIECE; pawnhist's dead inner row is never read
+    // by readers that always index by a realized pc, so skipping it is
+    // observationally identical to writing it.
+    if (movedPc != NO_PIECE)
+    {
+        update_continuation_histories(ss, movedPc, move.to_sq(), bonus * 894 / 1024);
+        workerThread.sharedHistory.pawn_entry(pos)[movedPc][move.to_sq()]
+          << bonus * (bonus > 0 ? 974 : 543) / 1024;
+    }
 }
 }
 

@@ -141,13 +141,38 @@ using LowPlyHistory = Stats<std::int16_t, 7183, LOW_PLY_HISTORY_SIZE, UINT_16_HI
 // CapturePieceToHistory is addressed by a move's [piece][to][captured piece type]
 using CapturePieceToHistory = Stats<std::int16_t, 10692, PIECE_NB, SQUARE_NB, PIECE_TYPE_NB>;
 
-// PieceToHistory is like ButterflyHistory but is addressed by a move's [piece][to]
-using PieceToHistory = Stats<std::int16_t, 30000, PIECE_NB, SQUARE_NB>;
+// Compressed continuationHistory Piece dim: only the 12 realized chess piece
+// codes (W_PAWN..W_KING, B_PAWN..B_KING) are mapped. NO_PIECE and the 3
+// unused encoding slots (pc 7, 8, 15) are not allocated; the null-move
+// sentinel that uses parent_pc = NO_PIECE in master lives in a separate
+// per-Worker PieceToHistory variable.
+constexpr unsigned CONT_HIST_PIECE_DIM = 12;
 
-// ContinuationHistory is the combined history of a given pair of moves, usually
-// the current one given a previous one. The nested history table is based on
-// PieceToHistory instead of ButterflyBoards.
-using ContinuationHistory = MultiArray<PieceToHistory, PIECE_NB, SQUARE_NB>;
+static_assert(PIECE_NB == 16, "cont_hist_piece_index assumes 16-entry Piece encoding");
+
+// Realized child_pcs: {1..6, 9..14}. Map W_PAWN..W_KING to slots [0, 5] and
+// B_PAWN..B_KING to slots [6, 11]. Closed-form, register-only, 2-3 ALU ops.
+sf_always_inline inline std::size_t cont_hist_piece_index(Piece pc) {
+    const unsigned p = unsigned(pc);
+    assert(p < PIECE_NB);
+    assert(p != 0u
+           && "NO_PIECE must not reach cont_hist_piece_index; "
+              "use the Worker null-move sentinel instead");
+    assert(p != 7u && p != 8u && p != 15u
+           && "cont_hist_piece_index called with unused Piece encoding");
+    const unsigned slot = (p - 1u) - ((p & 8u) >> 2);  // (p-1) - 2*(p>>3)
+    assert(slot < CONT_HIST_PIECE_DIM);
+    return std::size_t(slot);
+}
+
+// PieceToHistory: like ButterflyHistory but addressed by [piece][to]. Inner
+// Piece dim shrunk from PIECE_NB(16) to CONT_HIST_PIECE_DIM(12).
+using PieceToHistory = Stats<std::int16_t, 30000, CONT_HIST_PIECE_DIM, SQUARE_NB>;
+
+// ContinuationHistory: outer Piece dim also shrunk to CONT_HIST_PIECE_DIM(12).
+// parent_pc = NO_PIECE (null-move sentinel) is stored separately in
+// Worker::nullMoveContSentinel rather than in this array.
+using ContinuationHistory = MultiArray<PieceToHistory, CONT_HIST_PIECE_DIM, SQUARE_NB>;
 
 // PawnHistory is addressed by the pawn structure and a move's [piece][to]
 using PawnHistory =
