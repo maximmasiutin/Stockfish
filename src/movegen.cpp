@@ -19,9 +19,13 @@
 #include "movegen.h"
 
 #include <cassert>
+#include <cstddef>
+#include <cstdint>
 #include <initializer_list>
 
 #include "bitboard.h"
+#include "history.h"
+#include "misc.h"
 #include "position.h"
 
 #if defined(USE_AVX512ICL)
@@ -284,6 +288,85 @@ Move* generate<LEGAL>(const Position& pos, Move* moveList) {
             ++cur;
 
     return moveList;
+}
+
+// Cold tail of main_hist_freq_index. Only entered for non-NORMAL move types
+// (PROMOTION, EN_PASSANT, CASTLING) since the hot path's `r >= 0x4000u` gate
+// catches those. Sentinels (raw=0, raw=65) are NORMAL-typed and route through
+// the inline path; the call sites in movepick/search are guarded upstream by
+// is_ok() so sentinels never reach mainHistory access.
+sf_noinline std::size_t main_hist_freq_index_special(std::uint32_t r) {
+    const std::uint32_t type = (r >> 14) & 3u;
+    const std::uint32_t from = (r >> 6) & 0x3Fu;
+    const std::uint32_t to   = r & 0x3Fu;
+    const std::uint32_t ff   = from & 7u;
+    const std::uint32_t tf   = to & 7u;
+    const std::uint32_t fr   = from >> 3;
+    // half = from >> 5 splits ranks 0-3 (0) vs 4-7 (1). Matches WHITE/BLACK for
+    // CASTLING; reversed for PROMOTION (white promotes from rank 6 -> half=1).
+    // Used as a bijection bit only.
+    const std::uint32_t half = from >> 5;
+
+    if (type == 1u)
+    {
+        const std::uint32_t promo = (r >> 12) & 3u;
+        return 4704u + (half << 5) + ff * 4u + promo;
+    }
+    if (type == 3u)
+        return 4768u + half * 64u + ff * 8u + tf;
+
+    // EN_PASSANT (type == 2): from rank 4 (white) or rank 3 (black).
+    const std::uint32_t ep_half = std::uint32_t(fr >= 4u);
+    const std::uint32_t dir     = std::uint32_t(tf > ff);
+    return 4896u + ep_half * 16u + tf * 2u + dir;
+}
+
+// Frequency-aware mainHistory index. Both inner and outer marked sf_noinline
+// to force fully out-of-line codegen at every call site, isolating
+// "function-call-cost only" from "inline-bloat".
+// See research/mainhist-fa-attr-and-cache-experiments.md.
+sf_noinline std::size_t main_hist_freq_index(Move m) {
+    const std::uint32_t r = std::uint32_t(m.raw());
+    if (r >= 0x4000u)
+        return main_hist_freq_index_special(r);
+
+    const std::uint32_t from = (r >> 6) & 0x3Fu;
+    const std::uint32_t to   = r & 0x3Fu;
+    const std::uint32_t fr   = from >> 3;
+    const std::uint32_t ff   = from & 7u;
+    const std::uint32_t tr   = to >> 3;
+    const std::uint32_t tf   = to & 7u;
+
+    const std::uint32_t tier3 = 608u + (r & 0xFFFu);
+
+    constexpr std::uint64_t PAWN_MASK = 0x00305028140a0c00ULL;
+    const std::uint32_t     same_file = std::uint32_t(((from ^ to) & 7u) == 0u);
+    const std::uint32_t pawn_hit  = same_file & std::uint32_t((PAWN_MASK >> (fr * 8u + tr)) & 1u);
+    const std::uint32_t pawn_mask = std::uint32_t(0u) - pawn_hit;
+
+    const std::uint32_t pawn_color = std::uint32_t(tr < fr);
+    const std::uint32_t is_init    = std::uint32_t((0x42u >> fr) & 1u);
+    const std::uint32_t init_mask  = std::uint32_t(0u) - is_init;
+
+    const std::uint32_t is_double = std::uint32_t(((tr ^ fr) & 3u) == 2u);
+    const std::uint32_t init_slot = (pawn_color << 4u) + (ff << 1u) + is_double;
+    const std::uint32_t cont_slot = 32u + (pawn_color << 5u) + (ff << 2u) + (fr - 2u);
+    const std::uint32_t pawn_slot = (init_slot & init_mask) | (cont_slot & ~init_mask);
+
+    const int           fdiff     = int(tf) - int(ff);
+    const int           rdiff     = int(tr) - int(fr);
+    const std::uint32_t fdiff_ok  = std::uint32_t(std::uint32_t(fdiff + 1) <= 2u);
+    const std::uint32_t rdiff_ok  = std::uint32_t(std::uint32_t(rdiff + 1) <= 2u);
+    const std::uint32_t not_null  = std::uint32_t((fdiff != 0) | (rdiff != 0));
+    const std::uint32_t king_hit  = fdiff_ok & rdiff_ok & not_null;
+    const std::uint32_t king_mask = std::uint32_t(0u) - king_hit;
+    const std::uint32_t pos       = std::uint32_t(fdiff + 1) * 3u + std::uint32_t(rdiff + 1);
+    const std::uint32_t dest      = pos - std::uint32_t(pos > 3u);
+    const std::uint32_t king_slot = 96u + fr * 64u + ff * 8u + dest;
+
+    std::uint32_t s = (king_slot & king_mask) | (tier3 & ~king_mask);
+    s               = (pawn_slot & pawn_mask) | (s & ~pawn_mask);
+    return std::size_t(s);
 }
 
 }  // namespace Stockfish
