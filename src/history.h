@@ -128,11 +128,22 @@ struct DynStats {
     LargePagePtr<T[]> data;
 };
 
+constexpr int MAINHIST_COMPACT_SIZE = 4448;
+
+sf_noinline std::size_t main_hist_compact_index_special(std::uint32_t r);
+
+sf_always_inline inline std::size_t main_hist_compact_index(Move m) {
+    const std::uint32_t r = std::uint32_t(m.raw());
+    if (r >= 0x4000u)
+        return main_hist_compact_index_special(r);
+    return std::size_t(r & 0xFFFu);
+}
+
 // ButterflyHistory records how often quiet moves have been successful or unsuccessful
 // during the current search, and is used for reduction and move ordering decisions.
 // It uses 2 tables (one for each color) indexed by the move's from and to squares,
 // see https://www.chessprogramming.org/Butterfly_Boards
-using ButterflyHistory = Stats<std::int16_t, 7183, COLOR_NB, UINT_16_HISTORY_SIZE>;
+using ButterflyHistory = Stats<std::int16_t, 7183, COLOR_NB, MAINHIST_COMPACT_SIZE>;
 
 // LowPlyHistory is addressed by ply and move's from and to squares, used
 // to improve move ordering near the root
