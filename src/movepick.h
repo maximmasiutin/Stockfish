@@ -19,6 +19,8 @@
 #ifndef MOVEPICK_H_INCLUDED
 #define MOVEPICK_H_INCLUDED
 
+#include <cstdint>
+
 #include "history.h"
 #include "movegen.h"
 #include "types.h"
@@ -48,8 +50,9 @@ class MovePicker {
                const SharedHistories*,
                int);
     MovePicker(const Position&, Move, int, const CapturePieceToHistory*);
-    Move next_move();
-    void skip_quiet_moves();
+    Move          next_move();
+    std::uint16_t current_freq_slot() const { return lastFreqSlot; }
+    void          skip_quiet_moves();
 
    private:
     template<typename Pred>
@@ -71,7 +74,8 @@ class MovePicker {
     int                          threshold;
     Depth                        depth;
     int                          ply;
-    bool                         skipQuiets = false;
+    bool                         skipQuiets   = false;
+    std::uint16_t                lastFreqSlot = NO_FREQ_SLOT;  // freq slot of last emitted move
     ExtMove                      moves[MAX_MOVES];
 };
 

@@ -21,6 +21,7 @@
 
 #include <algorithm>  // IWYU pragma: keep
 #include <cstddef>
+#include <cstdint>
 
 #include "types.h"
 
@@ -36,15 +37,29 @@ enum GenType {
     LEGAL
 };
 
-struct ExtMove: public Move {
-    int value;
+// Sentinel marking an uncomputed freq slot in ExtMove::freq_slot,
+// Stack::currentFreqSlot, and MovePicker::lastFreqSlot. Outside the valid
+// slot range [0, MAINHIST_FREQ_SIZE); reading this value at a cached read
+// site is a logic error caught by the asserts there.
+constexpr std::uint16_t NO_FREQ_SLOT = 0xFFFFu;
 
-    void operator=(Move m) { data = m.raw(); }
+// freq_slot caches the freq-aware mainHistory slot from MovePicker::score<>().
+// Reuses the 2-byte slot between Move::data and value that alignment would
+// otherwise leave empty; sizeof(ExtMove) stays at 8 bytes (static_assert below).
+struct ExtMove: public Move {
+    std::uint16_t freq_slot;
+    int           value;
+
+    void operator=(Move m) {
+        data      = m.raw();
+        freq_slot = NO_FREQ_SLOT;
+    }
 
     // Inhibit unwanted implicit conversions to Move
     // with an ambiguity that yields to a compile error.
     operator float() const = delete;
 };
+static_assert(sizeof(ExtMove) == 8, "ExtMove must remain 8 bytes");
 
 inline bool operator<(const ExtMove& f, const ExtMove& s) { return f.value < s.value; }
 
