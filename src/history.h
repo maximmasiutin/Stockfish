@@ -128,11 +128,30 @@ struct DynStats {
     LargePagePtr<T[]> data;
 };
 
-// ButterflyHistory records how often quiet moves have been successful or unsuccessful
-// during the current search, and is used for reduction and move ordering decisions.
-// It uses 2 tables (one for each color) indexed by the move's from and to squares,
-// see https://www.chessprogramming.org/Butterfly_Boards
-using ButterflyHistory = Stats<std::int16_t, 7183, COLOR_NB, UINT_16_HISTORY_SIZE>;
+// ButterflyHistory: frequency-aware indexed mainHistory with split-mask pawn
+// slot computation. Init pawn pushes (first-row source: fr in {1,6}) at
+// [0,32) and continuation pawn pushes (fr in {2..5}) at [32,96) are computed
+// by separate slot expressions selected via mask blend rather than a unified
+// variable-shift chain. King-class chebyshev=1 (any rank) at [96,608); NORMAL
+// rest at [608,4704); PROMOTION/CASTLING/EN_PASSANT in cold tail. Hot path is
+// fully branchless inside NORMAL: a single conditional branch (the cold gate)
+// routes non-NORMAL types to a small cold tail.
+//
+// Slot layout (per color slice; total 4930 slots):
+//   [0, 32)        Tier 0  NORMAL initial-rank pawn pushes
+//   [32, 96)       Tier 1  NORMAL continuation single-pushes
+//   [96, 608)      Tier 2  NORMAL chebyshev=1 from any rank (king-class)
+//   [608, 4704)    Tier 3  NORMAL fallback, (from << 6) | to ordering
+//   [4704, 4768)   Tier 4  PROMOTION
+//   [4768, 4896)   Tier 5  CASTLING (DFRC-safe)
+//   [4896, 4928)   Tier 6  EN_PASSANT
+//   [4928, 4930)   unused (former sentinels; never reached at call sites)
+constexpr int MAINHIST_FREQ_SIZE = 4930;
+
+sf_noinline std::size_t main_hist_freq_index_special(std::uint32_t r);
+std::size_t             main_hist_freq_index(Move m);
+
+using ButterflyHistory = Stats<std::int16_t, 7183, COLOR_NB, MAINHIST_FREQ_SIZE>;
 
 // LowPlyHistory is addressed by ply and move's from and to squares, used
 // to improve move ordering near the root
