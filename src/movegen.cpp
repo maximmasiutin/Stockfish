@@ -22,6 +22,7 @@
 #include <initializer_list>
 
 #include "bitboard.h"
+#include "history.h"
 #include "position.h"
 
 #if defined(USE_AVX512ICL)
@@ -284,6 +285,51 @@ Move* generate<LEGAL>(const Position& pos, Move* moveList) {
             ++cur;
 
     return moveList;
+}
+
+// Cold tail of low_ply_move_index. Only entered for non-NORMAL move types
+// (PROMOTION, CASTLING; EN_PASSANT must not reach LowPlyHistory). Each color
+// gets a 32-slot bucket starting at LOW_PLY_NORMAL_SLOTS.
+sf_noinline std::size_t low_ply_move_index_special(std::uint32_t r) {
+    const std::uint32_t type = (r >> 14) & 3u;
+    const std::uint32_t from = (r >> 6) & 0x3Fu;
+
+    // type == 0u (NORMAL) is filtered by the hot-path gate; reaching this
+    // function with type == 0 is a logic error.
+    assert(type != 0u);
+
+    // Side-to-move: 0 = white, 1 = black. PROMOTION-from is on rank 7 for
+    // white (bit 5 = 1) and rank 2 for black (bit 5 = 0); CASTLING-from is
+    // E1 for white (bit 5 = 0) and E8 for black (bit 5 = 1). The two types
+    // therefore use opposite polarities of the same bit.
+    const std::uint32_t bit5  = from >> 5;
+    const std::uint32_t color = (type == 1u) ? (1u - bit5) : bit5;
+    const std::uint32_t base  = LOW_PLY_NORMAL_SLOTS + (color << 5);
+
+    // Order by typical VLTC frequency (120+1.2, 1T, initial position):
+    //   CASTLING   87.54% of non-NORMAL calls
+    //   PROMOTION  12.46%
+    //   EN_PASSANT must not reach LowPlyHistory (asserted)
+    if (type == 3u)
+    {  // CASTLING: 2 entries per color (queenside, kingside)
+        // Rook is encoded in `to`, king in `from`; comparing their files
+        // gives the side bit and stays correct under Chess960 placements.
+        const std::uint32_t to       = r & 0x3Fu;
+        const std::uint32_t side_bit = std::uint32_t((to & 7u) > (from & 7u));
+        return base + 24u + side_bit;  // [base + 24, base + 26)
+    }
+    if (type == 1u)
+    {  // PROMOTION: 8 files * 3 promo pieces = 24 entries per color
+        const std::uint32_t promo = (r >> 12) & 3u;
+        // QUIETS movegen never emits QUEEN promotions; that case would collide
+        // with the CASTLING bucket at file*3 + 3.
+        assert(promo < 3u && "QUEEN promotion must not reach LowPlyHistory");
+        const std::uint32_t file = from & 7u;
+        return base + file * 3u + promo;  // [base + 0, base + 24)
+    }
+
+    assert(false && "EN_PASSANT must not reach LowPlyHistory");
+    return 0;
 }
 
 }  // namespace Stockfish
