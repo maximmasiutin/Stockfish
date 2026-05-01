@@ -294,8 +294,7 @@ Move* generate<LEGAL>(const Position& pos, Move* moveList) {
 // catches those. Sentinels (raw=0, raw=65) are NORMAL-typed and stay on the
 // inline path rather than entering this helper; this function is total over
 // any 32-bit input value, so reaching it with any raw simply produces a
-// deterministic slot, identical-by-construction to master's behavior on the
-// same Move::raw().
+// deterministic slot.
 sf_noinline std::size_t main_hist_freq_index_special(std::uint32_t r) {
     const std::uint32_t type = (r >> 14) & 3u;
     const std::uint32_t from = (r >> 6) & 0x3Fu;
