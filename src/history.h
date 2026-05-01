@@ -141,13 +141,33 @@ using LowPlyHistory = Stats<std::int16_t, 7183, LOW_PLY_HISTORY_SIZE, UINT_16_HI
 // CapturePieceToHistory is addressed by a move's [piece][to][captured piece type]
 using CapturePieceToHistory = Stats<std::int16_t, 10692, PIECE_NB, SQUARE_NB, PIECE_TYPE_NB>;
 
-// PieceToHistory is like ButterflyHistory but is addressed by a move's [piece][to]
-using PieceToHistory = Stats<std::int16_t, 30000, PIECE_NB, SQUARE_NB>;
+// Compressed continuation-history Piece dim: realized chess piece codes
+// (NO_PIECE, W_PAWN..W_KING, B_PAWN..B_KING) are 13 of the 16 enum slots.
+// The 3 unused slots (pc 7, 8, 15) carry no traffic in master, so we drop
+// them and remap realized pcs into [0, 12]. Master pc-order is preserved
+// within realized pieces; no frequency-rank reordering.
+constexpr unsigned CONT_HIST_PIECE_DIM = 13;
 
-// ContinuationHistory is the combined history of a given pair of moves, usually
-// the current one given a previous one. The nested history table is based on
-// PieceToHistory instead of ButterflyBoards.
-using ContinuationHistory = MultiArray<PieceToHistory, PIECE_NB, SQUARE_NB>;
+static_assert(PIECE_NB == 16, "cont_hist_piece_index assumes 16-entry Piece encoding");
+
+// Realized pcs map: 0 -> 0, 1..6 -> 1..6, 9..14 -> 7..12. Closed-form, no LUT
+// and no 64-bit immediate: 2-3 ALU ops, 0 memory accesses.
+sf_always_inline inline std::size_t cont_hist_piece_index(Piece pc) {
+    const unsigned p = unsigned(pc);
+    assert(p < PIECE_NB);
+    assert(p != 7u && p != 8u && p != 15u
+           && "cont_hist_piece_index called with unused Piece encoding");
+    const unsigned slot = p - ((p & 8u) >> 2);  // p - 2 * (p >> 3)
+    assert(slot < CONT_HIST_PIECE_DIM);
+    return std::size_t(slot);
+}
+
+// PieceToHistory: like ButterflyHistory but addressed by [piece][to], with the
+// inner Piece dim shrunk from PIECE_NB(16) to CONT_HIST_PIECE_DIM(13).
+using PieceToHistory = Stats<std::int16_t, 30000, CONT_HIST_PIECE_DIM, SQUARE_NB>;
+
+// ContinuationHistory: outer Piece dim (parent_pc) compressed identically.
+using ContinuationHistory = MultiArray<PieceToHistory, CONT_HIST_PIECE_DIM, SQUARE_NB>;
 
 // PawnHistory is addressed by the pawn structure and a move's [piece][to]
 using PawnHistory =
