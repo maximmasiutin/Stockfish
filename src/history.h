@@ -144,6 +144,50 @@ using CapturePieceToHistory = Stats<std::int16_t, 10692, PIECE_NB, SQUARE_NB, PI
 // PieceToHistory is like ButterflyHistory but is addressed by a move's [piece][to]
 using PieceToHistory = Stats<std::int16_t, 30000, PIECE_NB, SQUARE_NB>;
 
+// Frequency-aware continuationHistory permutation so that unusable pieces are
+// not mixed with the real ones.
+static_assert(PIECE_NB == 16, "CONT_HIST_PIECE_PERM_PACKED assumes 16-entry Piece space");
+
+// Register-only encoding: each Piece code's permuted slot lives in a 4-bit
+// nibble of a single 64-bit constant, indexed by (4 * pc). No data memory
+// access on the hot path; the immediate is folded into the instruction stream
+// and decoded with SHL + SHRX + AND. Identical permutation to the array variant in
+// conthist-piece-permute, just stored in a register-resident form.
+//
+// Nibble layout (LSB nibble = pc 0, MSB nibble = pc 15):
+//   pc  0 NO_PIECE -> slot 13      pc  8 unused   -> slot 15
+//   pc  1 W_PAWN   -> slot 6       pc  9 B_PAWN   -> slot 9
+//   pc  2 W_KNIGHT -> slot 10      pc 10 B_KNIGHT -> slot 11
+//   pc  3 W_BISHOP -> slot 7       pc 11 B_BISHOP -> slot 8
+//   pc  4 W_ROOK   -> slot 0       pc 12 B_ROOK   -> slot 1
+//   pc  5 W_QUEEN  -> slot 4       pc 13 B_QUEEN  -> slot 5
+//   pc  6 W_KING   -> slot 2       pc 14 B_KING   -> slot 3
+//   pc  7 unused   -> slot 14      pc 15 unused   -> slot 12
+inline constexpr std::uint64_t CONT_HIST_PIECE_PERM_PACKED = 0xC3518B9FE2407A6DULL;
+
+// Compile-time bijection check: decode the packed nibbles and verify every
+// value in [0, PIECE_NB) appears exactly once.
+static_assert(
+  [] {
+      bool seen[PIECE_NB] = {};
+      for (unsigned pc = 0; pc < PIECE_NB; ++pc)
+      {
+          unsigned v = (CONT_HIST_PIECE_PERM_PACKED >> (pc << 2)) & 0xFu;
+          if (v >= PIECE_NB || seen[v])
+              return false;
+          seen[v] = true;
+      }
+      return true;
+  }(),
+  "CONT_HIST_PIECE_PERM_PACKED must encode a bijection on [0, PIECE_NB)");
+
+// Returns a permuted index, NOT a real chess piece. The result is for indexing
+// into PieceToHistory only and must never be passed to type_of() / color_of().
+sf_always_inline inline std::size_t cont_hist_piece_index(Piece pc) {
+    assert(unsigned(pc) < PIECE_NB);
+    return std::size_t((CONT_HIST_PIECE_PERM_PACKED >> (unsigned(pc) << 2)) & 0xFu);
+}
+
 // ContinuationHistory is the combined history of a given pair of moves, usually
 // the current one given a previous one. The nested history table is based on
 // PieceToHistory instead of ButterflyBoards.
