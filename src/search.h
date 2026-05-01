@@ -108,16 +108,18 @@ struct Stack {
     CorrectionHistory<PieceTo>* continuationCorrectionHistory;
     int                         ply;
     Move                        currentMove;
-    Move                        excludedMove;
-    Value                       staticEval;
-    int                         statScore;
-    int                         moveCount;
-    bool                        inCheck;
-    bool                        ttPv;
-    bool                        ttHit;
-    bool                        followPV;
-    int                         cutoffCnt;
-    int                         reduction;
+    std::uint16_t
+          currentFreqSlot;  // cached main_hist_freq_index(currentMove); NO_FREQ_SLOT if unset
+    Move  excludedMove;
+    Value staticEval;
+    int   statScore;
+    int   moveCount;
+    bool  inCheck;
+    bool  ttPv;
+    bool  ttHit;
+    bool  followPV;
+    int   cutoffCnt;
+    int   reduction;
 };
 
 
