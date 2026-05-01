@@ -1117,9 +1117,12 @@ moves_loop:  // When in check, search starts here
             }
             else if (!ss->followPV || !PvNode)
             {
-                int dIndex  = std::min(int(depth), int(lmrDivisor.size())) - 1;
-                int history = (*contHist[0])[movedPiece][move.to_sq()]
-                            + (*contHist[1])[movedPiece][move.to_sq()]
+                int dIndex = std::min(int(depth), int(lmrDivisor.size())) - 1;
+
+                const std::size_t chMovedIdx = cont_hist_piece_index(movedPiece);
+
+                int history = (*contHist[0])[chMovedIdx][move.to_sq()]
+                            + (*contHist[1])[chMovedIdx][move.to_sq()]
                             + sharedHistory.pawn_entry(pos)[movedPiece][move.to_sq()];
 
                 // Continuation history based pruning
@@ -1253,9 +1256,13 @@ moves_loop:  // When in check, search starts here
             ss->statScore = 863 * int(PieceValue[pos.captured_piece()]) / 128
                           + captureHistory[movedPiece][move.to_sq()][type_of(pos.captured_piece())];
         else
+        {
+            const std::size_t chMovedIdx = cont_hist_piece_index(movedPiece);
+
             ss->statScore = 2 * mainHistory[us][move.raw()]
-                          + (*contHist[0])[movedPiece][move.to_sq()]
-                          + (*contHist[1])[movedPiece][move.to_sq()];
+                          + (*contHist[0])[chMovedIdx][move.to_sq()]
+                          + (*contHist[1])[chMovedIdx][move.to_sq()];
+        }
 
         // Decrease/increase reduction for moves with a good/bad history
         r -= ss->statScore * 428 / 4096;
@@ -1900,6 +1907,8 @@ void update_continuation_histories(Stack* ss, Piece pc, Square to, int bonus) {
     constexpr int CMHCMultipliers[] = {96, 100, 100, 100, 115, 118, 129};
     int           positiveCount     = 0;
 
+    const std::size_t chPcIdx = cont_hist_piece_index(pc);
+
     for (const auto [i, weight] : conthist_bonuses)
     {
         // Only update the first 2 continuation histories if we are in check
@@ -1908,7 +1917,7 @@ void update_continuation_histories(Stack* ss, Piece pc, Square to, int bonus) {
 
         if (((ss - i)->currentMove).is_ok())
         {
-            auto& historyEntry = (*(ss - i)->continuationHistory)[pc][to];
+            auto& historyEntry = (*(ss - i)->continuationHistory)[chPcIdx][to];
             if (historyEntry > 0)
                 positiveCount++;
 

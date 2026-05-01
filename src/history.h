@@ -144,6 +144,49 @@ using CapturePieceToHistory = Stats<std::int16_t, 10692, PIECE_NB, SQUARE_NB, PI
 // PieceToHistory is like ButterflyHistory but is addressed by a move's [piece][to]
 using PieceToHistory = Stats<std::int16_t, 30000, PIECE_NB, SQUARE_NB>;
 
+// Frequency-aware continuationHistory permutation so that unusable pieces are
+// not mixed with the real ones.
+static_assert(PIECE_NB == 16, "CONT_HIST_PIECE_PERM mask assumes 16-entry Piece space");
+alignas(64) inline constexpr std::array<std::uint8_t, PIECE_NB> CONT_HIST_PIECE_PERM = {
+  13,  //  0 NO_PIECE -> slot 13 (cold)
+  6,   //  1 W_PAWN   -> slot 6
+  10,  //  2 W_KNIGHT -> slot 10
+  7,   //  3 W_BISHOP -> slot 7
+  0,   //  4 W_ROOK   -> slot 0  (hottest, multi-cell aggregate)
+  4,   //  5 W_QUEEN  -> slot 4
+  2,   //  6 W_KING   -> slot 2
+  14,  //  7 unused   -> dead slot
+  15,  //  8 unused   -> dead slot
+  9,   //  9 B_PAWN   -> slot 9
+  11,  // 10 B_KNIGHT -> slot 11 (coldest realized)
+  8,   // 11 B_BISHOP -> slot 8
+  1,   // 12 B_ROOK   -> slot 1
+  5,   // 13 B_QUEEN  -> slot 5
+  3,   // 14 B_KING   -> slot 3
+  12   // 15 unused   -> dead slot
+};
+
+// Compile-time bijection check: every value in [0, PIECE_NB) appears exactly once.
+static_assert(
+  [] {
+      bool seen[PIECE_NB] = {};
+      for (auto v : CONT_HIST_PIECE_PERM)
+      {
+          if (v >= PIECE_NB || seen[v])
+              return false;
+          seen[v] = true;
+      }
+      return true;
+  }(),
+  "CONT_HIST_PIECE_PERM must be a bijection on [0, PIECE_NB)");
+
+// Returns a permuted index, NOT a real chess piece. The result is for indexing
+// into PieceToHistory only and must never be passed to type_of() / color_of().
+sf_always_inline inline std::size_t cont_hist_piece_index(Piece pc) {
+    assert(unsigned(pc) < PIECE_NB);
+    return std::size_t(CONT_HIST_PIECE_PERM[unsigned(pc)]);
+}
+
 // ContinuationHistory is the combined history of a given pair of moves, usually
 // the current one given a previous one. The nested history table is based on
 // PieceToHistory instead of ButterflyBoards.
