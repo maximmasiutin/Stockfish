@@ -18,10 +18,12 @@
 
 #include "movegen.h"
 
+#include <algorithm>
 #include <cassert>
 #include <initializer_list>
 
 #include "bitboard.h"
+#include "history.h"
 #include "position.h"
 
 #if defined(USE_AVX512ICL)
@@ -284,6 +286,41 @@ Move* generate<LEGAL>(const Position& pos, Move* moveList) {
             ++cur;
 
     return moveList;
+}
+
+// Cold tail of main_hist_compact_index. Entered only for non-NORMAL move
+// types (PROMOTION, EN_PASSANT, CASTLING) since the hot path's `r >= 0x4000u`
+// gate catches those. Bijective on the realized chess move universe.
+//
+// Slot layout (per color slice; total tail = 352 slots):
+//   [4096, 4288)   PROMOTION  (2 half * 8 file * 3 dir * 4 promo = 192)
+//   [4288, 4320)   EN_PASSANT (2 half * 8 tf * 2 dir = 32)
+//   [4320, 4448)   CASTLING   (2 half * 8 ff * 8 tf = 128, DFRC-safe)
+sf_noinline std::size_t main_hist_compact_index_special(std::uint32_t r) {
+    const std::uint32_t type = (r >> 14) & 3u;
+    const std::uint32_t from = (r >> 6) & 0x3Fu;
+    const std::uint32_t to   = r & 0x3Fu;
+    const std::uint32_t ff   = from & 7u;
+    const std::uint32_t tf   = to & 7u;
+    const std::uint32_t fr   = from >> 3;
+    const std::uint32_t half = from >> 5;
+
+    if (type == 1u)
+    {
+        const std::uint32_t promo = (r >> 12) & 3u;
+        // dir encodes to_file - from_file: -1 -> 0 (cap-left), 0 -> 1 (push),
+        // +1 -> 2 (cap-right). Clamp keeps any unrealized diff inside [0, 2]
+        // even on hypothetical pseudo-promotion inputs.
+        const std::uint32_t pdir = std::uint32_t(std::clamp(int(tf) - int(ff), -1, 1) + 1);
+        return 4096u + half * 96u + ff * 12u + pdir * 4u + promo;
+    }
+    if (type == 3u)
+        return 4320u + half * 64u + ff * 8u + tf;
+
+    // EN_PASSANT (type == 2): from rank 4 (white) or rank 3 (black).
+    const std::uint32_t ep_half = std::uint32_t(fr >= 4u);
+    const std::uint32_t dir     = std::uint32_t(tf > ff);
+    return 4288u + ep_half * 16u + tf * 2u + dir;
 }
 
 }  // namespace Stockfish
