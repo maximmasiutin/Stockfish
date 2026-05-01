@@ -339,6 +339,13 @@ sf_noinline std::size_t main_hist_freq_index(Move m) {
 
     const std::uint32_t tier3 = 608u + (r & 0xFFFu);
 
+    // PAWN_MASK encodes the 12 legal NORMAL pawn pushes as a 64-bit bitmap
+    // indexed by (fr * 8 + tr): bit set iff a pawn can move from rank fr to
+    // rank tr in a single NORMAL move (init single + double pushes from
+    // ranks 1 and 6, continuation single pushes from ranks 2..5 in either
+    // direction). Set bits at positions {10,11,17,19,26,28,35,37,44,46,52,53}
+    // = 0x305028140a0c00. Captures and promotions are routed elsewhere; this
+    // mask only matters for same-file moves which can only be pawn pushes.
     constexpr std::uint64_t PAWN_MASK = 0x00305028140a0c00ULL;
     const std::uint32_t     same_file = std::uint32_t(((from ^ to) & 7u) == 0u);
     const std::uint32_t pawn_hit  = same_file & std::uint32_t((PAWN_MASK >> (fr * 8u + tr)) & 1u);
