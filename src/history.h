@@ -144,6 +144,43 @@ using CapturePieceToHistory = Stats<std::int16_t, 10692, PIECE_NB, SQUARE_NB, PI
 // PieceToHistory is like ButterflyHistory but is addressed by a move's [piece][to]
 using PieceToHistory = Stats<std::int16_t, 30000, PIECE_NB, SQUARE_NB>;
 
+// Frequency-aware continuationHistory inner permutation. Reorders the inner
+// Piece axis of PieceToHistory so the highest-volume piece codes (W_ROOK,
+// B_ROOK, W_KING, B_KING, ...) cluster at the lowest addresses inside each
+// 1.5 KiB PieceToHistory instance. Designed from the empirical 9-cell,
+// 134-blob, 670-billion-access conthist capture documented in
+// research/conthist-cell-counters.md. Bijective on the full 16-entry Piece
+// space, so every distinct chess piece code maps to a unique permuted slot
+// and bench-byte-equality is preserved when applied uniformly at every
+// inner conthist read/write site.
+//
+// Order (canonical aggregate ranking, hot to cold):
+//   W_ROOK, B_ROOK, W_KING, B_KING, W_QUEEN, B_QUEEN,
+//   W_PAWN, W_BISHOP, B_BISHOP, B_PAWN, W_KNIGHT, B_KNIGHT,
+//   NO_PIECE, [unused 7], [unused 8], [unused 15]
+alignas(64) inline constexpr std::array<std::uint8_t, PIECE_NB> CONT_HIST_PIECE_PERM = {
+  13,  //  0 NO_PIECE -> rank 14 (cold)
+  6,   //  1 W_PAWN   -> rank 7
+  10,  //  2 W_KNIGHT -> rank 11
+  7,   //  3 W_BISHOP -> rank 8
+  0,   //  4 W_ROOK   -> rank 1 (hottest)
+  4,   //  5 W_QUEEN  -> rank 5
+  2,   //  6 W_KING   -> rank 3
+  14,  //  7 unused   -> dead slot
+  15,  //  8 unused   -> dead slot
+  9,   //  9 B_PAWN   -> rank 10
+  11,  // 10 B_KNIGHT -> rank 12 (coldest realized)
+  8,   // 11 B_BISHOP -> rank 9
+  1,   // 12 B_ROOK   -> rank 2
+  5,   // 13 B_QUEEN  -> rank 6
+  3,   // 14 B_KING   -> rank 4
+  12   // 15 unused   -> dead slot
+};
+
+sf_always_inline inline Piece cont_hist_piece(Piece pc) {
+    return Piece(CONT_HIST_PIECE_PERM[std::uint32_t(pc) & 0xFu]);
+}
+
 // ContinuationHistory is the combined history of a given pair of moves, usually
 // the current one given a previous one. The nested history table is based on
 // PieceToHistory instead of ButterflyBoards.

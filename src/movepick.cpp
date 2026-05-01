@@ -148,6 +148,7 @@ ExtMove* MovePicker::score(const MoveList<Type>& ml) {
         const Square    from          = m.from_sq();
         const Square    to            = m.to_sq();
         const Piece     pc            = pos.moved_piece(m);
+        const Piece     chpc          = cont_hist_piece(pc);
         const PieceType pt            = type_of(pc);
         const Piece     capturedPiece = pos.piece_on(to);
 
@@ -160,11 +161,11 @@ ExtMove* MovePicker::score(const MoveList<Type>& ml) {
             // histories
             m.value = 2 * (*mainHistory)[us][m.raw()];
             m.value += 2 * sharedHistory->pawn_entry(pos)[pc][to];
-            m.value += (*continuationHistory[0])[pc][to];
-            m.value += (*continuationHistory[1])[pc][to];
-            m.value += (*continuationHistory[2])[pc][to];
-            m.value += (*continuationHistory[3])[pc][to];
-            m.value += (*continuationHistory[5])[pc][to];
+            m.value += (*continuationHistory[0])[chpc][to];
+            m.value += (*continuationHistory[1])[chpc][to];
+            m.value += (*continuationHistory[2])[chpc][to];
+            m.value += (*continuationHistory[3])[chpc][to];
+            m.value += (*continuationHistory[5])[chpc][to];
 
             // bonus for checks
             m.value += ((pos.check_squares(pt) & to) && pos.see_ge(m, -75)) * 16384;
@@ -184,7 +185,7 @@ ExtMove* MovePicker::score(const MoveList<Type>& ml) {
             if (pos.capture_stage(m))
                 m.value = PieceValue[capturedPiece] + (1 << 28);
             else
-                m.value = (*mainHistory)[us][m.raw()] + (*continuationHistory[0])[pc][to];
+                m.value = (*mainHistory)[us][m.raw()] + (*continuationHistory[0])[chpc][to];
         }
     }
     return it;
