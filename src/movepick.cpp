@@ -173,10 +173,6 @@ ExtMove* MovePicker::score(const MoveList<Type>& ml) {
             // or bonus for escaping an attack by a lesser piece.
             int v = 20 * (bool(threatByLesser[pt] & from) - bool(threatByLesser[pt] & to));
             m.value += PieceValue[pt] * v;
-
-
-            if (ply < LOW_PLY_HISTORY_SIZE)
-                m.value += 8 * (*lowPlyHistory)[ply][m.raw()] / (1 + ply);
         }
 
         else  // Type == EVASIONS
@@ -250,6 +246,14 @@ top:
             MoveList<QUIETS> ml(pos);
 
             endCur = endGenerated = score<QUIETS>(ml);
+
+            if (ply < LOW_PLY_HISTORY_SIZE)
+            {
+                auto&     lpRow   = (*lowPlyHistory)[ply];
+                const int divisor = 1 + ply;
+                for (ExtMove* p = cur; p < endCur; ++p)
+                    p->value += 8 * int(lpRow[low_ply_freq_index(*p)]) / divisor;
+            }
 
             partial_insertion_sort(cur, endCur, -3560 * depth);
         }
