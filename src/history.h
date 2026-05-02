@@ -134,9 +134,19 @@ struct DynStats {
 // see https://www.chessprogramming.org/Butterfly_Boards
 using ButterflyHistory = Stats<std::int16_t, 7183, COLOR_NB, UINT_16_HISTORY_SIZE>;
 
-// LowPlyHistory is addressed by ply and move's from and to squares, used
-// to improve move ordering near the root
-using LowPlyHistory = Stats<std::int16_t, 7183, LOW_PLY_HISTORY_SIZE, UINT_16_HISTORY_SIZE>;
+// LowPlyHistory: branchless tiered slot layout. Init pawn pushes (first-row
+// source: fr in {1,6}) at [0,32) and continuation pawn pushes (fr in {2..5})
+// at [32,96) are computed by separate slot expressions selected via mask
+// blend rather than a unified ternary chain. King back-rank [96,224), NORMAL
+// rest [224,4320), PROMOTION [4320,4384), CASTLING [4384,4388).
+constexpr std::size_t LOW_PLY_FREQ_SLOTS = 4388;
+
+std::size_t low_ply_freq_index(Move m);
+
+using LowPlyHistory = Stats<std::int16_t, 7183, LOW_PLY_HISTORY_SIZE, LOW_PLY_FREQ_SLOTS>;
+
+// LowPlyHistory bonus scale: bonus * LOWPLY_BONUS_NUMERATOR / 1024.
+constexpr unsigned LOWPLY_BONUS_NUMERATOR = 682;
 
 // CapturePieceToHistory is addressed by a move's [piece][to][captured piece type]
 using CapturePieceToHistory = Stats<std::int16_t, 10692, PIECE_NB, SQUARE_NB, PIECE_TYPE_NB>;
