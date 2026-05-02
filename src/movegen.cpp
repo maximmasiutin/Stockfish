@@ -19,9 +19,13 @@
 #include "movegen.h"
 
 #include <cassert>
+#include <cstddef>
+#include <cstdint>
 #include <initializer_list>
 
 #include "bitboard.h"
+#include "history.h"
+#include "misc.h"
 #include "position.h"
 
 #if defined(USE_AVX512ICL)
@@ -284,6 +288,81 @@ Move* generate<LEGAL>(const Position& pos, Move* moveList) {
             ++cur;
 
     return moveList;
+}
+
+// Branchless cold tail: PROMOTION / CASTLING / EN_PASSANT dispatched by mask blend.
+std::size_t low_ply_freq_index_special(std::uint32_t r) {
+    const std::uint32_t type  = (r >> 14) & 3u;
+    const std::uint32_t from  = (r >> 6) & 0x3Fu;
+    const std::uint32_t to    = r & 0x3Fu;
+    const std::uint32_t promo = (r >> 12) & 3u;
+    const std::uint32_t half  = from >> 5;
+    const std::uint32_t fromf = from & 7u;
+    const std::uint32_t tof   = to & 7u;
+
+    // QUIETS-phase invariants. type=2 (EN_PASSANT) is a capture and queen promo
+    // is a captures-stage move; both are filtered upstream from lowPlyHistory.
+    assert(type == 1u || type == 3u);
+    assert(promo < 3u);
+
+    const std::uint32_t promo_slot = 4320u + (half << 5) + fromf * 3u + promo;
+
+    const std::uint32_t side =
+      std::uint32_t(std::int32_t(std::int32_t(fromf) - std::int32_t(tof)) >> 31) & 1u;
+    const std::uint32_t cast_slot = 4384u + half * 2u + side;
+
+    const std::uint32_t promo_mask = std::uint32_t(std::int32_t((type ^ 1u) - 1u) >> 31);
+
+    return std::size_t((promo_slot & promo_mask) | (cast_slot & ~promo_mask));
+}
+
+std::size_t low_ply_freq_index(Move m) {
+    const std::uint32_t r = std::uint32_t(m.raw());
+
+    if (r >= 0x4000u)
+        return low_ply_freq_index_special(r);
+
+    const std::uint32_t from = (r >> 6) & 0x3Fu;
+    const std::uint32_t to   = r & 0x3Fu;
+    const std::uint32_t fr   = from >> 3;
+    const std::uint32_t ff   = from & 7u;
+    const std::uint32_t tr   = to >> 3;
+    const std::uint32_t tf   = to & 7u;
+
+    const std::uint32_t tier_normal = 224u + (r & 0xFFFu);
+
+    constexpr std::uint64_t PAWN_MASK = (1ULL << 10) | (1ULL << 11) | (1ULL << 17) | (1ULL << 19)
+                                      | (1ULL << 26) | (1ULL << 28) | (1ULL << 35) | (1ULL << 37)
+                                      | (1ULL << 44) | (1ULL << 46) | (1ULL << 52) | (1ULL << 53);
+    const std::uint32_t same_file = std::uint32_t(((from ^ to) & 7u) == 0u);
+    const std::uint32_t pawn_hit  = same_file & std::uint32_t((PAWN_MASK >> (fr * 8u + tr)) & 1u);
+    const std::uint32_t pawn_mask = std::uint32_t(0u) - pawn_hit;
+
+    const std::uint32_t pawn_color = std::uint32_t(tr < fr);
+    const std::uint32_t is_init    = std::uint32_t((0x42u >> fr) & 1u);
+    const std::uint32_t init_mask  = std::uint32_t(0u) - is_init;
+
+    const std::uint32_t is_double = std::uint32_t(((tr ^ fr) & 3u) == 2u);
+    const std::uint32_t init_slot = (pawn_color << 4u) + (ff << 1u) + is_double;
+    const std::uint32_t cont_slot = 32u + (pawn_color << 5u) + (ff << 2u) + (fr - 2u);
+    const std::uint32_t pawn_slot = (init_slot & init_mask) | (cont_slot & ~init_mask);
+
+    const std::uint32_t fr_back   = std::uint32_t(((1u << fr) & 0x81u) != 0u);
+    const int           fdiff     = int(tf) - int(ff);
+    const int           rdiff     = int(tr) - int(fr);
+    const std::uint32_t fdiff_ok  = std::uint32_t(std::uint32_t(fdiff + 1) <= 2u);
+    const std::uint32_t rdiff_ok  = std::uint32_t(std::uint32_t(rdiff + 1) <= 2u);
+    const std::uint32_t not_null  = std::uint32_t((fdiff != 0) | (rdiff != 0));
+    const std::uint32_t king_hit  = fr_back & fdiff_ok & rdiff_ok & not_null;
+    const std::uint32_t king_mask = std::uint32_t(0u) - king_hit;
+
+    const std::uint32_t half      = fr >> 2;
+    const std::uint32_t dest      = std::uint32_t(fdiff + 1) * 3u + std::uint32_t(rdiff + 1);
+    const std::uint32_t king_slot = 96u + half * 64u + ff * 8u + dest;
+
+    std::uint32_t s = (king_slot & king_mask) | (tier_normal & ~king_mask);
+    s               = (pawn_slot & pawn_mask) | (s & ~pawn_mask);
+    return std::size_t(s);
 }
 
 }  // namespace Stockfish
