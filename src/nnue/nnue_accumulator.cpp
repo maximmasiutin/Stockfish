@@ -18,8 +18,12 @@
 
 #include "nnue_accumulator.h"
 
+#include <atomic>
 #include <cassert>
+#include <chrono>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <new>
 #include <type_traits>
 
@@ -30,11 +34,38 @@
 #include "nnue_architecture.h"
 #include "nnue_common.h"
 #include "nnue_feature_transformer.h"  // IWYU pragma: keep
+#include "nnue_misc.h"
 #include "simd.h"
 
 namespace Stockfish::Eval::NNUE {
 
 using namespace SIMD;
+
+static std::atomic<std::uint64_t> g_refresh_big{0};
+static std::atomic<std::uint64_t> g_refresh_small{0};
+
+std::uint64_t get_refresh_count_big() { return g_refresh_big.load(std::memory_order_relaxed); }
+std::uint64_t get_refresh_count_small() { return g_refresh_small.load(std::memory_order_relaxed); }
+
+namespace {
+struct RefreshInstrumentationDumper {
+    std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
+    ~RefreshInstrumentationDumper() {
+        auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                            std::chrono::steady_clock::now() - start)
+                            .count();
+        const char* tag = std::getenv("REFRESH_INSTR_TAG");
+        if (tag == nullptr)
+            tag = "default";
+        std::fprintf(stderr, "REFRESH_INSTR tag=%s elapsed_ms=%lld big=%llu small=%llu\n", tag,
+                     static_cast<long long>(elapsed_ms),
+                     static_cast<unsigned long long>(g_refresh_big.load()),
+                     static_cast<unsigned long long>(g_refresh_small.load()));
+        std::fflush(stderr);
+    }
+};
+static RefreshInstrumentationDumper g_refresh_dumper;
+}  // namespace
 
 namespace {
 
@@ -565,6 +596,11 @@ void update_accumulator_refresh_cache(Color                                 pers
                                       const Position&                       pos,
                                       AccumulatorState<PSQFeatureSet>&      accumulatorState,
                                       AccumulatorCaches::Cache<Dimensions>& cache) {
+
+    if constexpr (Dimensions == TransformedFeatureDimensionsBig)
+        g_refresh_big.fetch_add(1, std::memory_order_relaxed);
+    else
+        g_refresh_small.fetch_add(1, std::memory_order_relaxed);
 
     using Tiling [[maybe_unused]] = SIMDTiling<Dimensions, Dimensions, PSQTBuckets>;
 

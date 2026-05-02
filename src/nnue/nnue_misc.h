@@ -57,6 +57,9 @@ struct AccumulatorCaches;
 
 std::string trace(Position& pos, const Networks& networks, AccumulatorCaches& caches);
 
+std::uint64_t get_refresh_count_big();
+std::uint64_t get_refresh_count_small();
+
 }  // namespace Stockfish::Eval::NNUE
 }  // namespace Stockfish
 
