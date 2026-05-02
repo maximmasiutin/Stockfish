@@ -39,7 +39,7 @@ constexpr int PAWN_HISTORY_BASE_SIZE   = 8192;  // has to be a power of 2
 constexpr int UINT_16_HISTORY_SIZE     = std::numeric_limits<uint16_t>::max() + 1;
 constexpr int CORRHIST_BASE_SIZE       = UINT_16_HISTORY_SIZE;
 constexpr int CORRECTION_HISTORY_LIMIT = 1024;
-constexpr int LOW_PLY_HISTORY_SIZE     = 5;
+constexpr int LOW_PLY_HISTORY_SIZE     = 7;
 
 static_assert((PAWN_HISTORY_BASE_SIZE & (PAWN_HISTORY_BASE_SIZE - 1)) == 0,
               "PAWN_HISTORY_BASE_SIZE has to be a power of 2");
@@ -134,9 +134,27 @@ struct DynStats {
 // see https://www.chessprogramming.org/Butterfly_Boards
 using ButterflyHistory = Stats<std::int16_t, 7183, COLOR_NB, UINT_16_HISTORY_SIZE>;
 
-// LowPlyHistory is addressed by ply and move's from and to squares, used
-// to improve move ordering near the root
-using LowPlyHistory = Stats<std::int16_t, 7183, LOW_PLY_HISTORY_SIZE, UINT_16_HISTORY_SIZE>;
+// LowPlyHistory: ply x compact bijective move packing into 4160 slots.
+// NORMAL keeps (from << 6) | to in [0, 4096), preserving per-pass cache-line
+// reuse. Non-NORMAL is bucketed by side-to-move into two 32-slot lines via
+// an out-of-line cold tail.
+constexpr std::size_t LOW_PLY_NORMAL_SLOTS = 4096;
+constexpr std::size_t LOW_PLY_COLOR_SLOTS  = 32;
+constexpr std::size_t LOW_PLY_MOVE_SLOTS   = LOW_PLY_NORMAL_SLOTS + 2 * LOW_PLY_COLOR_SLOTS;
+
+sf_noinline std::size_t low_ply_move_index_special(std::uint32_t r);
+
+sf_always_inline inline std::size_t low_ply_move_index(Move m) {
+    const std::uint32_t r = std::uint32_t(m.raw());
+    if (r >= 0x4000u)
+        return low_ply_move_index_special(r);
+    return std::size_t(r & 0xFFFu);
+}
+
+using LowPlyHistory = Stats<std::int16_t, 7183, LOW_PLY_HISTORY_SIZE, LOW_PLY_MOVE_SLOTS>;
+
+// LowPlyHistory bonus scale: bonus * LOWPLY_BONUS_NUMERATOR / 1024.
+constexpr unsigned LOWPLY_BONUS_NUMERATOR = 682;
 
 // CapturePieceToHistory is addressed by a move's [piece][to][captured piece type]
 using CapturePieceToHistory = Stats<std::int16_t, 10692, PIECE_NB, SQUARE_NB, PIECE_TYPE_NB>;

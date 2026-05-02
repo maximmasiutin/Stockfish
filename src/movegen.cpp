@@ -19,9 +19,13 @@
 #include "movegen.h"
 
 #include <cassert>
+#include <cstddef>
+#include <cstdint>
 #include <initializer_list>
 
 #include "bitboard.h"
+#include "history.h"
+#include "misc.h"
 #include "position.h"
 
 #if defined(USE_AVX512ICL)
@@ -284,6 +288,37 @@ Move* generate<LEGAL>(const Position& pos, Move* moveList) {
             ++cur;
 
     return moveList;
+}
+
+// Cold tail of low_ply_move_index. Only entered for non-NORMAL move types
+// (PROMOTION, CASTLING; EN_PASSANT must not reach LowPlyHistory). Each color
+// gets a 32-slot bucket starting at LOW_PLY_NORMAL_SLOTS.
+sf_noinline std::size_t low_ply_move_index_special(std::uint32_t r) {
+    const std::uint32_t type = (r >> 14) & 3u;
+    const std::uint32_t from = (r >> 6) & 0x3Fu;
+
+    assert(type != 0u);
+
+    const std::uint32_t bit5  = from >> 5;
+    const std::uint32_t color = (type == 1u) ? (1u - bit5) : bit5;
+    const std::uint32_t base  = LOW_PLY_NORMAL_SLOTS + (color << 5);
+
+    if (type == 3u)
+    {
+        const std::uint32_t to       = r & 0x3Fu;
+        const std::uint32_t side_bit = std::uint32_t((to & 7u) > (from & 7u));
+        return base + 24u + side_bit;
+    }
+    if (type == 1u)
+    {
+        const std::uint32_t promo = (r >> 12) & 3u;
+        assert(promo < 3u && "QUEEN promotion must not reach LowPlyHistory");
+        const std::uint32_t file = from & 7u;
+        return base + file * 3u + promo;
+    }
+
+    assert(false && "EN_PASSANT must not reach LowPlyHistory");
+    return 0;
 }
 
 }  // namespace Stockfish
