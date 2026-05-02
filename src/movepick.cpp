@@ -22,6 +22,10 @@
 #include <limits>
 #include <utility>
 
+#if defined(USE_AVX512ICL)
+    #include <immintrin.h>
+#endif
+
 #include "bitboard.h"
 #include "misc.h"
 #include "position.h"
@@ -62,6 +66,97 @@ enum Stages {
 void partial_insertion_sort(ExtMove* begin, ExtMove* end, int limit) {
 
     for (ExtMove *sortedEnd = begin, *p = begin + 1; p < end; ++p)
+        if (p->value >= limit)
+        {
+            ExtMove tmp = *p, *q;
+            *p          = *++sortedEnd;
+            for (q = sortedEnd; q != begin && *(q - 1) < tmp; --q)
+                *q = *(q - 1);
+            *q = tmp;
+        }
+}
+
+#if defined(USE_AVX512ICL)
+
+// Splat the move bits and value of an ExtMove into all lanes of two registers.
+void splat_extmove(const ExtMove& m, __m512i& move, __m512i& value) {
+    move  = _mm512_set1_epi32(m.raw());
+    value = _mm512_set1_epi32(m.value);
+}
+
+// Stable descending insertion sorter for up to 16 ExtMoves; per-insert cost
+// is four SIMD ops (cmplt, kadd, two expand) with single-register state.
+struct SimdSorter {
+    static constexpr int MAX_ELEMENTS = 16;
+    __m512i              sortedValues, sortedMoves;
+
+    explicit SimdSorter(const ExtMove& first) {
+        splat_extmove(first, sortedMoves, sortedValues);
+        sortedValues = _mm512_mask_set1_epi32(sortedValues, ~1, std::numeric_limits<int>::min());
+    }
+
+    void insert(const ExtMove& m) {
+        __m512i move, value;
+        splat_extmove(m, move, value);
+
+        assert(m.value != std::numeric_limits<int>::min());
+        const __mmask16 expand =
+          _kadd_mask16(_mm512_cmplt_epi32_mask(sortedValues, value), __mmask16(-1));
+
+        sortedValues = _mm512_mask_expand_epi32(value, expand, sortedValues);
+        sortedMoves  = _mm512_mask_expand_epi32(move, expand, sortedMoves);
+    }
+
+    void write_sorted(ExtMove* dst, int count) const {
+        static_assert(sizeof(ExtMove) == 8);
+        assert(count >= 1 && count <= MAX_ELEMENTS);
+
+        const __m512i interleave_lo =
+          _mm512_setr_epi32(0, 16, 1, 17, 2, 18, 3, 19, 4, 20, 5, 21, 6, 22, 7, 23);
+        const __m512i interleave_hi =
+          _mm512_setr_epi32(8, 24, 9, 25, 10, 26, 11, 27, 12, 28, 13, 29, 14, 30, 15, 31);
+
+        const __m512i v0 = _mm512_permutex2var_epi32(sortedMoves, interleave_lo, sortedValues);
+        const __m512i v1 = _mm512_permutex2var_epi32(sortedMoves, interleave_hi, sortedValues);
+
+        const __mmask8 m0 = __mmask8((1U << std::min(count, 8)) - 1);
+        const __mmask8 m1 = __mmask8((1U << std::max(std::min(count - 8, 8), 0)) - 1);
+
+        _mm512_mask_storeu_epi64(dst, m0, v0);
+        _mm512_mask_storeu_epi64(dst + 8, m1, v1);
+    }
+};
+
+#endif
+
+// Descending sort for the QUIETS site; SIMD prefix is byte-equivalent to the
+// scalar loop and falls through to the scalar tail past MAX_ELEMENTS.
+//
+// Suffix "long" reflects that QUIETS mean N exceeds 16 here.
+// Captures (~2) and evasions (~6) keep the scalar partial_insertion_sort.
+void partial_insertion_sort_long(ExtMove* begin, ExtMove* end, int limit) {
+
+    // QUIETS list may be empty in rare DFRC positions; the SIMD path
+    // tolerates begin == end (no insert, harmless masked store).
+    assert(begin <= end);
+
+    ExtMove* sortedEnd = begin;
+    ExtMove* p         = begin + 1;
+
+#if defined(USE_AVX512ICL)
+    SimdSorter sorter(*begin);
+    for (; p < end; ++p)
+        if (p->value >= limit)
+        {
+            if (sortedEnd - begin + 1 >= SimdSorter::MAX_ELEMENTS)
+                break;
+            sorter.insert(*p);
+            *p = *++sortedEnd;
+        }
+    sorter.write_sorted(begin, int(sortedEnd - begin + 1));
+#endif
+
+    for (; p < end; ++p)
         if (p->value >= limit)
         {
             ExtMove tmp = *p, *q;
@@ -251,7 +346,7 @@ top:
 
             endCur = endGenerated = score<QUIETS>(ml);
 
-            partial_insertion_sort(cur, endCur, -3560 * depth);
+            partial_insertion_sort_long(cur, endCur, -3560 * depth);
         }
 
         ++stage;
