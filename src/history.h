@@ -237,6 +237,15 @@ struct SharedHistories {
         return pawnHistory[pos.pawn_key() & pawnHistSizeMinus1];
     }
 
+    size_t pawn_slot(const Position& pos) const { return pos.pawn_key() & pawnHistSizeMinus1; }
+    int    pawn_total_bits() const {
+        // pawnHistSizeMinus1 + 1 is power of two (asserted in ctor),
+        // so its log2 is the count of low set bits in pawnHistSizeMinus1
+        // plus 1; equivalently popcount(pawnHistSizeMinus1) when it is
+        // 2^k - 1. Use __builtin_ctzll on (pawnHistSizeMinus1 + 1).
+        return __builtin_ctzll(pawnHistSizeMinus1 + 1);
+    }
+
     auto& pawn_correction_entry(const Position& pos) {
         return correctionHistory[pos.pawn_key() & sizeMinus1];
     }

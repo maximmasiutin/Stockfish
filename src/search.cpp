@@ -41,6 +41,7 @@
 #include "movepick.h"
 #include "nnue/network.h"
 #include "nnue/nnue_accumulator.h"
+#include "pawnhist_multishard_instr.h"
 #include "position.h"
 #include "syzygy/tbprobe.h"
 #include "thread.h"
@@ -901,7 +902,11 @@ Value Search::Worker::search(
         mainHistory[~us][((ss - 1)->currentMove).raw()] << evalDiff * 10;
         if (!ttHit && type_of(pos.piece_on(prevSq)) != PAWN
             && ((ss - 1)->currentMove).type_of() != PROMOTION)
+        {
             sharedHistory.pawn_entry(pos)[pos.piece_on(prevSq)][prevSq] << evalDiff * 12;
+            PawnHistMultishardInstr::record_write(pos, sharedHistory.pawn_slot(pos),
+                                                  sharedHistory.pawn_total_bits());
+        }
     }
 
 
@@ -1121,6 +1126,8 @@ moves_loop:  // When in check, search starts here
                 int history = (*contHist[0])[movedPiece][move.to_sq()]
                             + (*contHist[1])[movedPiece][move.to_sq()]
                             + sharedHistory.pawn_entry(pos)[movedPiece][move.to_sq()];
+                PawnHistMultishardInstr::record_read(pos, sharedHistory.pawn_slot(pos),
+                                                     sharedHistory.pawn_total_bits());
 
                 // Continuation history based pruning
                 if (history < -4097 * depth)
@@ -1478,7 +1485,11 @@ moves_loop:  // When in check, search starts here
         mainHistory[~us][((ss - 1)->currentMove).raw()] << scaledBonus * 235 / 32768;
 
         if (type_of(pos.piece_on(prevSq)) != PAWN && ((ss - 1)->currentMove).type_of() != PROMOTION)
+        {
             sharedHistory.pawn_entry(pos)[pos.piece_on(prevSq)][prevSq] << scaledBonus * 290 / 8192;
+            PawnHistMultishardInstr::record_write(pos, sharedHistory.pawn_slot(pos),
+                                                  sharedHistory.pawn_total_bits());
+        }
     }
 
     // Bonus for prior capture countermove that caused the fail low
@@ -1933,6 +1944,8 @@ void update_quiet_histories(
 
     workerThread.sharedHistory.pawn_entry(pos)[pos.moved_piece(move)][move.to_sq()]
       << bonus * (bonus > 0 ? 974 : 543) / 1024;
+    PawnHistMultishardInstr::record_write(pos, workerThread.sharedHistory.pawn_slot(pos),
+                                          workerThread.sharedHistory.pawn_total_bits());
 }
 }
 
