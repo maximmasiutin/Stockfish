@@ -805,8 +805,12 @@ Value Search::Worker::search(
         {
             // Bonus for a quiet ttMove that fails high
             if (!ttCapture)
-                update_quiet_histories(pos, ss, *this, ttData.move,
-                                       std::min(119 * depth - 74, 855));
+            {
+                const int bonus_qh = std::min(119 * depth - 74, 855);
+                update_quiet_histories(pos, ss, *this, ttData.move, bonus_qh);
+                if (ss->ply < LOW_PLY_HISTORY_SIZE)
+                    lowPlyHistory[ss->ply][ttData.move.raw()] << bonus_qh * 682 / 1024;
+            }
 
             // Extra penalty for early quiet moves of the previous ply
             if (prevSq != SQ_NONE && (ss - 1)->moveCount < 4 && !priorCapture)
@@ -1867,6 +1871,21 @@ void update_all_stats(const Position& pos,
             actualMalus = actualMalus * 977 / 1024;
             update_quiet_histories(pos, ss, workerThread, move, -actualMalus);
         }
+
+        if (ss->ply < LOW_PLY_HISTORY_SIZE)
+        {
+            auto& lpRow = workerThread.lowPlyHistory[ss->ply];
+            lpRow[bestMove.raw()] << bonus * 806 / 1024 * 682 / 1024;
+
+            assert(malus >= 0);
+            unsigned lpMalus = unsigned(malus) * 1113 / 1024;
+            for (Move move : quietsSearched)
+            {
+                lpMalus = lpMalus * 977 / 1024;
+                int v   = -int(lpMalus * 682u / 1024);
+                lpRow[move.raw()] << v;
+            }
+        }
     }
     else
     {
@@ -1925,9 +1944,6 @@ void update_quiet_histories(
 
     Color us = pos.side_to_move();
     workerThread.mainHistory[us][move.raw()] << bonus;  // Untuned to prevent duplicate effort
-
-    if (ss->ply < LOW_PLY_HISTORY_SIZE)
-        workerThread.lowPlyHistory[ss->ply][move.raw()] << bonus * 682 / 1024;
 
     update_continuation_histories(ss, pos.moved_piece(move), move.to_sq(), bonus * 894 / 1024);
 
