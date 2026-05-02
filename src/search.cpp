@@ -591,6 +591,13 @@ void Search::Worker::do_move(
     auto [dirtyPiece, dirtyThreats] = accumulatorStack.push();
     pos.do_move(move, st, givesCheck, dirtyPiece, dirtyThreats, &tt, &sharedHistory);
 
+    if (type_of(dirtyPiece.pc) == KING)
+    {
+        const Color  c   = color_of(dirtyPiece.pc);
+        const Square ksq = pos.square<KING>(c);
+        prefetch<PrefetchRw::READ, PrefetchLoc::LOW>(&refreshTable.big[ksq][c]);
+    }
+
     if (ss != nullptr)
     {
         ss->currentMove = move;
