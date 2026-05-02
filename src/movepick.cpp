@@ -128,15 +128,51 @@ ExtMove* MovePicker::score(const MoveList<Type>& ml) {
 
     Color us = pos.side_to_move();
 
-    [[maybe_unused]] Bitboard threatByLesser[KING + 1];
     if constexpr (Type == QUIETS)
     {
-        threatByLesser[PAWN]   = 0;
+        Bitboard threatByLesser[KING + 1] = {};
         threatByLesser[KNIGHT] = threatByLesser[BISHOP] = pos.attacks_by<PAWN>(~us);
         threatByLesser[ROOK] =
           pos.attacks_by<KNIGHT>(~us) | pos.attacks_by<BISHOP>(~us) | threatByLesser[KNIGHT];
         threatByLesser[QUEEN] = pos.attacks_by<ROOK>(~us) | threatByLesser[ROOK];
-        threatByLesser[KING]  = 0;
+
+        auto& pawnRow = sharedHistory->pawn_entry(pos);
+
+        ExtMove* const start = cur;
+        ExtMove*       it    = cur;
+
+        for (auto move : ml)
+        {
+            ExtMove& m = *it++;
+            m          = move;
+
+            const Square    from = m.from_sq();
+            const Square    to   = m.to_sq();
+            const Piece     pc   = pos.moved_piece(m);
+            const PieceType pt   = type_of(pc);
+
+            m.value = 2 * (*mainHistory)[us][m.raw()];
+            m.value += 2 * pawnRow[pc][to];
+            m.value += ((pos.check_squares(pt) & to) && pos.see_ge(m, -75)) * 16384;
+            int v = 20 * (bool(threatByLesser[pt] & from) - bool(threatByLesser[pt] & to));
+            m.value += PieceValue[pt] * v;
+
+            if (ply < LOW_PLY_HISTORY_SIZE)
+                m.value += 8 * (*lowPlyHistory)[ply][m.raw()] / (1 + ply);
+        }
+
+        const auto& ch0 = *continuationHistory[0];
+        const auto& ch1 = *continuationHistory[1];
+        const auto& ch2 = *continuationHistory[2];
+        const auto& ch3 = *continuationHistory[3];
+        const auto& ch5 = *continuationHistory[5];
+        for (ExtMove* p = start; p < it; ++p)
+        {
+            const Piece  pc = pos.moved_piece(*p);
+            const Square to = p->to_sq();
+            p->value += ch0[pc][to] + ch1[pc][to] + ch2[pc][to] + ch3[pc][to] + ch5[pc][to];
+        }
+        return it;
     }
 
     ExtMove* it = cur;
@@ -145,39 +181,13 @@ ExtMove* MovePicker::score(const MoveList<Type>& ml) {
         ExtMove& m = *it++;
         m          = move;
 
-        const Square    from          = m.from_sq();
-        const Square    to            = m.to_sq();
-        const Piece     pc            = pos.moved_piece(m);
-        const PieceType pt            = type_of(pc);
-        const Piece     capturedPiece = pos.piece_on(to);
+        const Square to            = m.to_sq();
+        const Piece  pc            = pos.moved_piece(m);
+        const Piece  capturedPiece = pos.piece_on(to);
 
         if constexpr (Type == CAPTURES)
             m.value = (*captureHistory)[pc][to][type_of(capturedPiece)]
                     + 7 * int(PieceValue[capturedPiece]);
-
-        else if constexpr (Type == QUIETS)
-        {
-            // histories
-            m.value = 2 * (*mainHistory)[us][m.raw()];
-            m.value += 2 * sharedHistory->pawn_entry(pos)[pc][to];
-            m.value += (*continuationHistory[0])[pc][to];
-            m.value += (*continuationHistory[1])[pc][to];
-            m.value += (*continuationHistory[2])[pc][to];
-            m.value += (*continuationHistory[3])[pc][to];
-            m.value += (*continuationHistory[5])[pc][to];
-
-            // bonus for checks
-            m.value += ((pos.check_squares(pt) & to) && pos.see_ge(m, -75)) * 16384;
-
-            // penalty for moving to a square threatened by a lesser piece
-            // or bonus for escaping an attack by a lesser piece.
-            int v = 20 * (bool(threatByLesser[pt] & from) - bool(threatByLesser[pt] & to));
-            m.value += PieceValue[pt] * v;
-
-
-            if (ply < LOW_PLY_HISTORY_SIZE)
-                m.value += 8 * (*lowPlyHistory)[ply][m.raw()] / (1 + ply);
-        }
 
         else  // Type == EVASIONS
         {
