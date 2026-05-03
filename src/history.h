@@ -55,6 +55,7 @@ static_assert((CORRHIST_BASE_SIZE & (CORRHIST_BASE_SIZE - 1)) == 0,
 template<typename T, int D, bool Atomic = false>
 struct StatsEntry {
     static_assert(std::is_arithmetic_v<T>, "Not an arithmetic type");
+    static_assert(D > 0, "StatsEntry requires D > 0");
 
    private:
     std::conditional_t<Atomic, std::atomic<T>, T> entry;
@@ -78,7 +79,11 @@ struct StatsEntry {
         // Make sure that bonus is in range [-D, D]
         int clampedBonus = std::clamp(bonus, -D, D);
         T   val          = *this;
-        *this            = val + clampedBonus - val * std::abs(clampedBonus) / D;
+        if constexpr ((D & (D - 1)) == 0)
+            *this =
+              val + clampedBonus - (int(val) * std::abs(clampedBonus) >> ilog2(std::size_t(D)));
+        else
+            *this = val + clampedBonus - val * std::abs(clampedBonus) / D;
 
         assert(std::abs(T(*this)) <= D);
     }
