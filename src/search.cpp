@@ -18,6 +18,8 @@
 
 #include "search.h"
 
+#include "finny_fire_instr.h"
+
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -591,11 +593,19 @@ void Search::Worker::do_move(
     auto [dirtyPiece, dirtyThreats] = accumulatorStack.push();
     pos.do_move(move, st, givesCheck, dirtyPiece, dirtyThreats, &tt, &sharedHistory);
 
+    Stockfish::FinnyFireInstr::domove_total.fetch_add(1, std::memory_order_relaxed);
     if (type_of(dirtyPiece.pc) == KING)
     {
         const Color  c   = color_of(dirtyPiece.pc);
         const Square ksq = pos.square<KING>(c);
         prefetch<PrefetchRw::READ, PrefetchLoc::LOW>(&refreshTable.big[ksq][c]);
+        Stockfish::FinnyFireInstr::domove_kingmove.fetch_add(1, std::memory_order_relaxed);
+        if (c == WHITE)
+            Stockfish::FinnyFireInstr::domove_kingmove_white.fetch_add(
+              1, std::memory_order_relaxed);
+        else
+            Stockfish::FinnyFireInstr::domove_kingmove_black.fetch_add(
+              1, std::memory_order_relaxed);
     }
 
     if (ss != nullptr)
