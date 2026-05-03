@@ -19,9 +19,12 @@
 #include "movegen.h"
 
 #include <cassert>
+#include <cstddef>
+#include <cstdint>
 #include <initializer_list>
 
 #include "bitboard.h"
+#include "history.h"
 #include "position.h"
 
 #if defined(USE_AVX512ICL)
@@ -284,6 +287,77 @@ Move* generate<LEGAL>(const Position& pos, Move* moveList) {
             ++cur;
 
     return moveList;
+}
+
+namespace {
+
+// MoveType (types.h, bits 14-15 of Move::raw()): NORMAL=0, PROMOTION=1, EN_PASSANT=2, CASTLING=3.
+sf_noinline std::size_t main_hist_freq_index_special(std::uint32_t r) {
+    assert(r >= 0x4000u);
+    const std::uint32_t type = (r >> 14) & 3u;
+    const std::uint32_t from = (r >> 6) & 0x3Fu;
+    const std::uint32_t to   = r & 0x3Fu;
+    const std::uint32_t ff   = from & 7u;
+    const std::uint32_t tf   = to & 7u;
+    const std::uint32_t fr   = from >> 3;
+    const std::uint32_t half = from >> 5;
+
+    // Frequency order: CASTLING > PROMOTION > EN_PASSANT.
+    if (type == 3u)  // CASTLING
+    {
+        const std::size_t slot = 4224u + half * 64u + ff * 8u + tf;
+        assert(slot >= 4224u && slot < 4352u);
+        return slot;
+    }
+    if (type == 1u)  // PROMOTION
+    {
+        const std::uint32_t promo = (r >> 12) & 3u;
+        const std::size_t   slot  = 4352u + (half << 8) + (ff << 5) + (tf << 2) + promo;
+        assert(slot >= 4352u && slot < 4864u);
+        return slot;
+    }
+    // EN_PASSANT (type == 2).
+    const std::uint32_t ep_half = std::uint32_t(fr >= 4u);
+    const std::uint32_t dir     = std::uint32_t(tf > ff);
+    const std::size_t   slot    = 4864u + ep_half * 16u + tf * 2u + dir;
+    assert(slot >= 4864u && slot < std::size_t(MAINHIST_FREQ_SIZE));
+    return slot;
+}
+
+}  // namespace
+
+std::size_t main_hist_freq_index(Move m) {
+    const std::uint32_t r = std::uint32_t(m.raw());
+    if (r >= 0x4000u)
+        return main_hist_freq_index_special(r);
+
+    const std::uint32_t from = (r >> 6) & 0x3Fu;
+    const std::uint32_t to   = r & 0x3Fu;
+    const std::uint32_t fr   = from >> 3;
+    const std::uint32_t tr   = to >> 3;
+    const std::uint32_t ff   = from & 7u;
+
+    constexpr std::uint64_t PAWN_MASK = 0x00305028140a0c00ULL;
+    const std::uint32_t     same_file = std::uint32_t(((from ^ to) & 7u) == 0u);
+    // (from & 0x38) is fr*8; (to >> 3) is tr; bits don't overlap.
+    const std::uint32_t pawn_pair = std::uint32_t((PAWN_MASK >> ((from & 0x38u) | (to >> 3u))) & 1u);
+    const std::uint32_t     pawn_hit  = same_file & pawn_pair;
+    const std::uint32_t     pawn_mask = std::uint32_t(0u) - pawn_hit;
+
+    const std::uint32_t pawn_color = std::uint32_t(tr < fr);
+    const std::uint32_t is_init    = std::uint32_t((0x42u >> fr) & 1u);
+    const std::uint32_t is_double  = std::uint32_t(((tr ^ fr) & 3u) == 2u);
+    const std::uint32_t idx        = is_init ? is_double : fr;
+    const std::uint32_t pawn_slot  = (pawn_color << 6) | (ff << 3) | idx;
+
+    const std::uint32_t tier2 = 128u + (r & 0xFFFu);
+
+    assert(!pawn_hit || pawn_slot < 128u);
+    assert(tier2 >= 128u && tier2 < 4224u);
+
+    const std::size_t result = std::size_t((pawn_slot & pawn_mask) | (tier2 & ~pawn_mask));
+    assert(result < std::size_t(MAINHIST_FREQ_SIZE));
+    return result;
 }
 
 }  // namespace Stockfish
