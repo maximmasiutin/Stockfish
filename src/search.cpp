@@ -25,7 +25,14 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
+#include <cstring>
+#if defined(_WIN32)
+    #include <process.h>
+#else
+    #include <unistd.h>
+#endif
 #include <initializer_list>
 #include <iostream>
 #include <list>
@@ -616,8 +623,91 @@ void Search::Worker::undo_move(Position& pos, const Move move) {
 void Search::Worker::undo_null_move(Position& pos) { pos.undo_null_move(); }
 
 
+// Dump the per-worker continuationCorrectionHistory table as a raw binary
+// blob plus a fixed 40-byte header. Activated by the CONTCORR_BLOB_DIR
+// environment variable; if unset, the entire path is a single getenv
+// branch so bench is byte-equal to a build without this code.
+//
+// Blob layout (little-endian):
+//   offset  size  field
+//   0       4     magic = "CCS\0"
+//   4       4     version = 1
+//   8       4     entries = sizeof(table) / sizeof(int16_t) = 1048576
+//   12      4     worker_idx (always 0; only main thread dumps)
+//   16      4     worker_count = 1
+//   20      8     wall_ns (steady_clock since process start)
+//   28      4     pid
+//   32      4     seq (per-process snapshot sequence, starts at 0)
+//   36      4     reserved = 0
+//   40      N*2   raw int16 entries
+//
+// Total bytes per blob: 40 + 1048576 * 2 = 2097192.
+static void dump_contcorr_blob(const CorrectionHistory<Continuation>& table,
+                               const char*                            dir,
+                               std::uint32_t                          seq) {
+    static_assert(sizeof(table) == 1048576 * sizeof(std::int16_t),
+                  "continuationCorrectionHistory size mismatch");
+
+    static const auto   t0 = std::chrono::steady_clock::now();
+    const auto          dt = std::chrono::steady_clock::now() - t0;
+    const std::uint64_t wall_ns =
+      std::uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(dt).count());
+
+#if defined(_WIN32)
+    const std::uint32_t pid = std::uint32_t(_getpid());
+#else
+    const std::uint32_t pid = std::uint32_t(getpid());
+#endif
+
+    char path[1024];
+    std::snprintf(path, sizeof(path), "%s/contcorr-blob-%u-%u.bin", dir, pid, seq);
+
+    std::FILE* f = std::fopen(path, "wb");
+    if (!f)
+        return;
+
+    std::uint8_t header[40] = {};
+    std::memcpy(header + 0, "CCS\0", 4);
+    const std::uint32_t version      = 1;
+    const std::uint32_t entries      = std::uint32_t(sizeof(table) / sizeof(std::int16_t));
+    const std::uint32_t worker_idx   = 0;
+    const std::uint32_t worker_count = 1;
+    const std::uint32_t reserved     = 0;
+    std::memcpy(header + 4, &version, 4);
+    std::memcpy(header + 8, &entries, 4);
+    std::memcpy(header + 12, &worker_idx, 4);
+    std::memcpy(header + 16, &worker_count, 4);
+    std::memcpy(header + 20, &wall_ns, 8);
+    std::memcpy(header + 28, &pid, 4);
+    std::memcpy(header + 32, &seq, 4);
+    std::memcpy(header + 36, &reserved, 4);
+
+    std::fwrite(header, 1, sizeof(header), f);
+    std::fwrite(reinterpret_cast<const std::int16_t*>(&table), sizeof(std::int16_t),
+                sizeof(table) / sizeof(std::int16_t), f);
+    std::fclose(f);
+}
+
+
 // Reset histories, usually before a new game
 void Search::Worker::clear() {
+
+    // Snapshot the contcorr table before clearing (instrumentation).
+    // Activated by CONTCORR_BLOB_DIR. The first clear() fires at engine
+    // startup on a freshly-zeroed table; skip it so only end-of-game
+    // states are recorded. The very last game per process is not captured
+    // (no subsequent clear() after the final game), which is acceptable
+    // noise across the per-cell aggregate of many process-game pairs.
+    if (const char* ccDir = std::getenv("CONTCORR_BLOB_DIR"); ccDir && is_mainthread())
+    {
+        static bool          first_clear = true;
+        static std::uint32_t seq         = 0;
+        if (first_clear)
+            first_clear = false;
+        else
+            dump_contcorr_blob(continuationCorrectionHistory, ccDir, seq++);
+    }
+
     mainHistory.fill(0);
     captureHistory.fill(-678);
 
