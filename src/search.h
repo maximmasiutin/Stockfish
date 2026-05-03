@@ -106,18 +106,18 @@ struct Stack {
     PVMoves*                    pv;
     PieceToHistory*             continuationHistory;
     CorrectionHistory<PieceTo>* continuationCorrectionHistory;
-    int                         ply;
-    Move                        currentMove;
-    Move                        excludedMove;
     Value                       staticEval;
     int                         statScore;
-    int                         moveCount;
+    Move                        currentMove;
+    Move                        excludedMove;
+    std::int16_t                ply;
+    std::int16_t                reduction;
+    std::uint16_t               moveCount;
+    std::uint16_t               cutoffCnt;
     bool                        inCheck;
     bool                        ttPv;
     bool                        ttHit;
     bool                        followPV;
-    int                         cutoffCnt;
-    int                         reduction;
 };
 
 
