@@ -128,11 +128,26 @@ struct DynStats {
     LargePagePtr<T[]> data;
 };
 
-// ButterflyHistory records how often quiet moves have been successful or unsuccessful
-// during the current search, and is used for reduction and move ordering decisions.
-// It uses 2 tables (one for each color) indexed by the move's from and to squares,
-// see https://www.chessprogramming.org/Butterfly_Boards
-using ButterflyHistory = Stats<std::int16_t, 7183, COLOR_NB, UINT_16_HISTORY_SIZE>;
+// ButterflyHistory records how often quiet moves have been successful or
+// unsuccessful during the current search, and is used for reduction and
+// move ordering decisions. It uses 2 tables (one per color), indexed by
+// the from- and to-square coordinates of valid moves through a 4896-
+// entry move-to-slot map. Slot ranges are ordered by typical move
+// frequency in search: pawn pushes packed densely in [0, 128), other
+// normal moves in [128, 4224), and the rarer special-move classes in
+// descending frequency (castling, then promotion, then en passant).
+// See https://www.chessprogramming.org/Butterfly_Boards.
+// Slot layout (per color slice):
+//   [0, 128)     pawn pushes (96 used of 128)
+//   [128, 4224)  other normal moves (from-to bijection) (4096)
+//   [4224, 4352) castling (128)
+//   [4352, 4864) promotion (512)
+//   [4864, 4896) en passant (32)
+constexpr int MAINHIST_FREQ_SIZE = 4896;
+
+std::size_t main_hist_freq_index(Move m);
+
+using ButterflyHistory = Stats<std::int16_t, 7183, COLOR_NB, MAINHIST_FREQ_SIZE>;
 
 // LowPlyHistory is addressed by ply and move's from and to squares, used
 // to improve move ordering near the root

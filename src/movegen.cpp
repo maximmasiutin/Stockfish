@@ -19,9 +19,12 @@
 #include "movegen.h"
 
 #include <cassert>
+#include <cstddef>
+#include <cstdint>
 #include <initializer_list>
 
 #include "bitboard.h"
+#include "history.h"
 #include "position.h"
 
 #if defined(USE_AVX512ICL)
@@ -284,6 +287,72 @@ Move* generate<LEGAL>(const Position& pos, Move* moveList) {
             ++cur;
 
     return moveList;
+}
+
+namespace {
+
+// MoveType (types.h, bits 14-15 of Move::raw()): NORMAL=0, PROMOTION=1, EN_PASSANT=2, CASTLING=3.
+sf_noinline std::size_t main_hist_freq_index_special(std::uint32_t r) {
+    assert(r >= 0x4000u);
+    const std::uint32_t type = (r >> 14) & 3u;
+    const std::uint32_t from = (r >> 6) & 0x3Fu;
+    const std::uint32_t to   = r & 0x3Fu;
+    const std::uint32_t ff   = from & 7u;
+    const std::uint32_t tf   = to & 7u;
+    const std::uint32_t fr   = from >> 3;
+    const std::uint32_t half = from >> 5;
+
+    // Frequency order: CASTLING > PROMOTION > EN_PASSANT.
+    if (type == 3u)  // CASTLING
+    {
+        const std::size_t slot = 4224u + half * 64u + ff * 8u + tf;
+        assert(slot >= 4224u && slot < 4352u);
+        return slot;
+    }
+    if (type == 1u)  // PROMOTION
+    {
+        const std::uint32_t promo = (r >> 12) & 3u;
+        const std::size_t   slot  = 4352u + (half << 8) + (ff << 5) + (tf << 2) + promo;
+        assert(slot >= 4352u && slot < 4864u);
+        return slot;
+    }
+    // EN_PASSANT (type == 2).
+    const std::uint32_t ep_half = std::uint32_t(fr >= 4u);
+    const std::uint32_t dir     = std::uint32_t(tf > ff);
+    const std::size_t   slot    = 4864u + ep_half * 16u + tf * 2u + dir;
+    assert(slot >= 4864u && slot < std::size_t(MAINHIST_FREQ_SIZE));
+    return slot;
+}
+
+}  // namespace
+
+std::size_t main_hist_freq_index(Move m) {
+    const std::uint32_t r = std::uint32_t(m.raw());
+    if (r >= 0x4000u)
+        return main_hist_freq_index_special(r);
+
+    const std::uint32_t move12 = r & 0xFFFu;
+
+    // Cheap reject 1: not same file -> cannot be a pawn push -> tier2.
+    // Hot path (~85-95% of NORMAL moves) ends here at 4-5 cycles.
+    if (((r ^ (r >> 6)) & 7u) != 0u)
+        return 128u + move12;
+
+    constexpr std::uint64_t PAWN_MASK = 0x00305028140a0c00ULL;
+    const std::uint32_t     fr        = (r >> 9) & 7u;
+    const std::uint32_t     tr        = (r >> 3) & 7u;
+
+    // Cheap reject 2: (fr, tr) not a push pattern -> tier2.
+    if (((PAWN_MASK >> ((fr << 3) | tr)) & 1u) == 0u)
+        return 128u + move12;
+
+    // Confirmed pawn push.
+    const std::uint32_t ff         = (r >> 6) & 7u;
+    const std::uint32_t pawn_color = std::uint32_t(tr < fr);
+    const std::uint32_t is_init    = (0x42u >> fr) & 1u;
+    const std::uint32_t is_double  = std::uint32_t(((tr ^ fr) & 3u) == 2u);
+    const std::uint32_t idx        = is_init ? is_double : fr;
+    return (pawn_color << 6) | (ff << 3) | idx;
 }
 
 }  // namespace Stockfish
