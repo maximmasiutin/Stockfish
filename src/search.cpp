@@ -1858,14 +1858,33 @@ void update_all_stats(const Position& pos,
 
     if (!pos.capture_stage(bestMove))
     {
-        update_quiet_histories(pos, ss, workerThread, bestMove, bonus * 806 / 1024);
+        const Color us      = pos.side_to_move();
+        auto&       mainRow = workerThread.mainHistory[us];
+        auto&       pawnRow = workerThread.sharedHistory.pawn_entry(pos);
+        auto* const lpRow =
+          ss->ply < LOW_PLY_HISTORY_SIZE ? &workerThread.lowPlyHistory[ss->ply] : nullptr;
+
+        {
+            const int b = bonus * 806 / 1024;
+            mainRow[bestMove.raw()] << b;
+            if (lpRow)
+                (*lpRow)[bestMove.raw()] << b * 682 / 1024;
+            update_continuation_histories(ss, movedPiece, bestMove.to_sq(), b * 894 / 1024);
+            pawnRow[movedPiece][bestMove.to_sq()] << b * (b > 0 ? 974 : 543) / 1024;
+        }
 
         int actualMalus = malus * 1113 / 1024;
-        // Decrease stats for all non-best quiet moves
         for (Move move : quietsSearched)
         {
-            actualMalus = actualMalus * 977 / 1024;
-            update_quiet_histories(pos, ss, workerThread, move, -actualMalus);
+            actualMalus     = actualMalus * 977 / 1024;
+            const int    b  = -actualMalus;
+            const Piece  pc = pos.moved_piece(move);
+            const Square to = move.to_sq();
+            mainRow[move.raw()] << b;
+            if (lpRow)
+                (*lpRow)[move.raw()] << b * 682 / 1024;
+            update_continuation_histories(ss, pc, to, b * 894 / 1024);
+            pawnRow[pc][to] << b * 543 / 1024;
         }
     }
     else
