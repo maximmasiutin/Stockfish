@@ -18,14 +18,17 @@
 
 #include "movegen.h"
 
+#include <array>
 #include <cassert>
+#include <cstddef>
+#include <cstdint>
 #include <initializer_list>
 
 #include "bitboard.h"
+#include "history.h"
 #include "position.h"
 
 #if defined(USE_AVX512ICL)
-    #include <array>
     #include <algorithm>
     #include <immintrin.h>
 #endif
@@ -366,5 +369,127 @@ Move* generate<LEGAL>(const Position& pos, Move* moveList) {
 
     return moveList;
 }
+
+namespace {
+
+// Tier boundaries; layout documented in history.h.
+constexpr std::uint32_t TIER_PAWN_INIT = 0u;
+constexpr std::uint32_t TIER_PAWN_CONT = 32u;
+constexpr std::uint32_t TIER_CHEBYSHEV = 96u;
+constexpr std::uint32_t TIER_KNIGHT    = 608u;
+constexpr std::uint32_t TIER_RAY2      = 1120u;
+constexpr std::uint32_t TIER_FALLBACK  = 1632u;
+constexpr std::uint32_t TIER_PROMOTION = 5728u;
+constexpr std::uint32_t TIER_CASTLING  = 5792u;
+constexpr std::uint32_t TIER_EN_PASS   = 5920u;
+
+static_assert(TIER_EN_PASS + 32u == HISTORY_SLOT_COUNT,
+              "slot layout / HISTORY_SLOT_COUNT mismatch");
+
+constexpr std::size_t compute_special_slot(std::uint32_t r) {
+    const std::uint32_t type = (r >> 14) & 3u;
+    const std::uint32_t from = (r >> 6) & 0x3Fu;
+    const std::uint32_t to   = r & 0x3Fu;
+    const std::uint32_t ff   = from & 7u;
+    const std::uint32_t tf   = to & 7u;
+    const std::uint32_t fr   = from >> 3;
+    const std::uint32_t half = from >> 5;
+
+    if (type == 1u)
+    {
+        const std::uint32_t promo = (r >> 12) & 3u;
+        return TIER_PROMOTION + (half << 5) + ff * 4u + promo;
+    }
+    if (type == 3u)
+    {
+        return TIER_CASTLING + half * 64u + ff * 8u + tf;
+    }
+    // type == 2u (en passant) or corrupt TT input that survived release-mode
+    // pseudo_legal checks; rare but handled to a valid slot.
+    const std::uint32_t ep_half = std::uint32_t(fr >= 4u);
+    const std::uint32_t dir     = std::uint32_t(tf > ff);
+    return TIER_EN_PASS + ep_half * 16u + tf * 2u + dir;
+}
+
+constexpr std::size_t compute_freq_aware_slot(std::uint32_t r) {
+    if (r >= 0x4000u)
+        return compute_special_slot(r);
+
+    const std::uint32_t from = (r >> 6) & 0x3Fu;
+    const std::uint32_t to   = r & 0x3Fu;
+    const std::uint32_t fr   = from >> 3;
+    const std::uint32_t tr   = to >> 3;
+    const std::uint32_t ff   = from & 7u;
+    const std::uint32_t tf   = to & 7u;
+
+    if (ff == tf)
+    {
+        if (fr == 1u && (tr == 2u || tr == 3u))
+            return TIER_PAWN_INIT + ff * 2u + (tr - 2u);
+        if (fr == 6u && (tr == 5u || tr == 4u))
+            return TIER_PAWN_INIT + 16u + ff * 2u + (5u - tr);
+        if (fr >= 2u && fr <= 5u && tr == fr + 1u)
+            return TIER_PAWN_CONT + ff * 4u + (fr - 2u);
+        if (fr >= 2u && fr <= 5u && tr + 1u == fr)
+            return TIER_PAWN_CONT + 32u + ff * 4u + (fr - 2u);
+    }
+
+    const int fdiff = int(tf) - int(ff);
+    const int rdiff = int(tr) - int(fr);
+    if (fdiff >= -1 && fdiff <= 1 && rdiff >= -1 && rdiff <= 1 && (fdiff != 0 || rdiff != 0))
+    {
+        const std::uint32_t pos  = std::uint32_t(fdiff + 1) * 3u + std::uint32_t(rdiff + 1);
+        const std::uint32_t dest = pos < 4u ? pos : pos - 1u;
+        return TIER_CHEBYSHEV + fr * 64u + ff * 8u + dest;
+    }
+
+    const int absfd = fdiff < 0 ? -fdiff : fdiff;
+    const int absrd = rdiff < 0 ? -rdiff : rdiff;
+
+    // Knight L-move
+    if (absfd * absfd + absrd * absrd == 5)
+    {
+        const std::uint32_t kidx = (std::uint32_t(fdiff > 0) << 2)
+                                 | (std::uint32_t(absfd == 1) << 1) | std::uint32_t(rdiff > 0);
+        return TIER_KNIGHT + from * 8u + kidx;
+    }
+
+    // 2-step ray (orth distance 2 or diag distance 2)
+    if ((absfd == 2 && absrd == 0) || (absfd == 0 && absrd == 2))
+    {
+        const std::uint32_t ridx = (absfd == 0) ? (rdiff > 0 ? 0u : 2u) : (fdiff > 0 ? 1u : 3u);
+        return TIER_RAY2 + from * 8u + ridx;
+    }
+    if (absfd == 2 && absrd == 2)
+    {
+        const std::uint32_t ridx =
+          4u + ((std::uint32_t(fdiff > 0) << 1) | std::uint32_t(rdiff < 0));
+        return TIER_RAY2 + from * 8u + ridx;
+    }
+
+    return TIER_FALLBACK + ((from << 6) | to);
+}
+
+constexpr std::array<std::uint16_t, 0x4000> build_normal_slot_table() {
+    std::array<std::uint16_t, 0x4000> t{};
+    for (std::uint32_t r = 0; r < 0x4000u; ++r)
+        t[r] = static_cast<std::uint16_t>(compute_freq_aware_slot(r));
+    return t;
+}
+
+constexpr bool all_slots_in_range() {
+    for (std::uint32_t r = 0; r < 65536u; ++r)
+        if (compute_freq_aware_slot(r) >= std::size_t(HISTORY_SLOT_COUNT))
+            return false;
+    return true;
+}
+
+static_assert(all_slots_in_range(), "history_slot result exceeds HISTORY_SLOT_COUNT");
+
+}  // namespace
+
+extern const std::array<std::uint16_t, 0x4000> FREQ_SLOT_V8_NORMAL = build_normal_slot_table();
+
+sf_noinline std::size_t special_slot(std::uint32_t r) { return compute_special_slot(r); }
 
 }  // namespace Stockfish
