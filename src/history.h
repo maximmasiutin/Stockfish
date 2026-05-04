@@ -128,15 +128,39 @@ struct DynStats {
     LargePagePtr<T[]> data;
 };
 
-// ButterflyHistory records how often quiet moves have been successful or unsuccessful
-// during the current search, and is used for reduction and move ordering decisions.
-// It uses 2 tables (one for each color) indexed by the move's from and to squares,
-// see https://www.chessprogramming.org/Butterfly_Boards
-using ButterflyHistory = Stats<std::int16_t, 7183, COLOR_NB, UINT_16_HISTORY_SIZE>;
+// history_slot maps a Move to a slot index in [0, HISTORY_SLOT_COUNT) and is
+// a bijection over the realized Move::raw() values encountered in search.
+// The mapping packs frequently used moves into low slot indices using
+// chess priors, giving a denser layout than the raw 16-bit Move encoding.
+//
+// Slot layout (shared by ButterflyHistory and LowPlyHistory):
+//   [0,    96)   pawn pushes (initial-rank, then continuation single-pushes)
+//   [96,  608)   chebyshev=1 from any rank (king-like one-step)
+//   [608, 1120)  knight L-moves (64 from-squares x 8 directions)
+//   [1120, 1632) two-step ray moves (orth or diag, distance exactly 2)
+//   [1632, 5728) fallback for other NORMAL moves: (from << 6) | to
+//   [5728, 5952) promotion / castling / en passant
+//   [5952, 5954) sentinels for Move::none and Move::null
+constexpr int HISTORY_SLOT_COUNT = 5954;
 
-// LowPlyHistory is addressed by ply and move's from and to squares, used
-// to improve move ordering near the root
-using LowPlyHistory = Stats<std::int16_t, 7183, LOW_PLY_HISTORY_SIZE, UINT_16_HISTORY_SIZE>;
+extern const std::array<std::uint16_t, 4096> normal_slot_table;
+sf_noinline std::size_t special_slot(std::uint32_t r);
+
+inline sf_always_inline std::size_t history_slot(Move m) {
+    const std::uint32_t r = std::uint32_t(m.raw());
+    if (r > 0xFFFu)
+        return special_slot(r);
+    return normal_slot_table[r];
+}
+
+// ButterflyHistory: per-color quiet-move success counters, indexed by
+// [color][history_slot(move)]. Used for move ordering and reductions.
+// See https://www.chessprogramming.org/Butterfly_Boards.
+using ButterflyHistory = Stats<std::int16_t, 7183, COLOR_NB, HISTORY_SLOT_COUNT>;
+
+// LowPlyHistory: per-ply quiet-move success counters near the root, indexed
+// by [ply][history_slot(move)]. Same slot space as ButterflyHistory.
+using LowPlyHistory = Stats<std::int16_t, 7183, LOW_PLY_HISTORY_SIZE, HISTORY_SLOT_COUNT>;
 
 // CapturePieceToHistory is addressed by a move's [piece][to][captured piece type]
 using CapturePieceToHistory = Stats<std::int16_t, 10692, PIECE_NB, SQUARE_NB, PIECE_TYPE_NB>;

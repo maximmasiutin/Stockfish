@@ -118,6 +118,7 @@ struct Stack {
     bool                        followPV;
     int                         cutoffCnt;
     int                         reduction;
+    std::uint16_t               currentFreqSlot;
 };
 
 
