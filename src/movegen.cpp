@@ -19,9 +19,14 @@
 #include "movegen.h"
 
 #include <cassert>
+#include <cstddef>
+#include <cstdint>
 #include <initializer_list>
 
 #include "bitboard.h"
+#include "freq_slot_oracle.h"
+#include "history.h"
+#include "misc.h"
 #include "position.h"
 
 #if defined(USE_AVX512ICL)
@@ -365,6 +370,42 @@ Move* generate<LEGAL>(const Position& pos, Move* moveList) {
             ++cur;
 
     return moveList;
+}
+
+namespace {
+
+constexpr std::uint32_t TIER_PROMOTION = 4096u;
+constexpr std::uint32_t TIER_CASTLING  = 4160u;
+constexpr std::uint32_t TIER_EN_PASS   = 4288u;
+
+static_assert(TIER_EN_PASS + 32u == HISTORY_SLOT_COUNT,
+              "slot layout / HISTORY_SLOT_COUNT mismatch");
+
+}  // namespace
+
+sf_noinline std::size_t special_slot(std::uint32_t r) {
+    const std::uint32_t type = (r >> 14) & 3u;
+    const std::uint32_t from = (r >> 6) & 0x3Fu;
+    const std::uint32_t to   = r & 0x3Fu;
+    const std::uint32_t ff   = from & 7u;
+    const std::uint32_t tf   = to & 7u;
+    const std::uint32_t fr   = from >> 3;
+    const std::uint32_t half = from >> 5;
+
+    if (type == 1u)
+    {
+        const std::uint32_t promo = (r >> 12) & 3u;
+        return TIER_PROMOTION + (half << 5) + ff * 4u + promo;
+    }
+    if (type == 3u)
+    {
+        return TIER_CASTLING + half * 64u + ff * 8u + tf;
+    }
+    // type == 2u (en passant) or corrupt TT input that survived release-mode
+    // pseudo_legal checks; rare but handled to a valid slot.
+    const std::uint32_t ep_half = std::uint32_t(fr >= 4u);
+    const std::uint32_t dir     = std::uint32_t(tf > ff);
+    return TIER_EN_PASS + ep_half * 16u + tf * 2u + dir;
 }
 
 }  // namespace Stockfish

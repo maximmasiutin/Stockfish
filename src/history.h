@@ -29,6 +29,7 @@
 #include <limits>
 #include <type_traits>  // IWYU pragma: keep
 
+#include "freq_slot_oracle.h"
 #include "memory.h"
 #include "misc.h"
 #include "position.h"
@@ -128,15 +129,32 @@ struct DynStats {
     LargePagePtr<T[]> data;
 };
 
-// ButterflyHistory records how often quiet moves have been successful or unsuccessful
-// during the current search, and is used for reduction and move ordering decisions.
-// It uses 2 tables (one for each color) indexed by the move's from and to squares,
-// see https://www.chessprogramming.org/Butterfly_Boards
-using ButterflyHistory = Stats<std::int16_t, 7183, COLOR_NB, UINT_16_HISTORY_SIZE>;
+// history_slot maps a Move to a slot index in [0, HISTORY_SLOT_COUNT) and is
+// a bijection over the realized Move::raw() values encountered in search.
+// Hot path: NORMAL moves (~99% of calls) read directly from an 8 KiB
+// frequency-rank LUT. Cold path: PROMOTION, CASTLING, and the rare
+// EN_PASSANT / corrupt-TT-input fallback go through an out-of-line helper.
+// All inputs map to a valid slot so no input from a corrupt or aliased move
+// escapes the table bounds.
+constexpr int HISTORY_SLOT_COUNT = 4320;
 
-// LowPlyHistory is addressed by ply and move's from and to squares, used
-// to improve move ordering near the root
-using LowPlyHistory = Stats<std::int16_t, 7183, LOW_PLY_HISTORY_SIZE, UINT_16_HISTORY_SIZE>;
+sf_noinline std::size_t special_slot(std::uint32_t r);
+
+inline sf_always_inline std::size_t history_slot(Move m) {
+    const std::uint32_t r = std::uint32_t(m.raw());
+    if (r >= 0x4000u)
+        return special_slot(r);
+    return FREQ_SLOT_ORACLE[r & 0xFFFu];
+}
+
+// ButterflyHistory: per-color quiet-move success counters, indexed by
+// [color][history_slot(move)]. Used for move ordering and reductions.
+// See https://www.chessprogramming.org/Butterfly_Boards.
+using ButterflyHistory = Stats<std::int16_t, 7183, COLOR_NB, HISTORY_SLOT_COUNT>;
+
+// LowPlyHistory: per-ply quiet-move success counters near the root, indexed
+// by [ply][history_slot(move)]. Same slot space as ButterflyHistory.
+using LowPlyHistory = Stats<std::int16_t, 7183, LOW_PLY_HISTORY_SIZE, HISTORY_SLOT_COUNT>;
 
 // CapturePieceToHistory is addressed by a move's [piece][to][captured piece type]
 using CapturePieceToHistory = Stats<std::int16_t, 10692, PIECE_NB, SQUARE_NB, PIECE_TYPE_NB>;
