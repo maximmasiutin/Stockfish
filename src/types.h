@@ -36,6 +36,7 @@
 // -DUSE_PEXT    | Add runtime support for use of pext asm-instruction. Works
 //               | only in 64-bit mode and requires hardware with pext support.
 
+    #include <array>
     #include <cassert>
     #include <cstddef>
     #include <cstdint>
@@ -422,6 +423,52 @@ enum MoveType : uint16_t {
 // in any normal move the destination square and origin square are always different,
 // but Move::none() and Move::null() have the same origin and destination square.
 
+// Frequency-aware tier hint for NORMAL moves: bits 12-13 of raw encode
+// a structural class derived deterministically from (from, to). The
+// slot mapping is a bijection on chess-move identity. Tier is computed
+// at construction via tier_bits_for(...). PROMOTION/EN_PASSANT/CASTLING
+// keep their original bits 12-13 semantics.
+namespace tier_detail {
+constexpr std::uint64_t PAWN_MASK = 0x00305028140a0c00ULL;
+
+constexpr int build_tier(std::uint32_t mft) {
+    const std::uint32_t from = (mft >> 6) & 0x3Fu;
+    const std::uint32_t to   = mft & 0x3Fu;
+    if (from == to)
+        return 0;
+    const std::uint32_t fr        = from >> 3;
+    const std::uint32_t ff        = from & 7;
+    const std::uint32_t tr        = to >> 3;
+    const std::uint32_t tf        = to & 7;
+    const std::uint32_t same_file = std::uint32_t(ff == tf);
+    const std::uint32_t pawn_hit  = same_file & std::uint32_t((PAWN_MASK >> (fr * 8u + tr)) & 1u);
+    if (pawn_hit)
+        return 1;
+    const int fdiff = int(tf) - int(ff);
+    const int rdiff = int(tr) - int(fr);
+    const int absfd = fdiff < 0 ? -fdiff : fdiff;
+    const int absrd = rdiff < 0 ? -rdiff : rdiff;
+    if (absfd * absfd + absrd * absrd == 5)
+        return 3;
+    if (absfd <= 1 && absrd <= 1)
+        return 2;
+    return 0;
+}
+
+constexpr auto build_lut() {
+    std::array<std::uint16_t, 4096> t{};
+    for (std::uint32_t r = 0; r < 4096; ++r)
+        t[r] = std::uint16_t(build_tier(r));
+    return t;
+}
+
+inline constexpr auto TIER_LUT = build_lut();
+}  // namespace tier_detail
+
+constexpr std::uint16_t tier_bits_for(std::uint32_t mft) {
+    return std::uint16_t(tier_detail::TIER_LUT[mft & 0x0FFFu]) << 12;
+}
+
 class Move {
    public:
     Move() = default;
@@ -429,11 +476,21 @@ class Move {
         data(d) {}
 
     constexpr Move(Square from, Square to) :
-        data((from << 6) + to) {}
+        data(std::uint16_t(std::uint16_t((from << 6) + to)
+                           | tier_bits_for(std::uint32_t((from << 6) + to)))) {}
 
     template<MoveType T>
     static constexpr Move make(Square from, Square to, PieceType pt = KNIGHT) {
-        return Move(T + ((pt - KNIGHT) << 12) + (from << 6) + to);
+        const std::uint16_t mft  = std::uint16_t((from << 6) + to);
+        const std::uint16_t tier = (T == NORMAL) ? tier_bits_for(mft) : std::uint16_t(0);
+        return Move(std::uint16_t(T + ((pt - KNIGHT) << 12) + mft + tier));
+    }
+
+    // Apply tier bits to an untiered raw (NORMAL only; non-NORMAL passthrough).
+    static constexpr Move with_tier(std::uint16_t r) {
+        const std::uint16_t is_normal_mask = std::uint16_t(int(r) < 0x4000 ? 0xFFFF : 0);
+        const std::uint16_t tier           = std::uint16_t(tier_bits_for(r) & is_normal_mask);
+        return Move(std::uint16_t(r | tier));
     }
 
     constexpr Square from_sq() const {

@@ -36,6 +36,17 @@ namespace {
 
 #if defined(USE_AVX512ICL)
 
+// Per-direction tier bits for pawn splats. Single/double pushes
+// (|offset|=8 or 16) match the PAWN_MASK pattern -> tier 1; diagonal
+// captures (|offset|=7 or 9) are chebyshev=1 different-file -> tier 2.
+template<Direction offset>
+constexpr std::uint16_t pawn_splat_tier_bits() {
+    constexpr int abs_off = offset > 0 ? int(offset) : -int(offset);
+    static_assert(abs_off == 7 || abs_off == 8 || abs_off == 9 || abs_off == 16,
+                  "Unexpected pawn splat offset");
+    return std::uint16_t(((abs_off == 8 || abs_off == 16) ? 1u : 2u) << 12);
+}
+
 template<Direction offset>
 inline Move* splat_pawn_moves(Move* moveList, Bitboard to_bb) {
     assert(popcount(to_bb) <= 8);  // <= 8 pawns per side
@@ -43,20 +54,53 @@ inline Move* splat_pawn_moves(Move* moveList, Bitboard to_bb) {
     const __m128i toSquares =
       _mm_cvtepi8_epi16(_mm512_castsi512_si128(_mm512_maskz_compress_epi8(to_bb, AllSquares)));
     const __m128i fromSquares = _mm_subs_epi16(toSquares, _mm_set1_epi16(offset));
-    const __m128i moves       = _mm_or_si128(_mm_slli_epi16(fromSquares, Move::FromSqShift),
-                                             _mm_slli_epi16(toSquares, Move::ToSqShift));
+    const __m128i tierBits    = _mm_set1_epi16(std::int16_t(pawn_splat_tier_bits<offset>()));
+    const __m128i moves = _mm_or_si128(_mm_or_si128(_mm_slli_epi16(fromSquares, Move::FromSqShift),
+                                                    _mm_slli_epi16(toSquares, Move::ToSqShift)),
+                                       tierBits);
 
     _mm_storeu_si128(reinterpret_cast<__m128i*>(moveList), moves);
     return moveList + popcount(to_bb);
 }
 
+// Queen sliding splat. Tier per lane computed in pure SIMD ALU (no LUT
+// load): pawn-pattern via PAWN_MASK row of fr broadcast and shifted by
+// tr; chebyshev=1 via max-abs-diff-leq-1 and from-not-to.
 inline Move* splat_moves(Move* moveList, Square from, Bitboard to_bb) {
     assert(popcount(to_bb) <= 32);  // Q can attack up to 27 squares
 
-    const __m512i fromVec = _mm512_set1_epi16(Move(from, SQUARE_ZERO).raw());
+    const __m512i fromVec = _mm512_set1_epi16(std::int16_t(int(from) << Move::FromSqShift));
     const __m512i toSquares =
       _mm512_cvtepi8_epi16(_mm512_castsi512_si256(_mm512_maskz_compress_epi8(to_bb, AllSquares)));
-    const __m512i moves = _mm512_or_si512(fromVec, _mm512_slli_epi16(toSquares, Move::ToSqShift));
+    const __m512i raws = _mm512_or_si512(fromVec, _mm512_slli_epi16(toSquares, Move::ToSqShift));
+
+    const int           ff = int(from) & 7;
+    const int           fr = int(from) >> 3;
+    const std::uint16_t pawn_mask_at_fr =
+      std::uint16_t((tier_detail::PAWN_MASK >> (fr * 8u)) & 0xFFu);
+
+    const __m512i tf     = _mm512_and_si512(toSquares, _mm512_set1_epi16(7));
+    const __m512i tr     = _mm512_srli_epi16(toSquares, 3);
+    const __m512i fdiff  = _mm512_sub_epi16(tf, _mm512_set1_epi16(std::int16_t(ff)));
+    const __m512i rdiff  = _mm512_sub_epi16(tr, _mm512_set1_epi16(std::int16_t(fr)));
+    const __m512i absfd  = _mm512_abs_epi16(fdiff);
+    const __m512i absrd  = _mm512_abs_epi16(rdiff);
+    const __m512i maxabs = _mm512_max_epi16(absfd, absrd);
+    const __m512i orabs  = _mm512_or_si512(absfd, absrd);
+
+    const __mmask32 same_file = _mm512_cmpeq_epi16_mask(fdiff, _mm512_setzero_si512());
+    const __mmask32 cheb_le1  = _mm512_cmple_epi16_mask(maxabs, _mm512_set1_epi16(1));
+    const __mmask32 nonzero   = _mm512_cmpneq_epi16_mask(orabs, _mm512_setzero_si512());
+    const __mmask32 cheb1_hit = cheb_le1 & nonzero;
+
+    const __m512i pawn_bit_v =
+      _mm512_srlv_epi16(_mm512_set1_epi16(std::int16_t(pawn_mask_at_fr)), tr);
+    const __mmask32 pawn_hit =
+      same_file & _mm512_test_epi16_mask(pawn_bit_v, _mm512_set1_epi16(1));
+
+    const __m512i tier  = _mm512_mask_blend_epi16(pawn_hit, _mm512_maskz_set1_epi16(cheb1_hit, 2),
+                                                  _mm512_set1_epi16(1));
+    const __m512i moves = _mm512_or_si512(raws, _mm512_slli_epi16(tier, 12));
 
     _mm512_storeu_si512(moveList, moves);
     return moveList + popcount(to_bb);
