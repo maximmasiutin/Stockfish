@@ -36,6 +36,8 @@ namespace {
 
 #if defined(USE_AVX512ICL)
 
+// SIMD builds the 16-bit raws; a short scalar loop expands each via
+// Move(uint16_t) which loads the slot from FREQ_SLOT_LUT.
 template<Direction offset>
 inline Move* splat_pawn_moves(Move* moveList, Bitboard to_bb) {
     assert(popcount(to_bb) <= 8);  // <= 8 pawns per side
@@ -43,23 +45,34 @@ inline Move* splat_pawn_moves(Move* moveList, Bitboard to_bb) {
     const __m128i toSquares =
       _mm_cvtepi8_epi16(_mm512_castsi512_si128(_mm512_maskz_compress_epi8(to_bb, AllSquares)));
     const __m128i fromSquares = _mm_subs_epi16(toSquares, _mm_set1_epi16(offset));
-    const __m128i moves       = _mm_or_si128(_mm_slli_epi16(fromSquares, Move::FromSqShift),
+    const __m128i raws        = _mm_or_si128(_mm_slli_epi16(fromSquares, Move::FromSqShift),
                                              _mm_slli_epi16(toSquares, Move::ToSqShift));
 
-    _mm_storeu_si128(reinterpret_cast<__m128i*>(moveList), moves);
-    return moveList + popcount(to_bb);
+    alignas(16) std::uint16_t temp[8];
+    _mm_storeu_si128(reinterpret_cast<__m128i*>(temp), raws);
+
+    const int n = popcount(to_bb);
+    for (int i = 0; i < n; ++i)
+        moveList[i] = Move(temp[i]);
+    return moveList + n;
 }
 
+// Same expand-via-Move(uint16_t) pattern as splat_pawn_moves.
 inline Move* splat_moves(Move* moveList, Square from, Bitboard to_bb) {
     assert(popcount(to_bb) <= 32);  // Q can attack up to 27 squares
 
-    const __m512i fromVec = _mm512_set1_epi16(Move(from, SQUARE_ZERO).raw());
+    const __m512i fromVec = _mm512_set1_epi16(std::int16_t(int(from) << Move::FromSqShift));
     const __m512i toSquares =
       _mm512_cvtepi8_epi16(_mm512_castsi512_si256(_mm512_maskz_compress_epi8(to_bb, AllSquares)));
-    const __m512i moves = _mm512_or_si512(fromVec, _mm512_slli_epi16(toSquares, Move::ToSqShift));
+    const __m512i raws = _mm512_or_si512(fromVec, _mm512_slli_epi16(toSquares, Move::ToSqShift));
 
-    _mm512_storeu_si512(moveList, moves);
-    return moveList + popcount(to_bb);
+    alignas(64) std::uint16_t temp[32];
+    _mm512_storeu_si512(reinterpret_cast<void*>(temp), raws);
+
+    const int n = popcount(to_bb);
+    for (int i = 0; i < n; ++i)
+        moveList[i] = Move(temp[i]);
+    return moveList + n;
 }
 
 // Rook/bishop, indexed by (Pt - BISHOP) and from sq
@@ -106,7 +119,9 @@ inline Move*
 splat_precomputed_moves(Move* moveList, Square from, Bitboard occupied, Bitboard target) {
     static_assert(Pt != QUEEN && Pt != PAWN, "Unsupported piece type");
 
-    // The nth bit in the mask corresponds to the nth square in the piece's pseudo-attacks
+    // The nth bit in the mask corresponds to the nth square in the piece's pseudo-attacks.
+    // SliderMoves and KnightKingMoves hold 32-bit Moves with slot baked in at compile
+    // time via constexpr Move(s, t); compress operates on 32-bit lanes.
     uint32_t mask;
     if constexpr (Pt == BISHOP || Pt == ROOK)
     {
@@ -115,18 +130,19 @@ splat_precomputed_moves(Move* moveList, Square from, Bitboard occupied, Bitboard
         mask = magic.attacks[magic.index(occupied)];
         mask &= pext(target, magic.pseudoAttacks);
 
-        const __m256i moves =
-          *reinterpret_cast<const __m256i*>(SliderMoves[Pt - BISHOP][from].data());
-        _mm256_storeu_si256(reinterpret_cast<__m256i*>(moveList),
-                            _mm256_maskz_compress_epi16(mask, moves));
+        const __m512i moves =
+          *reinterpret_cast<const __m512i*>(SliderMoves[Pt - BISHOP][from].data());
+        _mm512_storeu_si512(reinterpret_cast<void*>(moveList),
+                            _mm512_maskz_compress_epi32(mask, moves));
     }
     else
     {
         mask = pext(target, PseudoAttacks[Pt][from]);
 
-        __m128i moves = *reinterpret_cast<const __m128i*>(KnightKingMoves[Pt == KING][from].data());
-        _mm_storeu_si128(reinterpret_cast<__m128i*>(moveList),
-                         _mm_maskz_compress_epi16(mask, moves));
+        const __m256i moves =
+          *reinterpret_cast<const __m256i*>(KnightKingMoves[Pt == KING][from].data());
+        _mm256_storeu_si256(reinterpret_cast<__m256i*>(moveList),
+                            _mm256_maskz_compress_epi32(mask, moves));
     }
 
     return moveList + popcount(mask);
@@ -263,7 +279,7 @@ Move* generate_moves(const Position& pos, Move* moveList, Bitboard target) {
     while (bb)
     {
         Square from = pop_lsb(bb);
-#ifdef USE_AVX512ICL
+#if defined(USE_AVX512ICL) && !MAINHIST_FA_PARALLEL_SLOT_DISABLE_AVX512_SPLAT
         if constexpr (Pt != QUEEN)
         {
             moveList = splat_precomputed_moves<Pt>(moveList, from, pos.pieces(), target);
@@ -304,7 +320,7 @@ Move* generate_all(const Position& pos, Move* moveList) {
 
     Bitboard b = Type == EVASIONS ? ~pos.pieces(Us) : target;
 
-#ifdef USE_AVX512ICL
+#if defined(USE_AVX512ICL) && !MAINHIST_FA_PARALLEL_SLOT_DISABLE_AVX512_SPLAT
     moveList = splat_precomputed_moves<KING>(moveList, ksq, 0ULL, b);
 #else
     moveList = splat_moves(moveList, ksq, attacks_bb<KING>(ksq) & b);

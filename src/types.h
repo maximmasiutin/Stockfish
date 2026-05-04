@@ -36,6 +36,7 @@
 // -DUSE_PEXT    | Add runtime support for use of pext asm-instruction. Works
 //               | only in 64-bit mode and requires hardware with pext support.
 
+    #include <array>
     #include <cassert>
     #include <cstddef>
     #include <cstdint>
@@ -422,18 +423,146 @@ enum MoveType : uint16_t {
 // in any normal move the destination square and origin square are always different,
 // but Move::none() and Move::null() have the same origin and destination square.
 
+// Frequency-aware mainHistory and lowPlyHistory slot layout:
+//   [0, 32)        Tier 0  pawn init pushes
+//   [32, 96)       Tier 1  pawn cont single-pushes
+//   [96, 608)      Tier 2  chebyshev=1 from any of 8 ranks (king-class)
+//   [608, 1120)    Tier 3  knight L
+//   [1120, 1632)   Tier 4  2-step rays
+//   [1632, 5728)   Tier 5  fallback (identity (from << 6) | to)
+//   [5728, 5792)   Tier 6  PROMOTION
+//   [5792, 5920)   Tier 7  CASTLING (DFRC-safe)
+//   [5920, 5952)   Tier 8  EN_PASSANT
+constexpr int FREQ_SLOT_COUNT = 5952;
+
+namespace freq_slot_detail {
+
+constexpr std::uint32_t TIER_PAWN_INIT  = 0;
+constexpr std::uint32_t TIER_PAWN_CONT  = 32;
+constexpr std::uint32_t TIER_CHEBYSHEV  = 96;
+constexpr std::uint32_t TIER_KNIGHT     = 608;
+constexpr std::uint32_t TIER_RAY2       = 1120;
+constexpr std::uint32_t TIER_FALLBACK   = 1632;
+constexpr std::uint32_t TIER_PROMOTION  = 5728;
+constexpr std::uint32_t TIER_CASTLING   = 5792;
+constexpr std::uint32_t TIER_EN_PASSANT = 5920;
+
+static_assert(TIER_EN_PASSANT + 32u == FREQ_SLOT_COUNT, "slot layout / FREQ_SLOT_COUNT mismatch");
+
+constexpr std::size_t compute_special_slot(std::uint32_t r) {
+    const std::uint32_t type = (r >> 14) & 3u;
+    const std::uint32_t from = (r >> 6) & 0x3Fu;
+    const std::uint32_t to   = r & 0x3Fu;
+    const std::uint32_t ff   = from & 7u;
+    const std::uint32_t tf   = to & 7u;
+    const std::uint32_t fr   = from >> 3;
+    const std::uint32_t half = from >> 5;
+
+    if (type == 1u)
+    {
+        const std::uint32_t promo = (r >> 12) & 3u;
+        return TIER_PROMOTION + (half << 5) + ff * 4u + promo;
+    }
+    if (type == 3u)
+        return TIER_CASTLING + half * 64u + ff * 8u + tf;
+    const std::uint32_t ep_half = std::uint32_t(fr >= 4u);
+    const std::uint32_t dir     = std::uint32_t(tf > ff);
+    return TIER_EN_PASSANT + ep_half * 16u + tf * 2u + dir;
+}
+
+constexpr std::size_t compute_freq_aware_slot(std::uint32_t r) {
+    if (r >= 0x4000u)
+        return compute_special_slot(r);
+
+    const std::uint32_t from = (r >> 6) & 0x3Fu;
+    const std::uint32_t to   = r & 0x3Fu;
+    const std::uint32_t fr   = from >> 3;
+    const std::uint32_t tr   = to >> 3;
+    const std::uint32_t ff   = from & 7u;
+    const std::uint32_t tf   = to & 7u;
+
+    if (ff == tf)
+    {
+        if (fr == 1u && (tr == 2u || tr == 3u))
+            return TIER_PAWN_INIT + ff * 2u + (tr - 2u);
+        if (fr == 6u && (tr == 5u || tr == 4u))
+            return TIER_PAWN_INIT + 16u + ff * 2u + (5u - tr);
+        if (fr >= 2u && fr <= 5u && tr == fr + 1u)
+            return TIER_PAWN_CONT + ff * 4u + (fr - 2u);
+        if (fr >= 2u && fr <= 5u && tr + 1u == fr)
+            return TIER_PAWN_CONT + 32u + ff * 4u + (fr - 2u);
+    }
+
+    const int fdiff = int(tf) - int(ff);
+    const int rdiff = int(tr) - int(fr);
+    if (fdiff >= -1 && fdiff <= 1 && rdiff >= -1 && rdiff <= 1 && (fdiff != 0 || rdiff != 0))
+    {
+        const std::uint32_t pos  = std::uint32_t(fdiff + 1) * 3u + std::uint32_t(rdiff + 1);
+        const std::uint32_t dest = pos < 4u ? pos : pos - 1u;
+        return TIER_CHEBYSHEV + fr * 64u + ff * 8u + dest;
+    }
+
+    const int absfd = fdiff < 0 ? -fdiff : fdiff;
+    const int absrd = rdiff < 0 ? -rdiff : rdiff;
+
+    if (absfd * absfd + absrd * absrd == 5)
+    {
+        const std::uint32_t kidx = (std::uint32_t(fdiff > 0) << 2)
+                                 | (std::uint32_t(absfd == 1) << 1) | std::uint32_t(rdiff > 0);
+        return TIER_KNIGHT + from * 8u + kidx;
+    }
+
+    if ((absfd == 2 && absrd == 0) || (absfd == 0 && absrd == 2))
+    {
+        const std::uint32_t ridx = (absfd == 0) ? (rdiff > 0 ? 0u : 2u) : (fdiff > 0 ? 1u : 3u);
+        return TIER_RAY2 + from * 8u + ridx;
+    }
+    if (absfd == 2 && absrd == 2)
+    {
+        const std::uint32_t ridx =
+          4u + ((std::uint32_t(fdiff > 0) << 1) | std::uint32_t(rdiff < 0));
+        return TIER_RAY2 + from * 8u + ridx;
+    }
+
+    return TIER_FALLBACK + ((from << 6) | to);
+}
+
+constexpr auto build_lut() {
+    std::array<std::uint16_t, 65536> t{};
+    for (std::uint32_t r = 0; r < 65536; ++r)
+        t[r] = std::uint16_t(compute_freq_aware_slot(r));
+    return t;
+}
+
+inline constexpr auto FREQ_SLOT_LUT = build_lut();
+
+}  // namespace freq_slot_detail
+
+constexpr std::uint16_t freq_slot_for(std::uint32_t raw16) {
+    return freq_slot_detail::FREQ_SLOT_LUT[raw16 & 0xFFFFu];
+}
+
+// Move is 32 bits: low 16 hold the raw (decoders read these unchanged);
+// high 16 hold the precomputed frequency-aware slot, computed once at
+// construction via FREQ_SLOT_LUT. mainHistory and lowPlyHistory read
+// only the slot field (branchless, no LUT load on access).
 class Move {
    public:
     Move() = default;
     constexpr explicit Move(std::uint16_t d) :
-        data(d) {}
+        data(std::uint32_t(d) | (std::uint32_t(freq_slot_for(d)) << 16)) {}
+
+    constexpr Move(std::uint16_t d, std::uint16_t slot) :
+        data(std::uint32_t(d) | (std::uint32_t(slot) << 16)) {}
 
     constexpr Move(Square from, Square to) :
-        data((from << 6) + to) {}
+        data(std::uint32_t(std::uint16_t((from << 6) + to))
+             | (std::uint32_t(freq_slot_for(std::uint32_t((from << 6) + to))) << 16)) {}
 
     template<MoveType T>
     static constexpr Move make(Square from, Square to, PieceType pt = KNIGHT) {
-        return Move(T + ((pt - KNIGHT) << 12) + (from << 6) + to);
+        const std::uint16_t mr = std::uint16_t(T + ((pt - KNIGHT) << 12) + (from << 6) + to);
+        return Move(mr, freq_slot_for(mr));
     }
 
     constexpr Square from_sq() const {
@@ -446,35 +575,44 @@ class Move {
         return Square(data & 0x3F);
     }
 
-    // Same as to_sq() but without assertion, for branchless code paths
-    // where the result is masked/ignored when move is not ok
     constexpr Square to_sq_unchecked() const { return Square(data & 0x3F); }
 
     constexpr MoveType type_of() const { return MoveType(data & (3 << 14)); }
 
     constexpr PieceType promotion_type() const { return PieceType(((data >> 12) & 3) + KNIGHT); }
 
-    constexpr bool is_ok() const { return none().data != data && null().data != data; }
+    constexpr bool is_ok() const {
+        return std::uint16_t(data) != std::uint16_t(none().data)
+            && std::uint16_t(data) != std::uint16_t(null().data);
+    }
 
-    static constexpr Move null() { return Move(65); }
-    static constexpr Move none() { return Move(0); }
+    static constexpr Move null() { return Move(std::uint16_t(65)); }
+    static constexpr Move none() { return Move(std::uint16_t(0)); }
 
-    constexpr bool operator==(const Move& m) const { return data == m.data; }
-    constexpr bool operator!=(const Move& m) const { return data != m.data; }
+    constexpr bool operator==(const Move& m) const {
+        return std::uint16_t(data) == std::uint16_t(m.data);
+    }
+    constexpr bool operator!=(const Move& m) const {
+        return std::uint16_t(data) != std::uint16_t(m.data);
+    }
 
-    constexpr explicit operator bool() const { return data != 0; }
+    constexpr explicit operator bool() const { return std::uint16_t(data) != 0; }
 
-    constexpr std::uint16_t raw() const { return data; }
+    constexpr std::uint16_t raw() const { return std::uint16_t(data); }
+    constexpr std::uint16_t slot() const { return std::uint16_t(data >> 16); }
+    constexpr std::uint32_t raw32() const { return data; }
 
     struct MoveHash {
-        std::size_t operator()(const Move& m) const { return make_key(m.data); }
+        std::size_t operator()(const Move& m) const {
+            return make_key(std::uint64_t(std::uint16_t(m.data)));
+        }
     };
 
     static constexpr int FromSqShift = 6;
     static constexpr int ToSqShift   = 0;
 
    protected:
-    std::uint16_t data;
+    std::uint32_t data;
 };
 
 template<typename T, typename... Ts>

@@ -59,9 +59,10 @@ static constexpr uint8_t PV_MASK         = 1 << PV_SHIFT;
 
 struct TTEntry {
 
-    // Convert internal bitfields to external types
+    // Convert internal bitfields to external types. The slot is rebuilt
+    // on read by the Move(uint16_t) constructor via FREQ_SLOT_LUT.
     TTData read() const {
-        return TTData{Move(move16),
+        return TTData{Move(move16_raw),
                       Value(value16),
                       Value(eval16),
                       Depth(DEPTH_NONE + depth8),
@@ -79,7 +80,7 @@ struct TTEntry {
     uint16_t key16;
     uint8_t  depth8;
     uint8_t  genBound8;
-    Move     move16;
+    uint16_t move16_raw;  // 16-bit raw value; frequency-aware slot rebuilt at read
     int16_t  value16;
     int16_t  eval16;
 };
@@ -91,7 +92,7 @@ void TTEntry::save(
 
     // Preserve the old ttmove if we don't have a new one
     if (m || uint16_t(k) != key16)
-        move16 = m;
+        move16_raw = m.raw();
 
     // Overwrite less valuable entries (cheapest checks first)
     if (b == BOUND_EXACT || uint16_t(k) != key16 || d - DEPTH_NONE + 2 * pv > depth8 - 4

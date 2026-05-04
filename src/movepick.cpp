@@ -59,7 +59,7 @@ enum Stages {
 #ifdef USE_AVX512ICL
 // Load the Move, and the ExtMove value, into all lanes of 512-bit registers
 static void splat_extmove(const ExtMove& m, __m512i& move, __m512i& value) {
-    move  = _mm512_set1_epi32(m.raw());
+    move  = _mm512_set1_epi32(int(m.raw32()));
     value = _mm512_set1_epi32(m.value);
 }
 
@@ -228,7 +228,7 @@ ExtMove* MovePicker::score(const MoveList<Type>& ml) {
         else if constexpr (Type == QUIETS)
         {
             // histories
-            m.value = 2 * (*mainHistory)[us][m.raw()];
+            m.value = 2 * (*mainHistory)[us][m.slot()];
             m.value += 2 * sharedHistory->pawn_entry(pos)[pc][to];
             m.value += (*continuationHistory[0])[pc][to];
             m.value += (*continuationHistory[1])[pc][to];
@@ -246,7 +246,7 @@ ExtMove* MovePicker::score(const MoveList<Type>& ml) {
 
 
             if (ply < LOW_PLY_HISTORY_SIZE)
-                m.value += 8 * (*lowPlyHistory)[ply][m.raw()] / (1 + ply);
+                m.value += 8 * (*lowPlyHistory)[ply][m.slot()] / (1 + ply);
         }
 
         else  // Type == EVASIONS
@@ -254,7 +254,7 @@ ExtMove* MovePicker::score(const MoveList<Type>& ml) {
             if (pos.capture_stage(m))
                 m.value = PieceValue[capturedPiece] + (1 << 28);
             else
-                m.value = (*mainHistory)[us][m.raw()] + (*continuationHistory[0])[pc][to];
+                m.value = (*mainHistory)[us][m.slot()] + (*continuationHistory[0])[pc][to];
         }
     }
     return it;
