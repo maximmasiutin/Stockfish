@@ -36,6 +36,17 @@ namespace {
 
 #if defined(USE_AVX512ICL)
 
+// Per-direction tier bits for pawn splats. Single/double pushes
+// (|offset|=8 or 16) match the PAWN_MASK pattern -> tier 1; diagonal
+// captures (|offset|=7 or 9) are chebyshev=1 different-file -> tier 2.
+template<Direction offset>
+constexpr std::uint16_t pawn_splat_tier_bits() {
+    constexpr int abs_off = offset > 0 ? int(offset) : -int(offset);
+    static_assert(abs_off == 7 || abs_off == 8 || abs_off == 9 || abs_off == 16,
+                  "Unexpected pawn splat offset");
+    return std::uint16_t(((abs_off == 8 || abs_off == 16) ? 1u : 2u) << 12);
+}
+
 template<Direction offset>
 inline Move* splat_pawn_moves(Move* moveList, Bitboard to_bb) {
     assert(popcount(to_bb) <= 8);  // <= 8 pawns per side
@@ -43,23 +54,32 @@ inline Move* splat_pawn_moves(Move* moveList, Bitboard to_bb) {
     const __m128i toSquares =
       _mm_cvtepi8_epi16(_mm512_castsi512_si128(_mm512_maskz_compress_epi8(to_bb, AllSquares)));
     const __m128i fromSquares = _mm_subs_epi16(toSquares, _mm_set1_epi16(offset));
-    const __m128i moves       = _mm_or_si128(_mm_slli_epi16(fromSquares, Move::FromSqShift),
-                                             _mm_slli_epi16(toSquares, Move::ToSqShift));
+    const __m128i tierBits    = _mm_set1_epi16(std::int16_t(pawn_splat_tier_bits<offset>()));
+    const __m128i moves = _mm_or_si128(_mm_or_si128(_mm_slli_epi16(fromSquares, Move::FromSqShift),
+                                                    _mm_slli_epi16(toSquares, Move::ToSqShift)),
+                                       tierBits);
 
     _mm_storeu_si128(reinterpret_cast<__m128i*>(moveList), moves);
     return moveList + popcount(to_bb);
 }
 
+// Queen sliding splat. Tier varies per (from, to); SIMD builds raws,
+// then a scalar loop ORs the per-move tier in via Move::with_tier.
 inline Move* splat_moves(Move* moveList, Square from, Bitboard to_bb) {
     assert(popcount(to_bb) <= 32);  // Q can attack up to 27 squares
 
-    const __m512i fromVec = _mm512_set1_epi16(Move(from, SQUARE_ZERO).raw());
+    Move* const   start   = moveList;
+    const __m512i fromVec = _mm512_set1_epi16(std::int16_t(int(from) << Move::FromSqShift));
     const __m512i toSquares =
       _mm512_cvtepi8_epi16(_mm512_castsi512_si256(_mm512_maskz_compress_epi8(to_bb, AllSquares)));
     const __m512i moves = _mm512_or_si512(fromVec, _mm512_slli_epi16(toSquares, Move::ToSqShift));
 
     _mm512_storeu_si512(moveList, moves);
-    return moveList + popcount(to_bb);
+    moveList += popcount(to_bb);
+
+    for (Move* p = start; p < moveList; ++p)
+        *p = Move::with_tier(p->raw());
+    return moveList;
 }
 
 // Rook/bishop, indexed by (Pt - BISHOP) and from sq

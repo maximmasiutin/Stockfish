@@ -350,7 +350,7 @@ inline bool Position::capture(Move m) const {
 // generation is needed to avoid the generation of duplicate moves.
 inline bool Position::capture_stage(Move m) const {
     assert(m.is_ok());
-    return capture(m) || m.promotion_type() == QUEEN;
+    return capture(m) || (m.type_of() == PROMOTION && m.promotion_type() == QUEEN);
 }
 
 inline Piece Position::captured_piece() const { return st->capturedPiece; }
