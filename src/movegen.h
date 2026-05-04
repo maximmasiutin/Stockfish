@@ -21,6 +21,7 @@
 
 #include <algorithm>  // IWYU pragma: keep
 #include <cstddef>
+#include <cstdint>
 
 #include "types.h"
 
@@ -36,15 +37,32 @@ enum GenType {
     LEGAL
 };
 
-struct ExtMove: public Move {
-    int value;
+// Sentinel for the freq-aware slot caches. Debug-only: in release the
+// caches are populated lazily by score<>() / select() / TT-case writes
+// for all moves whose mainHistory consumer might fire (real captures
+// pay the LUT load only because promotion-to-queen non-captures go
+// through CAPTURES phase but are gated by !priorCapture, requiring a
+// valid slot). In debug, the sentinel poisons unscored entries.
+#if !defined(NDEBUG)
+constexpr std::uint16_t NO_FREQ_SLOT = 0xFFFFu;
+#endif
 
-    void operator=(Move m) { data = m.raw(); }
+struct ExtMove: public Move {
+    std::uint16_t freq_slot;
+    int           value;
+
+    void operator=(Move m) {
+        data = m.raw();
+#if !defined(NDEBUG)
+        freq_slot = NO_FREQ_SLOT;
+#endif
+    }
 
     // Inhibit unwanted implicit conversions to Move
     // with an ambiguity that yields to a compile error.
     operator float() const = delete;
 };
+static_assert(sizeof(ExtMove) == 8, "ExtMove must remain 8 bytes");
 
 inline bool operator<(const ExtMove& f, const ExtMove& s) { return f.value < s.value; }
 

@@ -51,6 +51,16 @@ class MovePicker {
     Move next_move();
     void skip_quiet_moves();
 
+    // Cached freq slot for the most recent move returned by next_move(),
+    // used at search-loop sites to avoid recomputing history_slot(move).
+    // Initial value irrelevant in release: every consumer read is gated
+    // by a path that has overwritten the cache for the current move.
+    std::uint16_t lastFreqSlot
+#if !defined(NDEBUG)
+      = NO_FREQ_SLOT
+#endif
+      ;
+
    private:
     template<typename Pred>
     Move select(Pred);
