@@ -102,24 +102,27 @@ struct PVMoves {
 // Stack struct keeps track of the information we need to remember from nodes
 // shallower and deeper in the tree during the search. Each search thread has
 // its own array of Stack objects, indexed by the current ply.
+// Stack: 64-bit-first reordering with 16-bit narrowing of ply, reduction,
+// moveCount, cutoffCnt. Adds 16-bit currentFreqSlot after the other 16-bit
+// fields (fits in what would otherwise be tail padding). Total 48 bytes.
 struct Stack {
     PVMoves*                    pv;
     PieceToHistory*             continuationHistory;
     CorrectionHistory<PieceTo>* continuationCorrectionHistory;
-    int                         ply;
+    int                         statScore;
+    std::int16_t                staticEval;
     Move                        currentMove;
     Move                        excludedMove;
-    Value                       staticEval;
-    int                         statScore;
-    int                         moveCount;
+    std::int16_t                ply;
+    std::int16_t                reduction;
+    std::uint16_t               moveCount;
+    std::uint16_t               cutoffCnt;
+    std::uint16_t               currentFreqSlot;
     bool                        inCheck;
     bool                        ttPv;
     bool                        ttHit;
     bool                        followPV;
-    int                         cutoffCnt;
-    int                         reduction;
 };
-
 
 // RootMove struct is used for moves at the root of the tree. For each root move
 // we store a score and a PV (really a refutation in the case of moves which

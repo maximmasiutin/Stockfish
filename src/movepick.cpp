@@ -227,8 +227,14 @@ ExtMove* MovePicker::score(const MoveList<Type>& ml) {
 
         else if constexpr (Type == QUIETS)
         {
+            // Hoist freq-slot computation early so OOO can interleave it with
+            // the contHist/lowply reads below. Cache slot in ExtMove for reuse
+            // at search-loop sites.
+            const std::size_t freqSlot = main_hist_freq_index(m);
+            m.freq_slot                = std::uint16_t(freqSlot);
+
             // histories
-            m.value = 2 * (*mainHistory)[us][m.raw()];
+            m.value = 2 * (*mainHistory)[us][freqSlot];
             m.value += 2 * sharedHistory->pawn_entry(pos)[pc][to];
             m.value += (*continuationHistory[0])[pc][to];
             m.value += (*continuationHistory[1])[pc][to];
@@ -254,7 +260,11 @@ ExtMove* MovePicker::score(const MoveList<Type>& ml) {
             if (pos.capture_stage(m))
                 m.value = PieceValue[capturedPiece] + (1 << 28);
             else
-                m.value = (*mainHistory)[us][m.raw()] + (*continuationHistory[0])[pc][to];
+            {
+                const std::size_t freqSlot = main_hist_freq_index(m);
+                m.freq_slot                = std::uint16_t(freqSlot);
+                m.value = (*mainHistory)[us][freqSlot] + (*continuationHistory[0])[pc][to];
+            }
         }
     }
     return it;
@@ -267,8 +277,12 @@ Move MovePicker::select(Pred filter) {
 
     for (; cur < endCur; ++cur)
         if (*cur != ttMove && filter())
+        {
+            lastFreqSlot = cur->freq_slot;
             return *cur++;
+        }
 
+    lastFreqSlot = NO_FREQ_SLOT;
     return Move::none();
 }
 
@@ -287,6 +301,7 @@ top:
     case QSEARCH_TT :
     case PROBCUT_TT :
         ++stage;
+        lastFreqSlot = std::uint16_t(main_hist_freq_index(ttMove));
         return ttMove;
 
     case CAPTURE_INIT :
