@@ -21,6 +21,7 @@
 
 #include <algorithm>  // IWYU pragma: keep
 #include <cstddef>
+#include <cstdint>
 
 #include "types.h"
 
