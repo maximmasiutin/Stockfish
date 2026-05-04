@@ -51,6 +51,12 @@ class MovePicker {
     Move next_move();
     void skip_quiet_moves();
 
+    std::uint16_t lastFreqSlot
+#if !defined(NDEBUG)
+      = NO_FREQ_SLOT
+#endif
+      ;
+
    private:
     template<typename Pred>
     Move select(Pred);
