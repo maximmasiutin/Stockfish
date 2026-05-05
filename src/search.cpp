@@ -318,7 +318,7 @@ bool Search::Worker::iterative_deepening() {
     lowPlyHistory.fill(98);
 
     for (Color c : {WHITE, BLACK})
-        for (int i = 0; i < UINT_16_HISTORY_SIZE; i++)
+        for (int i = 0; i < HISTORY_SLOT_COUNT; i++)
             mainHistory[c][i] = mainHistory[c][i] * 820 / 1024;
 
     // Iterative deepening loop until requested to stop or the target depth is reached
@@ -603,6 +603,7 @@ void Search::Worker::do_move(
 void Search::Worker::do_null_move(Position& pos, StateInfo& st, Stack* const ss) {
     pos.do_null_move(st);
     ss->currentMove                   = Move::null();
+    ss->currentFreqSlot               = NO_FREQ_SLOT;
     ss->continuationHistory           = &continuationHistory[0][0][NO_PIECE][0];
     ss->continuationCorrectionHistory = &continuationCorrectionHistory[NO_PIECE][0];
 }
@@ -897,7 +898,7 @@ Value Search::Worker::search(
     if (((ss - 1)->currentMove).is_ok() && !(ss - 1)->inCheck && !priorCapture)
     {
         int evalDiff = std::clamp(-int((ss - 1)->staticEval + ss->staticEval), -214, 171) + 60;
-        mainHistory[~us][((ss - 1)->currentMove).raw()] << evalDiff * 10;
+        mainHistory[~us][(ss - 1)->currentFreqSlot] << evalDiff * 10;
         if (!ttHit && type_of(pos.piece_on(prevSq)) != PAWN
             && ((ss - 1)->currentMove).type_of() != PROMOTION)
             sharedHistory.pawn_entry(pos)[pos.piece_on(prevSq)][prevSq] << evalDiff * 12;
@@ -993,6 +994,7 @@ Value Search::Worker::search(
 
             assert(pos.capture_stage(move));
 
+            ss->currentFreqSlot = std::uint16_t(history_slot(move));
             do_move(pos, move, st, ss);
 
             // Perform a preliminary qsearch to verify that the move holds
@@ -1071,6 +1073,9 @@ moves_loop:  // When in check, search starts here
         movedPiece = pos.moved_piece(move);
         givesCheck = pos.gives_check(move);
 
+        // Hoist slot once per iter; reused at pruning consumers and pre-write.
+        const std::uint16_t moveSlot = mp.lastFreqSlot;
+
         // Calculate new depth for this move
         newDepth = depth - 1;
 
@@ -1127,7 +1132,7 @@ moves_loop:  // When in check, search starts here
                 if (history < -4097 * depth)
                     continue;
 
-                history += 71 * mainHistory[us][move.raw()] / 32;
+                history += 71 * mainHistory[us][moveSlot] / 32;
 
                 // (*Scaler): Generally, lower divisors scale well
                 lmrDepth += history / lmrDivisor[dIndex];
@@ -1219,6 +1224,7 @@ moves_loop:  // When in check, search starts here
         }
 
         // Step 16. Make the move
+        ss->currentFreqSlot = moveSlot;
         do_move(pos, move, st, givesCheck, ss);
 
         // Add extension to new depth
@@ -1254,8 +1260,7 @@ moves_loop:  // When in check, search starts here
             ss->statScore = 863 * int(PieceValue[pos.captured_piece()]) / 128
                           + captureHistory[movedPiece][move.to_sq()][type_of(pos.captured_piece())];
         else
-            ss->statScore = 2 * mainHistory[us][move.raw()]
-                          + (*contHist[0])[movedPiece][move.to_sq()]
+            ss->statScore = 2 * mainHistory[us][moveSlot] + (*contHist[0])[movedPiece][move.to_sq()]
                           + (*contHist[1])[movedPiece][move.to_sq()];
 
         // Decrease/increase reduction for moves with a good/bad history
@@ -1476,7 +1481,7 @@ moves_loop:  // When in check, search starts here
         update_continuation_histories(ss - 1, pos.piece_on(prevSq), prevSq,
                                       scaledBonus * 221 / 16384);
 
-        mainHistory[~us][((ss - 1)->currentMove).raw()] << scaledBonus * 235 / 32768;
+        mainHistory[~us][(ss - 1)->currentFreqSlot] << scaledBonus * 235 / 32768;
 
         if (type_of(pos.piece_on(prevSq)) != PAWN && ((ss - 1)->currentMove).type_of() != PROMOTION)
             sharedHistory.pawn_entry(pos)[pos.piece_on(prevSq)][prevSq] << scaledBonus * 290 / 8192;
@@ -1705,6 +1710,7 @@ Value Search::Worker::qsearch(Position& pos, Stack* ss, Value alpha, Value beta)
         }
 
         // Step 7. Make and search the move
+        ss->currentFreqSlot = std::uint16_t(history_slot(move));
         do_move(pos, move, st, givesCheck, ss);
 
         value = -qsearch<nodeType>(pos, ss + 1, -beta, -alpha);
@@ -1924,11 +1930,12 @@ void update_continuation_histories(Stack* ss, Piece pc, Square to, int bonus) {
 void update_quiet_histories(
   const Position& pos, Stack* ss, Search::Worker& workerThread, Move move, int bonus) {
 
-    Color us = pos.side_to_move();
-    workerThread.mainHistory[us][move.raw()] << bonus;  // Untuned to prevent duplicate effort
+    Color             us   = pos.side_to_move();
+    const std::size_t slot = history_slot(move);
+    workerThread.mainHistory[us][slot] << bonus;  // Untuned to prevent duplicate effort
 
     if (ss->ply < LOW_PLY_HISTORY_SIZE)
-        workerThread.lowPlyHistory[ss->ply][move.raw()] << bonus * 682 / 1024;
+        workerThread.lowPlyHistory[ss->ply][slot] << bonus * 682 / 1024;
 
     update_continuation_histories(ss, pos.moved_piece(move), move.to_sq(), bonus * 894 / 1024);
 
