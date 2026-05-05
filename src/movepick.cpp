@@ -19,6 +19,7 @@
 #include "movepick.h"
 
 #include <cassert>
+#include <cstring>
 #include <limits>
 #include <utility>
 
@@ -57,9 +58,14 @@ enum Stages {
 };
 
 #ifdef USE_AVX512ICL
-// Load the Move, and the ExtMove value, into all lanes of 512-bit registers
+// Load the Move + freq_slot pair, and the ExtMove value, into all lanes of
+// 512-bit registers. The low 32 bits of ExtMove pack data (raw Move) and
+// freq_slot; both must travel through the sorter together so write_sorted
+// stores them back atomically and freq_slot is preserved.
 static void splat_extmove(const ExtMove& m, __m512i& move, __m512i& value) {
-    move  = _mm512_set1_epi32(m.raw());
+    std::uint32_t packed;
+    std::memcpy(&packed, &m, sizeof(packed));
+    move  = _mm512_set1_epi32(int(packed));
     value = _mm512_set1_epi32(m.value);
 }
 
@@ -227,8 +233,10 @@ ExtMove* MovePicker::score(const MoveList<Type>& ml) {
 
         else if constexpr (Type == QUIETS)
         {
+            const std::size_t slot = history_slot(m);
+            m.freq_slot            = std::uint16_t(slot);
             // histories
-            m.value = 2 * (*mainHistory)[us][m.raw()];
+            m.value = 2 * (*mainHistory)[us][slot];
             m.value += 2 * sharedHistory->pawn_entry(pos)[pc][to];
             m.value += (*continuationHistory[0])[pc][to];
             m.value += (*continuationHistory[1])[pc][to];
@@ -246,7 +254,7 @@ ExtMove* MovePicker::score(const MoveList<Type>& ml) {
 
 
             if (ply < LOW_PLY_HISTORY_SIZE)
-                m.value += 8 * (*lowPlyHistory)[ply][m.raw()] / (1 + ply);
+                m.value += 8 * (*lowPlyHistory)[ply][slot] / (1 + ply);
         }
 
         else  // Type == EVASIONS
@@ -254,7 +262,11 @@ ExtMove* MovePicker::score(const MoveList<Type>& ml) {
             if (pos.capture_stage(m))
                 m.value = PieceValue[capturedPiece] + (1 << 28);
             else
-                m.value = (*mainHistory)[us][m.raw()] + (*continuationHistory[0])[pc][to];
+            {
+                const std::size_t slot = history_slot(m);
+                m.freq_slot            = std::uint16_t(slot);
+                m.value = (*mainHistory)[us][slot] + (*continuationHistory[0])[pc][to];
+            }
         }
     }
     return it;
@@ -267,8 +279,12 @@ Move MovePicker::select(Pred filter) {
 
     for (; cur < endCur; ++cur)
         if (*cur != ttMove && filter())
+        {
+            lastFreqSlot = cur->freq_slot;
             return *cur++;
+        }
 
+    lastFreqSlot = NO_FREQ_SLOT;
     return Move::none();
 }
 
@@ -287,6 +303,7 @@ top:
     case QSEARCH_TT :
     case PROBCUT_TT :
         ++stage;
+        lastFreqSlot = std::uint16_t(history_slot(ttMove));
         return ttMove;
 
     case CAPTURE_INIT :
