@@ -128,6 +128,13 @@ struct DynStats {
     LargePagePtr<T[]> data;
 };
 
+std::uint16_t rol16(std::uint16_t x, unsigned n);
+
+// Frequency-aware magic index for ButterflyHistory and LowPlyHistory addressing.
+// Clusters frequently-accessed moves into low slot addresses to reduce cache
+// pressure on the hot subset.
+std::uint16_t magic_index(std::uint16_t raw);
+
 // ButterflyHistory records how often quiet moves have been successful or unsuccessful
 // during the current search, and is used for reduction and move ordering decisions.
 // It uses 2 tables (one for each color) indexed by the move's from and to squares,

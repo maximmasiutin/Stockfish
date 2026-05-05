@@ -28,6 +28,20 @@
 
 namespace Stockfish {
 
+std::uint16_t rol16(std::uint16_t x, unsigned n) {
+    n &= 15u;
+    return static_cast<std::uint16_t>((x << n) | (x >> ((-n) & 15u)));
+}
+
+std::uint16_t magic_index(std::uint16_t raw) {
+    std::uint16_t r;
+    r = rol16(raw, 4);
+    r = static_cast<std::uint16_t>((r ^ (r << 6)) & 0xFFFFu);
+    r = rol16(r, 13);
+    r = static_cast<std::uint16_t>(r ^ 0x2483u);
+    return r;
+}
+
 namespace {
 
 enum Stages {
@@ -228,7 +242,7 @@ ExtMove* MovePicker::score(const MoveList<Type>& ml) {
         else if constexpr (Type == QUIETS)
         {
             // histories
-            m.value = 2 * (*mainHistory)[us][m.raw()];
+            m.value = 2 * (*mainHistory)[us][magic_index(m.raw())];
             m.value += 2 * sharedHistory->pawn_entry(pos)[pc][to];
             m.value += (*continuationHistory[0])[pc][to];
             m.value += (*continuationHistory[1])[pc][to];
@@ -246,7 +260,7 @@ ExtMove* MovePicker::score(const MoveList<Type>& ml) {
 
 
             if (ply < LOW_PLY_HISTORY_SIZE)
-                m.value += 8 * (*lowPlyHistory)[ply][m.raw()] / (1 + ply);
+                m.value += 8 * (*lowPlyHistory)[ply][magic_index(m.raw())] / (1 + ply);
         }
 
         else  // Type == EVASIONS
@@ -254,7 +268,8 @@ ExtMove* MovePicker::score(const MoveList<Type>& ml) {
             if (pos.capture_stage(m))
                 m.value = PieceValue[capturedPiece] + (1 << 28);
             else
-                m.value = (*mainHistory)[us][m.raw()] + (*continuationHistory[0])[pc][to];
+                m.value =
+                  (*mainHistory)[us][magic_index(m.raw())] + (*continuationHistory[0])[pc][to];
         }
     }
     return it;
