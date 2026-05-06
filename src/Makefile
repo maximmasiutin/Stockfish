@@ -72,7 +72,7 @@ SRCS = benchmark.cpp bitboard.cpp evaluate.cpp main.cpp \
 	search.cpp thread.cpp timeman.cpp tt.cpp uci.cpp ucioption.cpp tune.cpp syzygy/tbprobe.cpp \
 	nnue/nnue_accumulator.cpp nnue/nnue_misc.cpp nnue/network.cpp \
 	nnue/features/half_ka_v2_hm.cpp nnue/features/full_threats.cpp \
-	engine.cpp score.cpp memory.cpp history.cpp
+	engine.cpp score.cpp memory.cpp
 
 OTHER_SRCS = universal/entry_x86.cpp universal/nnue_embed.cpp
 
