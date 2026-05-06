@@ -242,7 +242,7 @@ ExtMove* MovePicker::score(const MoveList<Type>& ml) {
         else if constexpr (Type == QUIETS)
         {
             // histories
-            m.value = 2 * (*mainHistory)[us][magic_index(m.raw())];
+            m.value = 2 * (*mainHistory)[us][m];
             m.value += 2 * sharedHistory->pawn_entry(pos)[pc][to];
             m.value += (*continuationHistory[0])[pc][to];
             m.value += (*continuationHistory[1])[pc][to];
@@ -260,7 +260,7 @@ ExtMove* MovePicker::score(const MoveList<Type>& ml) {
 
 
             if (ply < LOW_PLY_HISTORY_SIZE)
-                m.value += 8 * (*lowPlyHistory)[ply][magic_index(m.raw())] / (1 + ply);
+                m.value += 8 * (*lowPlyHistory)[ply][m] / (1 + ply);
         }
 
         else  // Type == EVASIONS
@@ -268,8 +268,7 @@ ExtMove* MovePicker::score(const MoveList<Type>& ml) {
             if (pos.capture_stage(m))
                 m.value = PieceValue[capturedPiece] + (1 << 28);
             else
-                m.value =
-                  (*mainHistory)[us][magic_index(m.raw())] + (*continuationHistory[0])[pc][to];
+                m.value = (*mainHistory)[us][m] + (*continuationHistory[0])[pc][to];
         }
     }
     return it;
