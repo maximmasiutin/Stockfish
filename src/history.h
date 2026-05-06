@@ -47,14 +47,28 @@ static_assert((PAWN_HISTORY_BASE_SIZE & (PAWN_HISTORY_BASE_SIZE - 1)) == 0,
 static_assert((CORRHIST_BASE_SIZE & (CORRHIST_BASE_SIZE - 1)) == 0,
               "CORRHIST_BASE_SIZE has to be a power of 2");
 
+// Compile-time integer log2 for power-of-two D in StatsEntry's gravity shift.
+constexpr std::size_t ilog2(const std::size_t x) {
+    assert(x >= 1);
+    std::size_t y = x;
+    std::size_t n = 0;
+    while (y >>= 1)
+        ++n;
+    return n;
+}
+
 // StatsEntry is the container of various numerical statistics. We use a class
 // instead of a naked value to directly call history update operator<<() on
 // the entry. The first template parameter T is the base type of the array,
 // and the second template parameter D limits the range of updates in [-D, D]
-// when we update values with the << operator
+// when we update values with the << operator. D must be a power of 2 so
+// that the gravity term `val * |bonus| / D` can be computed via shift.
 template<typename T, int D, bool Atomic = false>
 struct StatsEntry {
     static_assert(std::is_arithmetic_v<T>, "Not an arithmetic type");
+    static_assert(D > 0 && (D & (D - 1)) == 0, "D must be a power of 2");
+
+    static constexpr std::size_t GRAVITY_SHIFT = ilog2(static_cast<std::size_t>(D));
 
    private:
     std::conditional_t<Atomic, std::atomic<T>, T> entry;
@@ -78,7 +92,12 @@ struct StatsEntry {
         // Make sure that bonus is in range [-D, D]
         int clampedBonus = std::clamp(bonus, -D, D);
         T   val          = *this;
-        *this            = val + clampedBonus - val * std::abs(clampedBonus) / D;
+        int newVal       = val + clampedBonus - ((val * std::abs(clampedBonus)) >> GRAVITY_SHIFT);
+        // When D exceeds the storable range of T (e.g. D=32768 with int16),
+        // clamp the result into T's range so the assignment doesn't wrap.
+        if constexpr (D > std::numeric_limits<T>::max())
+            newVal = std::clamp(newVal, -D, D - 1);
+        *this = newVal;
 
         assert(std::abs(T(*this)) <= D);
     }
@@ -132,17 +151,17 @@ struct DynStats {
 // during the current search, and is used for reduction and move ordering decisions.
 // It uses 2 tables (one for each color) indexed by the move's from and to squares,
 // see https://www.chessprogramming.org/Butterfly_Boards
-using ButterflyHistory = Stats<std::int16_t, 7183, COLOR_NB, UINT_16_HISTORY_SIZE>;
+using ButterflyHistory = Stats<std::int16_t, 8192, COLOR_NB, UINT_16_HISTORY_SIZE>;
 
 // LowPlyHistory is addressed by ply and move's from and to squares, used
 // to improve move ordering near the root
-using LowPlyHistory = Stats<std::int16_t, 7183, LOW_PLY_HISTORY_SIZE, UINT_16_HISTORY_SIZE>;
+using LowPlyHistory = Stats<std::int16_t, 8192, LOW_PLY_HISTORY_SIZE, UINT_16_HISTORY_SIZE>;
 
 // CapturePieceToHistory is addressed by a move's [piece][to][captured piece type]
-using CapturePieceToHistory = Stats<std::int16_t, 10692, PIECE_NB, SQUARE_NB, PIECE_TYPE_NB>;
+using CapturePieceToHistory = Stats<std::int16_t, 16384, PIECE_NB, SQUARE_NB, PIECE_TYPE_NB>;
 
 // PieceToHistory is like ButterflyHistory but is addressed by a move's [piece][to]
-using PieceToHistory = Stats<std::int16_t, 30000, PIECE_NB, SQUARE_NB>;
+using PieceToHistory = Stats<std::int16_t, 32768, PIECE_NB, SQUARE_NB>;
 
 // ContinuationHistory is the combined history of a given pair of moves, usually
 // the current one given a previous one. The nested history table is based on
