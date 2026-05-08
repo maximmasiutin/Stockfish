@@ -137,17 +137,32 @@ inline sf_always_inline constexpr std::uint16_t rol16(std::uint16_t x, unsigned 
     return static_cast<std::uint16_t>((x << n) | (x >> ((-n) & 15u)));
 }
 
-// Compact bijection index for LowPlyHistory. Maps raw moves into a 13-bit slot
-// range [0, 8191]. NORMAL moves keep their (from<<6)|to low12 layout, and
-// non-NORMAL moves are placed in the upper half via bit 12. The XOR mix of
-// hi nibble into bits 8-11 keeps the per-type encoding distinct across
-// PROMOTION and CASTLING active raws.
+// 12-bit rotates used by the NORMAL-path permutation in biject_index.
+inline sf_always_inline constexpr std::uint16_t rol12(std::uint16_t x, unsigned n) {
+    n %= 12u;
+    if (!n)
+        return static_cast<std::uint16_t>(x & 0x0FFFu);
+    return static_cast<std::uint16_t>(((x << n) | (x >> (12u - n))) & 0x0FFFu);
+}
+inline sf_always_inline constexpr std::uint16_t ror12(std::uint16_t x, unsigned n) {
+    n %= 12u;
+    if (!n)
+        return static_cast<std::uint16_t>(x & 0x0FFFu);
+    return static_cast<std::uint16_t>(((x >> n) | (x << (12u - n))) & 0x0FFFu);
+}
+
+// Frequency-aware magic index for the LowPlyHistory addressing.
+// Clusters frequently-accessed moves into low slot addresses to reduce cache
+// pressure on the hot subset.
 inline sf_always_inline constexpr std::uint16_t biject_index(std::uint16_t raw) {
     const std::uint16_t low12 = static_cast<std::uint16_t>(raw & 0x0FFFu);
     const std::uint16_t hi    = static_cast<std::uint16_t>(raw >> 12);
+    const std::uint16_t r1    = ror12(low12, 9);
+    const std::uint16_t r2    = static_cast<std::uint16_t>(rol12(low12, 8) & 0x07C0u);
+    const std::uint16_t f12   = static_cast<std::uint16_t>((r1 - r2) & 0x0FFFu);
     const std::uint16_t nn =
       static_cast<std::uint16_t>(0x1000u | (low12 ^ static_cast<std::uint16_t>(hi << 8)));
-    return hi ? nn : low12;
+    return hi ? nn : f12;
 }
 
 constexpr std::uint32_t biject_index_max_over_uint16() {
@@ -162,6 +177,22 @@ constexpr std::uint32_t biject_index_max_over_uint16() {
 }
 
 static_assert(biject_index_max_over_uint16() < BIJECT_HISTORY_SIZE);
+
+constexpr bool f12_is_bijective_uint12() {
+    bool seen[4096] = {};
+    for (std::uint32_t x = 0; x < 4096u; ++x)
+    {
+        std::uint16_t r1 = ror12(static_cast<std::uint16_t>(x), 9);
+        std::uint16_t r2 =
+          static_cast<std::uint16_t>(rol12(static_cast<std::uint16_t>(x), 8) & 0x07C0u);
+        std::uint16_t f12 = static_cast<std::uint16_t>((r1 - r2) & 0x0FFFu);
+        if (seen[f12])
+            return false;
+        seen[f12] = true;
+    }
+    return true;
+}
+static_assert(f12_is_bijective_uint12(), "f12 must be bijective on uint12");
 
 template<typename T, std::size_t Size>
 class alignas(64) BijectIndexedArray: public MultiArray<T, Size> {
