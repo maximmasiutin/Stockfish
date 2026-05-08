@@ -138,11 +138,17 @@ inline sf_always_inline constexpr std::uint16_t rol16(std::uint16_t x, unsigned 
 }
 
 // Compact magic index for LowPlyHistory. Maps raw moves into a 13-bit slot
-// range [0, 8191].
+// range [0, 8191]. L=7 S9 (YY) shape from compact_search_v4 cat1:
+// a=xshl(x,6) ap=and(x,0xF0EC) b=rol(x,1) bp=xshr(x,3) mL=xor mR=xor mTop=xor.
+// max_slot over all uint16 is proven < 8192 by the constexpr static_assert.
 inline sf_always_inline constexpr std::uint16_t magic_index(std::uint16_t raw) {
-    const std::uint16_t r1 = rol16(static_cast<std::uint16_t>(raw & 0xEC71u), 6);
-    const std::uint16_t r2 = static_cast<std::uint16_t>(raw & 0x1BAEu);
-    return static_cast<std::uint16_t>(r1 ^ r2);
+    const std::uint16_t r1    = static_cast<std::uint16_t>(raw ^ (raw << 6));
+    const std::uint16_t r1p   = static_cast<std::uint16_t>(r1 & 0xF0ECu);
+    const std::uint16_t r3    = rol16(raw, 1);
+    const std::uint16_t r3p   = static_cast<std::uint16_t>(r3 ^ (r3 >> 3));
+    const std::uint16_t left  = static_cast<std::uint16_t>(r1 ^ r1p);
+    const std::uint16_t right = static_cast<std::uint16_t>(r3 ^ r3p);
+    return static_cast<std::uint16_t>(left ^ right);
 }
 
 constexpr std::uint32_t magic_index_max_over_uint16() {
