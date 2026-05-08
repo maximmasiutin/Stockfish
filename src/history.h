@@ -38,7 +38,7 @@ namespace Stockfish {
 constexpr int PAWN_HISTORY_BASE_SIZE   = 8192;  // has to be a power of 2
 constexpr int UINT_16_HISTORY_SIZE     = std::numeric_limits<uint16_t>::max() + 1;
 constexpr int CORRHIST_BASE_SIZE       = UINT_16_HISTORY_SIZE;
-constexpr int CORRECTION_HISTORY_LIMIT = 1024;
+constexpr int CORRECTION_HISTORY_LIMIT = 16384;
 constexpr int LOW_PLY_HISTORY_SIZE     = 5;
 
 static_assert((PAWN_HISTORY_BASE_SIZE & (PAWN_HISTORY_BASE_SIZE - 1)) == 0,
@@ -51,13 +51,27 @@ static_assert((CORRHIST_BASE_SIZE & (CORRHIST_BASE_SIZE - 1)) == 0,
 // instead of a naked value to directly call history update operator<<() on
 // the entry. The first template parameter T is the base type of the array,
 // and the second template parameter D limits the range of updates in [-D, D]
-// when we update values with the << operator
-template<typename T, int D, bool Atomic = false>
+// when we update values with the << operator. The fourth parameter UseShift
+// selects the gravity update form: false uses integer division val*|b|/D
+// which truncates toward zero; true uses an arithmetic right shift by
+// log2(D) which is faster but rounds negative numerators toward minus
+// infinity. The shift form requires D to be a power of two.
+template<typename T, int D, bool Atomic = false, bool UseShift = false>
 struct StatsEntry {
     static_assert(std::is_arithmetic_v<T>, "Not an arithmetic type");
+    static_assert(!UseShift || (D > 0 && (D & (D - 1)) == 0),
+                  "UseShift requires D to be a power of two");
 
    private:
     std::conditional_t<Atomic, std::atomic<T>, T> entry;
+
+    template<int x>
+    static constexpr unsigned log2_pow2() {
+        unsigned n = 0;
+        while ((1 << n) < x)
+            ++n;
+        return n;
+    }
 
    public:
     void operator=(const T& v) {
@@ -78,7 +92,10 @@ struct StatsEntry {
         // Make sure that bonus is in range [-D, D]
         int clampedBonus = std::clamp(bonus, -D, D);
         T   val          = *this;
-        *this            = val + clampedBonus - val * std::abs(clampedBonus) / D;
+        if constexpr (UseShift)
+            *this = val + clampedBonus - (int(val) * std::abs(clampedBonus) >> log2_pow2<D>());
+        else
+            *this = val + clampedBonus - val * std::abs(clampedBonus) / D;
 
         assert(std::abs(T(*this)) <= D);
     }
@@ -94,6 +111,13 @@ using Stats = MultiArray<StatsEntry<T, D>, Sizes...>;
 
 template<typename T, int D, std::size_t... Sizes>
 using AtomicStats = MultiArray<StatsEntry<T, D, true>, Sizes...>;
+
+// ShiftStats is identical to Stats except that StatsEntry::operator<< uses an
+// arithmetic right shift by log2(D) instead of integer division. Reserved for
+// histories whose D is a power of two and where the asymmetric rounding of
+// signed shift on negative numerators is acceptable.
+template<typename T, int D, std::size_t... Sizes>
+using ShiftStats = MultiArray<StatsEntry<T, D, false, true>, Sizes...>;
 
 // DynStats is a dynamically sized array of Stats, used for thread-shared histories
 // which should scale with the total number of threads. The SizeMultiplier gives
@@ -190,7 +214,10 @@ struct CorrHistTypedef {
 
 template<>
 struct CorrHistTypedef<PieceTo> {
-    using type = Stats<std::int16_t, CORRECTION_HISTORY_LIMIT, PIECE_NB, SQUARE_NB>;
+    // Continuation correction history opts in to the shift-based gravity update.
+    // The pawn, minor, and non-pawn correction histories live in CorrectionBundle
+    // and continue to use the integer-division gravity update.
+    using type = ShiftStats<std::int16_t, CORRECTION_HISTORY_LIMIT, PIECE_NB, SQUARE_NB>;
 };
 
 template<>
