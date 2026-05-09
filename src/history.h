@@ -78,7 +78,15 @@ struct StatsEntry {
         // Make sure that bonus is in range [-D, D]
         int clampedBonus = std::clamp(bonus, -D, D);
         T   val          = *this;
-        *this            = val + clampedBonus - val * std::abs(clampedBonus) / D;
+        if constexpr ((D & (D - 1)) == 0)
+        {
+            // Truncate-toward-zero shift: matches signed division by power-of-two D.
+            int prod = int(val) * std::abs(clampedBonus);
+            int q    = (prod + ((prod >> 31) & (D - 1))) >> constexpr_lsb(D);
+            *this    = val + clampedBonus - q;
+        }
+        else
+            *this = val + clampedBonus - val * std::abs(clampedBonus) / D;
 
         assert(std::abs(T(*this)) <= D);
     }
