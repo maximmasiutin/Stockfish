@@ -128,18 +128,14 @@ struct DynStats {
     LargePagePtr<T[]> data;
 };
 
-inline sf_always_inline constexpr std::uint16_t rol16(std::uint16_t x, unsigned n) {
-    n &= 15u;
-    return static_cast<std::uint16_t>((x << n) | (x >> ((-n) & 15u)));
-}
-
-// Frequency-aware magic index for ButterflyHistory and LowPlyHistory addressing.
+// Frequency-aware magic index for the ButterflyHistory and LowPlyHistory addressing.
 // Clusters frequently-accessed moves into low slot addresses to reduce cache
 // pressure on the hot subset.
-inline sf_always_inline constexpr std::uint16_t magic_index(std::uint16_t raw) {
-    const std::uint16_t a = raw ^ 0x1640u;
-    const std::uint16_t b = rol16(raw, 6) & 0x0FC0u;
-    return a ^ b;
+inline sf_always_inline constexpr std::uint32_t magic_index(std::uint32_t raw) {
+    // Receives and returns std::uint32_t to avoid 16-bit-operand codegen that
+    // would force a movzx tail before the value can be used as an array index.
+    const std::uint32_t b = ((raw << 6) | (raw >> 10)) & 0x0FC0u;
+    return (raw ^ b) ^ 0x1640u;
 }
 
 template<typename T, std::size_t Size>
@@ -148,12 +144,12 @@ class alignas(64) MagicIndexedArray: public MultiArray<T, Size> {
     using Base = MultiArray<T, Size>;
 
     inline sf_always_inline constexpr T& operator[](Move m) noexcept {
-        const std::uint16_t idx = magic_index(m.raw());
+        const std::uint32_t idx = magic_index(m.raw());
         assert(idx < Size);
         return Base::operator[](idx);
     }
     inline sf_always_inline constexpr const T& operator[](Move m) const noexcept {
-        const std::uint16_t idx = magic_index(m.raw());
+        const std::uint32_t idx = magic_index(m.raw());
         assert(idx < Size);
         return Base::operator[](idx);
     }
