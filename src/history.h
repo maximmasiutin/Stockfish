@@ -128,15 +128,74 @@ struct DynStats {
     LargePagePtr<T[]> data;
 };
 
+// Frequency-aware magic index for ButterflyHistory addressing.
+// Clusters frequently-accessed moves into low slot addresses to reduce cache
+// pressure on the hot subset; coefficients tuned for the mainHistory access set.
+inline sf_always_inline constexpr std::uint16_t magic_index_mh(std::uint16_t raw) {
+    const std::uint32_t r = raw;
+    return std::uint16_t((r ^ (r >> 5)) ^ 0x4FC5u);
+}
+
+// Identity index for LowPlyHistory addressing; preserves master-equivalent
+// indexing on the lowPlyHistory access set.
+inline sf_always_inline constexpr std::uint16_t magic_index_lp(std::uint16_t raw) { return raw; }
+
+template<typename T, std::size_t Size, std::uint16_t (*FN)(std::uint16_t)>
+class alignas(64) MoveIndexedArray: public MultiArray<T, Size> {
+   public:
+    using Base = MultiArray<T, Size>;
+
+    inline sf_always_inline constexpr T& operator[](Move m) noexcept {
+        const std::uint16_t idx = FN(m.raw());
+        assert(idx < Size);
+        return Base::operator[](idx);
+    }
+    inline sf_always_inline constexpr const T& operator[](Move m) const noexcept {
+        const std::uint16_t idx = FN(m.raw());
+        assert(idx < Size);
+        return Base::operator[](idx);
+    }
+};
+
+template<typename T, std::size_t Outer, std::size_t Size, std::uint16_t (*FN)(std::uint16_t)>
+class MoveIndexedHistory {
+    std::array<MoveIndexedArray<T, Size, FN>, Outer> data_;
+
+   public:
+    constexpr auto& operator[](std::size_t i) noexcept {
+        assert(i < Outer);
+        return data_[i];
+    }
+    constexpr const auto& operator[](std::size_t i) const noexcept {
+        assert(i < Outer);
+        return data_[i];
+    }
+    constexpr auto begin() noexcept { return data_.begin(); }
+    constexpr auto end() noexcept { return data_.end(); }
+    constexpr auto begin() const noexcept { return data_.begin(); }
+    constexpr auto end() const noexcept { return data_.end(); }
+    template<typename U>
+    void fill(const U& v) {
+        for (auto& row : data_)
+            row.fill(v);
+    }
+};
+
 // ButterflyHistory records how often quiet moves have been successful or unsuccessful
 // during the current search, and is used for reduction and move ordering decisions.
 // It uses 2 tables (one for each color) indexed by the move's from and to squares,
 // see https://www.chessprogramming.org/Butterfly_Boards
-using ButterflyHistory = Stats<std::int16_t, 7183, COLOR_NB, UINT_16_HISTORY_SIZE>;
+using ButterflyHistory = MoveIndexedHistory<StatsEntry<std::int16_t, 7183>,
+                                            COLOR_NB,
+                                            UINT_16_HISTORY_SIZE,
+                                            &magic_index_mh>;
 
 // LowPlyHistory is addressed by ply and move's from and to squares, used
 // to improve move ordering near the root
-using LowPlyHistory = Stats<std::int16_t, 7183, LOW_PLY_HISTORY_SIZE, UINT_16_HISTORY_SIZE>;
+using LowPlyHistory = MoveIndexedHistory<StatsEntry<std::int16_t, 7183>,
+                                         LOW_PLY_HISTORY_SIZE,
+                                         UINT_16_HISTORY_SIZE,
+                                         &magic_index_lp>;
 
 // CapturePieceToHistory is addressed by a move's [piece][to][captured piece type]
 using CapturePieceToHistory = Stats<std::int16_t, 10692, PIECE_NB, SQUARE_NB, PIECE_TYPE_NB>;
