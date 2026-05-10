@@ -128,6 +128,20 @@ struct DynStats {
     LargePagePtr<T[]> data;
 };
 
+inline sf_always_inline constexpr std::uint16_t rol16(std::uint16_t x, unsigned n) {
+    n &= 15u;
+    return static_cast<std::uint16_t>((x << n) | (x >> ((-n) & 15u)));
+}
+
+// Frequency-aware magic index for the LowPlyHistory addressing. Clusters
+// frequently-accessed moves into low slot addresses to reduce hot-set cache
+// pressure. Pure permutation: same domain and range as raw().
+inline sf_always_inline constexpr std::uint16_t magic_index(std::uint16_t raw) {
+    const std::uint16_t a = raw ^ 0x3672u;
+    const std::uint16_t b = rol16(raw, 6) & 0x0FE3u;
+    return a ^ b;
+}
+
 // ButterflyHistory records how often quiet moves have been successful or unsuccessful
 // during the current search, and is used for reduction and move ordering decisions.
 // It uses 2 tables (one for each color) indexed by the move's from and to squares,
