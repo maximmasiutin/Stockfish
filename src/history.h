@@ -136,8 +136,8 @@ inline sf_always_inline constexpr std::uint16_t rol16(std::uint16_t x, unsigned 
 // Frequency-aware magic index for ButterflyHistory and LowPlyHistory addressing.
 // Clusters frequently-accessed moves into low slot addresses to reduce cache
 // pressure on the hot subset.
-inline sf_always_inline constexpr std::uint16_t magic_index(std::uint16_t raw) {
-    return std::uint16_t((raw ^ 0x0698u ^ rol16(raw & 0x003Fu, 6)) - 0x49u);
+inline sf_always_inline constexpr std::uint32_t magic_index(std::uint32_t raw) {
+    return (((raw ^ 0x0698u) ^ rol16(raw & 0x003Fu, 6)) - 0x49u) & 0xFFFFu;
 }
 
 template<typename T, std::size_t Size>
@@ -146,12 +146,12 @@ class alignas(64) MagicIndexedArray: public MultiArray<T, Size> {
     using Base = MultiArray<T, Size>;
 
     inline sf_always_inline constexpr T& operator[](Move m) noexcept {
-        const std::uint16_t idx = magic_index(m.raw());
+        const std::uint32_t idx = magic_index(m.raw());
         assert(idx < Size);
         return Base::operator[](idx);
     }
     inline sf_always_inline constexpr const T& operator[](Move m) const noexcept {
-        const std::uint16_t idx = magic_index(m.raw());
+        const std::uint32_t idx = magic_index(m.raw());
         assert(idx < Size);
         return Base::operator[](idx);
     }
