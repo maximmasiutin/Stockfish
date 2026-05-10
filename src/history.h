@@ -139,10 +139,10 @@ inline sf_always_inline constexpr std::uint16_t rol16(std::uint16_t x, unsigned 
 
 // Compact magic index for ButterflyHistory and LowPlyHistory. Maps raw moves
 // into a 13-bit slot range [0, 8191].
-inline sf_always_inline constexpr std::uint16_t magic_index(std::uint16_t raw) {
-    const std::uint16_t r1 = static_cast<std::uint16_t>(raw & 0x01B7u);
-    const std::uint16_t r2 = static_cast<std::uint16_t>(raw ^ (raw << 3));
-    const std::uint16_t r3 = static_cast<std::uint16_t>(r1 ^ r2);
+inline sf_always_inline constexpr std::uint32_t magic_index(std::uint32_t raw) {
+    const std::uint32_t r1 = raw & 0x01B7u;
+    const std::uint32_t r2 = raw ^ (raw << 3);
+    const std::uint32_t r3 = r1 ^ r2;
     return rol16(r3, 13);
 }
 
@@ -150,7 +150,7 @@ constexpr std::uint32_t magic_index_max_over_uint16() {
     std::uint32_t m = 0;
     for (std::uint32_t r = 0; r < 65536u; ++r)
     {
-        std::uint16_t y = magic_index(static_cast<std::uint16_t>(r));
+        std::uint32_t y = magic_index(r);
         if (y > m)
             m = y;
     }
@@ -165,12 +165,12 @@ class alignas(64) MagicIndexedArray: public MultiArray<T, Size> {
     using Base = MultiArray<T, Size>;
 
     inline sf_always_inline constexpr T& operator[](Move m) noexcept {
-        const std::uint16_t idx = magic_index(m.raw());
+        const std::uint32_t idx = magic_index(m.raw());
         assert(idx < Size);
         return Base::operator[](idx);
     }
     inline sf_always_inline constexpr const T& operator[](Move m) const noexcept {
-        const std::uint16_t idx = magic_index(m.raw());
+        const std::uint32_t idx = magic_index(m.raw());
         assert(idx < Size);
         return Base::operator[](idx);
     }
