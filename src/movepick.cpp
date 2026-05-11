@@ -25,8 +25,12 @@
 #include "bitboard.h"
 #include "misc.h"
 #include "position.h"
+#include "tune.h"
 
 namespace Stockfish {
+
+int lphWeight[LOW_PLY_HISTORY_SIZE] = {5851, 4096, 2731, 2048, 1820, 1638};
+TUNE(SetRange(0, 16384), lphWeight);
 
 namespace {
 
@@ -246,7 +250,7 @@ ExtMove* MovePicker::score(const MoveList<Type>& ml) {
 
 
             if (ply < LOW_PLY_HISTORY_SIZE)
-                m.value += 8 * (*lowPlyHistory)[ply][m.raw()] / (1 + ply);
+                m.value += lphWeight[ply] * (*lowPlyHistory)[ply][m.raw()] >> 10;
         }
 
         else  // Type == EVASIONS
