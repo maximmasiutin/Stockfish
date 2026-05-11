@@ -317,7 +317,8 @@ bool Search::Worker::iterative_deepening() {
     int  searchAgainCounter = 0;
     bool uciPvSent          = false;
 
-    lowPlyHistory.fill(100);
+    for (int p = 0; p < LOW_PLY_HISTORY_SIZE; ++p)
+        lowPlyHistory[p].fill((LowPlyMul[p] * 100) >> 12);
 
     for (Color c : {WHITE, BLACK})
         for (int i = 0; i < UINT_16_HISTORY_SIZE; i++)
@@ -1930,7 +1931,14 @@ void update_quiet_histories(
     workerThread.mainHistory[us][move.raw()] << bonus;  // Untuned to prevent duplicate effort
 
     if (ss->ply < LOW_PLY_HISTORY_SIZE)
-        workerThread.lowPlyHistory[ss->ply][move.raw()] << bonus * 663 / 1024;
+    {
+        int   b  = bonus * 663 / 1024;
+        int   sb = (LowPlyMul[ss->ply] * b) >> 12;
+        int   sD = (LowPlyMul[ss->ply] * LOW_PLY_HISTORY_LIMIT) >> 12;
+        int   cb = std::clamp(sb, -sD, sD);
+        auto& e  = workerThread.lowPlyHistory[ss->ply][move.raw()];
+        e        = e + cb - e * std::abs(cb) / sD;
+    }
 
     update_continuation_histories(ss, pos.moved_piece(move), move.to_sq(), bonus * 820 / 1024);
 
