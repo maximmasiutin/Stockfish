@@ -198,7 +198,8 @@ ExtMove* MovePicker::score(const MoveList<Type>& ml) {
 
     Color us = pos.side_to_move();
 
-    [[maybe_unused]] Bitboard threatByLesser[KING + 1];
+    [[maybe_unused]] Bitboard                                  threatByLesser[KING + 1];
+    [[maybe_unused]] decltype(&sharedHistory->pawn_entry(pos)) pawnRow = nullptr;
     if constexpr (Type == QUIETS)
     {
         threatByLesser[PAWN]   = 0;
@@ -207,6 +208,8 @@ ExtMove* MovePicker::score(const MoveList<Type>& ml) {
           pos.attacks_by<KNIGHT>(~us) | pos.attacks_by<BISHOP>(~us) | threatByLesser[KNIGHT];
         threatByLesser[QUEEN] = pos.attacks_by<ROOK>(~us) | threatByLesser[ROOK];
         threatByLesser[KING]  = 0;
+
+        pawnRow = &sharedHistory->pawn_entry(pos);
     }
 
     ExtMove* it = cur;
@@ -227,9 +230,11 @@ ExtMove* MovePicker::score(const MoveList<Type>& ml) {
 
         else if constexpr (Type == QUIETS)
         {
+            const auto* pawnPtr = &(*pawnRow)[pc][to];
+            prefetch(pawnPtr);
+
             // histories
             m.value = 2 * (*mainHistory)[us][m.raw()];
-            m.value += 2 * sharedHistory->pawn_entry(pos)[pc][to];
             m.value += (*continuationHistory[0])[pc][to];
             m.value += (*continuationHistory[1])[pc][to];
             m.value += (*continuationHistory[2])[pc][to];
@@ -247,6 +252,8 @@ ExtMove* MovePicker::score(const MoveList<Type>& ml) {
 
             if (ply < LOW_PLY_HISTORY_SIZE)
                 m.value += 8 * (*lowPlyHistory)[ply][m.raw()] / (1 + ply);
+
+            m.value += 2 * (*pawnPtr);
         }
 
         else  // Type == EVASIONS
