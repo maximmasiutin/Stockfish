@@ -198,7 +198,9 @@ ExtMove* MovePicker::score(const MoveList<Type>& ml) {
 
     Color us = pos.side_to_move();
 
-    [[maybe_unused]] Bitboard threatByLesser[KING + 1];
+    [[maybe_unused]] Bitboard                threatByLesser[KING + 1];
+    [[maybe_unused]] int                     lowplyWeight = 0;
+    [[maybe_unused]] const LowPlyHistoryRow* lowplyRow    = nullptr;
     if constexpr (Type == QUIETS)
     {
         threatByLesser[PAWN]   = 0;
@@ -207,6 +209,12 @@ ExtMove* MovePicker::score(const MoveList<Type>& ml) {
           pos.attacks_by<KNIGHT>(~us) | pos.attacks_by<BISHOP>(~us) | threatByLesser[KNIGHT];
         threatByLesser[QUEEN] = pos.attacks_by<ROOK>(~us) | threatByLesser[ROOK];
         threatByLesser[KING]  = 0;
+
+        if (ply < LOW_PLY_HISTORY_SIZE)
+        {
+            lowplyWeight = 8192 / (ply + 1);
+            lowplyRow    = &(*lowPlyHistory)[ply];
+        }
     }
 
     ExtMove* it = cur;
@@ -245,8 +253,8 @@ ExtMove* MovePicker::score(const MoveList<Type>& ml) {
             m.value += PieceValue[pt] * v;
 
 
-            if (ply < LOW_PLY_HISTORY_SIZE)
-                m.value += 8 * (*lowPlyHistory)[ply][m.raw()] / (1 + ply);
+            if (lowplyRow)
+                m.value += lowplyWeight * (*lowplyRow)[m.raw()] >> 10;
         }
 
         else  // Type == EVASIONS
