@@ -18,7 +18,9 @@
 
 #include "movepick.h"
 
+#include <array>
 #include <cassert>
+#include <cstdint>
 #include <limits>
 #include <utility>
 
@@ -209,6 +211,17 @@ ExtMove* MovePicker::score(const MoveList<Type>& ml) {
         threatByLesser[KING]  = 0;
     }
 
+    int lowplyWeight = 0;
+    if constexpr (Type == QUIETS)
+    {
+        if (ply < LOW_PLY_HISTORY_SIZE)
+        {
+            static constexpr std::array<std::int16_t, LOW_PLY_HISTORY_SIZE> lowply_weights = {
+              4920, 3690, 3050, 3400, 4280};
+            lowplyWeight = lowply_weights[ply];
+        }
+    }
+
     ExtMove* it = cur;
     for (auto move : ml)
     {
@@ -246,7 +259,7 @@ ExtMove* MovePicker::score(const MoveList<Type>& ml) {
 
 
             if (ply < LOW_PLY_HISTORY_SIZE)
-                m.value += 8 * (*lowPlyHistory)[ply][m.raw()] / (1 + ply);
+                m.value += lowplyWeight * (*lowPlyHistory)[ply][m.raw()] >> 10;
         }
 
         else  // Type == EVASIONS
