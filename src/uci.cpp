@@ -356,11 +356,11 @@ void UCIEngine::benchmark(std::istream& args) {
     cnt   = 1;
     nodes = 0;
 
-    int           numHashfullReadings = 0;
-    constexpr int hashfullAges[]      = {0, 999};  // Only normal hashfull and touched hash.
-    constexpr int hashfullAgeCount    = std::size(hashfullAges);
-    int           totalHashfull[hashfullAgeCount] = {0};
-    int           maxHashfull[hashfullAgeCount]   = {0};
+    int               numHashfullReadings = 0;
+    sf_const_data int hashfullAges[]      = {0, 999};  // Only normal hashfull and touched hash.
+    constexpr int     hashfullAgeCount    = std::size(hashfullAges);
+    int               totalHashfull[hashfullAgeCount] = {0};
+    int               maxHashfull[hashfullAgeCount]   = {0};
 
     auto updateHashfullReadings = [&]() {
         numHashfullReadings += 1;
@@ -510,8 +510,8 @@ WinRateParams win_rate_params(const Position& pos) {
     double m = std::clamp(material, 17, 78) / 58.0;
 
     // Return a = p_a(material) and b = p_b(material), see github.com/official-stockfish/WDL_model
-    constexpr double as[] = {-72.32565836, 185.93832038, -144.58862193, 416.44950446};
-    constexpr double bs[] = {83.86794042, -136.06112997, 69.98820887, 47.62901433};
+    sf_const_data double as[] = {-72.32565836, 185.93832038, -144.58862193, 416.44950446};
+    sf_const_data double bs[] = {83.86794042, -136.06112997, 69.98820887, 47.62901433};
 
     double a = (((as[0] * m + as[1]) * m + as[2]) * m) + as[3];
     double b = (((bs[0] * m + bs[1]) * m + bs[2]) * m) + bs[3];

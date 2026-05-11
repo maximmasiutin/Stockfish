@@ -120,8 +120,8 @@ class CleanupHooks {
     static void register_signal_handlers() noexcept {
         std::atexit([]() { SharedMemoryRegistry::cleanup_all(true); });
 
-        constexpr int signals[] = {SIGHUP,  SIGINT,  SIGQUIT, SIGILL, SIGABRT, SIGFPE,
-                                   SIGSEGV, SIGTERM, SIGBUS,  SIGSYS, SIGXCPU, SIGXFSZ};
+        sf_const_data int signals[] = {SIGHUP,  SIGINT,  SIGQUIT, SIGILL, SIGABRT, SIGFPE,
+                                       SIGSEGV, SIGTERM, SIGBUS,  SIGSYS, SIGXCPU, SIGXFSZ};
 
         struct sigaction sa;
         sa.sa_handler = handle_signal;

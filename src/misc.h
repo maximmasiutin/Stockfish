@@ -516,6 +516,10 @@ void move_to_front(std::vector<T>& vec, Predicate pred) {
     #define sf_always_inline
 #endif
 
+// Decorates a function-local read-only coefficient/LUT array so it lives in
+// .rodata instead of being materialized on the stack at every call.
+#define sf_const_data static constexpr
+
 #if defined(__clang__)
     #define sf_assume(cond) __builtin_assume(cond)
 #elif defined(__GNUC__)

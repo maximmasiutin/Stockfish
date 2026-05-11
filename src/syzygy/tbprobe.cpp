@@ -292,7 +292,7 @@ class TBFile: public std::ifstream {
 #endif
         uint8_t* data = (uint8_t*) *baseAddress;
 
-        constexpr uint8_t Magics[][4] = {{0xD7, 0x66, 0x0C, 0xA5}, {0x71, 0xE8, 0x23, 0x5D}};
+        sf_const_data uint8_t Magics[][4] = {{0xD7, 0x66, 0x0C, 0xA5}, {0x71, 0xE8, 0x23, 0x5D}};
 
         if (memcmp(data, Magics[type == WDL], 4))
         {
@@ -704,7 +704,7 @@ WDLScore map_score(TBTable<WDL>*, File, int value, WDLScore) { return WDLScore(v
 
 int map_score(TBTable<DTZ>* entry, File f, int value, WDLScore wdl) {
 
-    constexpr int WDLMap[] = {1, 3, 0, 2, 0};
+    sf_const_data int WDLMap[] = {1, 3, 0, 2, 0};
 
     auto flags = entry->get(0, f)->flags;
 
@@ -1703,7 +1703,7 @@ bool Tablebases::root_probe(Position&                    pos,
 // A return value false indicates that not all probes were successful.
 bool Tablebases::root_probe_wdl(Position& pos, Search::RootMoves& rootMoves, bool rule50) {
 
-    static const int WDL_to_rank[] = {-MAX_DTZ, -MAX_DTZ + 101, 0, MAX_DTZ - 101, MAX_DTZ};
+    sf_const_data int WDL_to_rank[] = {-MAX_DTZ, -MAX_DTZ + 101, 0, MAX_DTZ - 101, MAX_DTZ};
 
     ProbeState result = OK;
     StateInfo  st;
