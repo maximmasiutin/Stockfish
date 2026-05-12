@@ -19,14 +19,21 @@
 #include "movepick.h"
 
 #include <cassert>
+#include <cstdint>
 #include <limits>
 #include <utility>
 
 #include "bitboard.h"
 #include "misc.h"
 #include "position.h"
+#include "tune.h"
 
 namespace Stockfish {
+
+int lphWeight0 = 9000;
+int lphWeight1 = 6000;
+TUNE(SetRange(7000, 12000), lphWeight0);
+TUNE(SetRange(3000, 8000), lphWeight1);
 
 namespace {
 
@@ -198,7 +205,9 @@ ExtMove* MovePicker::score(const MoveList<Type>& ml) {
 
     Color us = pos.side_to_move();
 
-    [[maybe_unused]] Bitboard threatByLesser[KING + 1];
+    [[maybe_unused]] Bitboard                threatByLesser[KING + 1];
+    [[maybe_unused]] int                     lowPlyWeight = 0;
+    [[maybe_unused]] const LowPlyHistoryRow* lowPlyRow    = nullptr;
     if constexpr (Type == QUIETS)
     {
         threatByLesser[PAWN]   = 0;
@@ -207,6 +216,13 @@ ExtMove* MovePicker::score(const MoveList<Type>& ml) {
           pos.attacks_by<KNIGHT>(~us) | pos.attacks_by<BISHOP>(~us) | threatByLesser[KNIGHT];
         threatByLesser[QUEEN] = pos.attacks_by<ROOK>(~us) | threatByLesser[ROOK];
         threatByLesser[KING]  = 0;
+
+        if (has_low_ply_history(ply))
+        {
+            const std::size_t lowPlyIdx = std::size_t(low_ply_history_index(ply));
+            lowPlyWeight                = lowPlyIdx == 0 ? lphWeight0 : lphWeight1;
+            lowPlyRow                   = &(*lowPlyHistory)[lowPlyIdx];
+        }
     }
 
     ExtMove* it = cur;
@@ -245,8 +261,8 @@ ExtMove* MovePicker::score(const MoveList<Type>& ml) {
             m.value += PieceValue[pt] * v;
 
 
-            if (ply < LOW_PLY_HISTORY_SIZE)
-                m.value += 8 * (*lowPlyHistory)[ply][m.raw()] / (1 + ply);
+            if (lowPlyRow)
+                m.value += lowPlyWeight * (*lowPlyRow)[m.raw()] >> 10;
         }
 
         else  // Type == EVASIONS
