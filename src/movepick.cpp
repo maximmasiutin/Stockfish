@@ -18,7 +18,9 @@
 
 #include "movepick.h"
 
+#include <array>
 #include <cassert>
+#include <cstdint>
 #include <limits>
 #include <utility>
 
@@ -198,7 +200,9 @@ ExtMove* MovePicker::score(const MoveList<Type>& ml) {
 
     Color us = pos.side_to_move();
 
-    [[maybe_unused]] Bitboard threatByLesser[KING + 1];
+    [[maybe_unused]] Bitboard                threatByLesser[KING + 1];
+    [[maybe_unused]] int                     lowPlyWeight = 0;
+    [[maybe_unused]] const LowPlyHistoryRow* lowPlyRow    = nullptr;
     if constexpr (Type == QUIETS)
     {
         threatByLesser[PAWN]   = 0;
@@ -207,6 +211,15 @@ ExtMove* MovePicker::score(const MoveList<Type>& ml) {
           pos.attacks_by<KNIGHT>(~us) | pos.attacks_by<BISHOP>(~us) | threatByLesser[KNIGHT];
         threatByLesser[QUEEN] = pos.attacks_by<ROOK>(~us) | threatByLesser[ROOK];
         threatByLesser[KING]  = 0;
+
+        if (has_low_ply_history(ply))
+        {
+            static constexpr std::array<std::int16_t, LOW_PLY_HISTORY_SIZE> lowPlyWeights = {9000,
+                                                                                             6000};
+            const std::size_t lowPlyIdx = std::size_t(low_ply_history_index(ply));
+            lowPlyWeight                = lowPlyWeights[lowPlyIdx];
+            lowPlyRow                   = &(*lowPlyHistory)[lowPlyIdx];
+        }
     }
 
     ExtMove* it = cur;
@@ -245,8 +258,8 @@ ExtMove* MovePicker::score(const MoveList<Type>& ml) {
             m.value += PieceValue[pt] * v;
 
 
-            if (ply < LOW_PLY_HISTORY_SIZE)
-                m.value += 8 * (*lowPlyHistory)[ply][m.raw()] / (1 + ply);
+            if (lowPlyRow)
+                m.value += lowPlyWeight * (*lowPlyRow)[m.raw()] >> 10;
         }
 
         else  // Type == EVASIONS

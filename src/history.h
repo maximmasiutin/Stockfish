@@ -39,7 +39,47 @@ constexpr int PAWN_HISTORY_BASE_SIZE   = 8192;  // has to be a power of 2
 constexpr int UINT_16_HISTORY_SIZE     = std::numeric_limits<uint16_t>::max() + 1;
 constexpr int CORRHIST_BASE_SIZE       = UINT_16_HISTORY_SIZE;
 constexpr int CORRECTION_HISTORY_LIMIT = 1024;
-constexpr int LOW_PLY_HISTORY_SIZE     = 5;
+
+// LowPlyHistory has rows only for even plies strictly below
+// LOW_PLY_HISTORY_PLY_LIMIT (exclusive upper bound). With the limit set to 3,
+// rows exist for plies {0, 2} and not for ply 1 or any ply >= 3.
+constexpr int LOW_PLY_HISTORY_PLY_LIMIT = 3;
+
+constexpr bool has_low_ply_history(int ply) {
+    return std::size_t(ply) < LOW_PLY_HISTORY_PLY_LIMIT && (ply & 1) == 0;
+}
+
+// Count plies in [0, LOW_PLY_HISTORY_PLY_LIMIT) that have a row; this is the
+// number of rows the LowPlyHistory array must hold.
+constexpr std::size_t compute_low_ply_history_size() {
+    std::size_t count = 0;
+    for (int p = 0; p < LOW_PLY_HISTORY_PLY_LIMIT; ++p)
+        if (has_low_ply_history(p))
+            ++count;
+    return count;
+}
+
+constexpr std::size_t LOW_PLY_HISTORY_SIZE = compute_low_ply_history_size();
+
+// Translate a ply (precondition: has_low_ply_history(ply)) to its row index
+// in [0, LOW_PLY_HISTORY_SIZE).
+constexpr int low_ply_history_index(int ply) { return ply >> 1; }
+
+constexpr bool low_ply_history_index_is_bijection() {
+    std::size_t expected = 0;
+    for (int p = 0; p < LOW_PLY_HISTORY_PLY_LIMIT; ++p)
+        if (has_low_ply_history(p))
+        {
+            if (std::size_t(low_ply_history_index(p)) != expected)
+                return false;
+            ++expected;
+        }
+    return expected == LOW_PLY_HISTORY_SIZE;
+}
+
+static_assert(low_ply_history_index_is_bijection(),
+              "low_ply_history_index must map valid plies to contiguous [0, LOW_PLY_HISTORY_SIZE); "
+              "if you changed the topology, update low_ply_history_index accordingly");
 
 static_assert((PAWN_HISTORY_BASE_SIZE & (PAWN_HISTORY_BASE_SIZE - 1)) == 0,
               "PAWN_HISTORY_BASE_SIZE has to be a power of 2");
@@ -134,9 +174,12 @@ struct DynStats {
 // see https://www.chessprogramming.org/Butterfly_Boards
 using ButterflyHistory = Stats<std::int16_t, 7183, COLOR_NB, UINT_16_HISTORY_SIZE>;
 
-// LowPlyHistory is addressed by ply and move's from and to squares, used
-// to improve move ordering near the root
-using LowPlyHistory = Stats<std::int16_t, 7183, LOW_PLY_HISTORY_SIZE, UINT_16_HISTORY_SIZE>;
+// LowPlyHistory is addressed by a row index (NOT directly by ply) and the
+// move's packed from/to bits, used to improve move ordering near the root.
+// Translate a ply to its row via low_ply_history_index() and gate access
+// with has_low_ply_history().
+using LowPlyHistoryRow = Stats<std::int16_t, 7183, UINT_16_HISTORY_SIZE>;
+using LowPlyHistory    = Stats<std::int16_t, 7183, LOW_PLY_HISTORY_SIZE, UINT_16_HISTORY_SIZE>;
 
 // CapturePieceToHistory is addressed by a move's [piece][to][captured piece type]
 using CapturePieceToHistory = Stats<std::int16_t, 10692, PIECE_NB, SQUARE_NB, PIECE_TYPE_NB>;
