@@ -144,7 +144,8 @@ void update_all_stats(const Position& pos,
                       SearchedList&   quietsSearched,
                       SearchedList&   capturesSearched,
                       Depth           depth,
-                      Move            ttMove);
+                      Move            ttMove,
+                      bool            bestMoveDoDeeperConfirmed);
 
 bool is_shuffling(Move move, Stack* const ss, const Position& pos) {
     if (pos.capture_stage(move) || pos.rule50_count() < 10)
@@ -1040,8 +1041,10 @@ moves_loop:  // When in check, search starts here
 
     // Step 13. Loop through all pseudo-legal moves until no moves remain
     // or a beta cutoff occurs.
+    bool bestMoveDoDeeperConfirmed = false;
     while ((move = mp.next_move()) != Move::none())
     {
+        bool doDeeperConfirmed = false;
         assert(move.is_ok());
 
         if (move == excludedMove)
@@ -1293,7 +1296,10 @@ moves_loop:  // When in check, search starts here
                 newDepth += doDeeperSearch - doShallowerSearch;
 
                 if (newDepth > d)
+                {
                     value = -search<NonPV>(pos, ss + 1, -(alpha + 1), -alpha, newDepth, !cutNode);
+                    doDeeperConfirmed = doDeeperSearch;
+                }
 
                 // Post LMR continuation history updates
                 update_continuation_histories(ss, movedPiece, move.to_sq(), 1415);
@@ -1403,7 +1409,8 @@ moves_loop:  // When in check, search starts here
 
             if (value + inc > alpha)
             {
-                bestMove = move;
+                bestMove                  = move;
+                bestMoveDoDeeperConfirmed = doDeeperConfirmed;
 
                 if (PvNode && !rootNode)  // Update pv even in fail-high case
                     ss->pv->update(move, (ss + 1)->pv);
@@ -1455,7 +1462,7 @@ moves_loop:  // When in check, search starts here
     else if (bestMove)
     {
         update_all_stats(pos, ss, *this, bestMove, prevSq, quietsSearched, capturesSearched, depth,
-                         ttData.move);
+                         ttData.move, bestMoveDoDeeperConfirmed);
         if (!PvNode)
             ttMoveHistory << (bestMove == ttData.move ? 792 : -779);
     }
@@ -1849,7 +1856,8 @@ void update_all_stats(const Position& pos,
                       SearchedList&   quietsSearched,
                       SearchedList&   capturesSearched,
                       Depth           depth,
-                      Move            ttMove) {
+                      Move            ttMove,
+                      bool            bestMoveDoDeeperConfirmed) {
 
     CapturePieceToHistory& captureHistory = workerThread.captureHistory;
     Piece                  movedPiece     = pos.moved_piece(bestMove);
@@ -1861,7 +1869,9 @@ void update_all_stats(const Position& pos,
 
     if (!pos.capture_stage(bestMove))
     {
-        update_quiet_histories(pos, ss, workerThread, bestMove, bonus * 824 / 1024);
+        int bestBonus = bonus * 824 / 1024;
+        bestBonus     = (bestBonus * (1024 + 497 * bestMoveDoDeeperConfirmed)) >> 10;
+        update_quiet_histories(pos, ss, workerThread, bestMove, bestBonus);
 
         int actualMalus = malus * 1136 / 1024;
         // Decrease stats for all non-best quiet moves
