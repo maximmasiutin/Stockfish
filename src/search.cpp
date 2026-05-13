@@ -144,7 +144,8 @@ void update_all_stats(const Position& pos,
                       SearchedList&   quietsSearched,
                       SearchedList&   capturesSearched,
                       Depth           depth,
-                      Move            ttMove);
+                      Move            ttMove,
+                      uint32_t        quietsShallowMask);
 
 bool is_shuffling(Move move, Stack* const ss, const Position& pos) {
     if (pos.capture_stage(move) || pos.rule50_count() < 10)
@@ -1040,8 +1041,10 @@ moves_loop:  // When in check, search starts here
 
     // Step 13. Loop through all pseudo-legal moves until no moves remain
     // or a beta cutoff occurs.
+    uint32_t quietsShallowMask = 0;
     while ((move = mp.next_move()) != Move::none())
     {
+        bool lmrFailLowOnly = false;
         assert(move.is_ok());
 
         if (move == excludedMove)
@@ -1281,6 +1284,9 @@ moves_loop:  // When in check, search starts here
             value         = -search<NonPV>(pos, ss + 1, -(alpha + 1), -alpha, d, true);
             ss->reduction = 0;
 
+            // Mark loser whose only search was the reduced LMR at d < newDepth.
+            lmrFailLowOnly = (value <= alpha) && (d < newDepth);
+
             // Do a full-depth search when reduced LMR search fails high
             // (*Scaler) Shallower searches here don't scale well
             if (value > alpha)
@@ -1432,7 +1438,10 @@ moves_loop:  // When in check, search starts here
             if (capture)
                 capturesSearched.push_back(move);
             else
+            {
+                quietsShallowMask |= uint32_t(lmrFailLowOnly) << quietsSearched.size();
                 quietsSearched.push_back(move);
+            }
         }
     }
 
@@ -1455,7 +1464,7 @@ moves_loop:  // When in check, search starts here
     else if (bestMove)
     {
         update_all_stats(pos, ss, *this, bestMove, prevSq, quietsSearched, capturesSearched, depth,
-                         ttData.move);
+                         ttData.move, quietsShallowMask);
         if (!PvNode)
             ttMoveHistory << (bestMove == ttData.move ? 792 : -779);
     }
@@ -1849,7 +1858,8 @@ void update_all_stats(const Position& pos,
                       SearchedList&   quietsSearched,
                       SearchedList&   capturesSearched,
                       Depth           depth,
-                      Move            ttMove) {
+                      Move            ttMove,
+                      uint32_t        quietsShallowMask) {
 
     CapturePieceToHistory& captureHistory = workerThread.captureHistory;
     Piece                  movedPiece     = pos.moved_piece(bestMove);
@@ -1863,12 +1873,16 @@ void update_all_stats(const Position& pos,
     {
         update_quiet_histories(pos, ss, workerThread, bestMove, bonus * 824 / 1024);
 
-        int actualMalus = malus * 1136 / 1024;
+        int    actualMalus = malus * 1136 / 1024;
+        size_t idx         = 0;
         // Decrease stats for all non-best quiet moves
         for (Move move : quietsSearched)
         {
-            actualMalus = actualMalus * 956 / 1024;
-            update_quiet_histories(pos, ss, workerThread, move, -actualMalus);
+            bool shallow = (quietsShallowMask >> idx) & 1u;
+            ++idx;
+            actualMalus      = actualMalus * 956 / 1024;
+            int contribution = -((actualMalus * (1024 - 307 * shallow)) >> 10);
+            update_quiet_histories(pos, ss, workerThread, move, contribution);
         }
     }
     else
