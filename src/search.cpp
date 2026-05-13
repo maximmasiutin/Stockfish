@@ -1042,6 +1042,7 @@ moves_loop:  // When in check, search starts here
     // or a beta cutoff occurs.
     while ((move = mp.next_move()) != Move::none())
     {
+        bool lmrFailLowOnly = false;
         assert(move.is_ok());
 
         if (move == excludedMove)
@@ -1281,6 +1282,9 @@ moves_loop:  // When in check, search starts here
             value         = -search<NonPV>(pos, ss + 1, -(alpha + 1), -alpha, d, true);
             ss->reduction = 0;
 
+            // Reduced LMR search did not exceed alpha; skip history malus.
+            lmrFailLowOnly = (value <= alpha) && (d < newDepth);
+
             // Do a full-depth search when reduced LMR search fails high
             // (*Scaler) Shallower searches here don't scale well
             if (value > alpha)
@@ -1431,7 +1435,7 @@ moves_loop:  // When in check, search starts here
         {
             if (capture)
                 capturesSearched.push_back(move);
-            else
+            else if (!lmrFailLowOnly)
                 quietsSearched.push_back(move);
         }
     }
