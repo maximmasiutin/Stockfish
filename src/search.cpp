@@ -141,6 +141,7 @@ void update_all_stats(const Position& pos,
                       Search::Worker& workerThread,
                       Move            bestMove,
                       Square          prevSq,
+                      SearchedList&   quietsShallow,
                       SearchedList&   quietsSearched,
                       SearchedList&   capturesSearched,
                       Depth           depth,
@@ -686,6 +687,7 @@ Value Search::Worker::search(
     Piece movedPiece;
 
     SearchedList capturesSearched;
+    SearchedList quietsShallow;
     SearchedList quietsSearched;
 
     // Step 1. Initialize node
@@ -1042,6 +1044,7 @@ moves_loop:  // When in check, search starts here
     // or a beta cutoff occurs.
     while ((move = mp.next_move()) != Move::none())
     {
+        bool lmrFailLowOnly = false;
         assert(move.is_ok());
 
         if (move == excludedMove)
@@ -1281,6 +1284,8 @@ moves_loop:  // When in check, search starts here
             value         = -search<NonPV>(pos, ss + 1, -(alpha + 1), -alpha, d, true);
             ss->reduction = 0;
 
+            lmrFailLowOnly = (value <= alpha) && (d < newDepth);
+
             // Do a full-depth search when reduced LMR search fails high
             // (*Scaler) Shallower searches here don't scale well
             if (value > alpha)
@@ -1431,6 +1436,8 @@ moves_loop:  // When in check, search starts here
         {
             if (capture)
                 capturesSearched.push_back(move);
+            else if (lmrFailLowOnly)
+                quietsShallow.push_back(move);
             else
                 quietsSearched.push_back(move);
         }
@@ -1454,8 +1461,8 @@ moves_loop:  // When in check, search starts here
     // we update the stats of searched moves.
     else if (bestMove)
     {
-        update_all_stats(pos, ss, *this, bestMove, prevSq, quietsSearched, capturesSearched, depth,
-                         ttData.move);
+        update_all_stats(pos, ss, *this, bestMove, prevSq, quietsShallow, quietsSearched,
+                         capturesSearched, depth, ttData.move);
         if (!PvNode)
             ttMoveHistory << (bestMove == ttData.move ? 792 : -779);
     }
@@ -1846,6 +1853,7 @@ void update_all_stats(const Position& pos,
                       Search::Worker& workerThread,
                       Move            bestMove,
                       Square          prevSq,
+                      SearchedList&   quietsShallow,
                       SearchedList&   quietsSearched,
                       SearchedList&   capturesSearched,
                       Depth           depth,
@@ -1864,7 +1872,11 @@ void update_all_stats(const Position& pos,
         update_quiet_histories(pos, ss, workerThread, bestMove, bonus * 824 / 1024);
 
         int actualMalus = malus * 1136 / 1024;
-        // Decrease stats for all non-best quiet moves
+        for (Move move : quietsShallow)
+        {
+            actualMalus = actualMalus * 956 / 1024;
+            update_quiet_histories(pos, ss, workerThread, move, -actualMalus);
+        }
         for (Move move : quietsSearched)
         {
             actualMalus = actualMalus * 956 / 1024;
