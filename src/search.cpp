@@ -21,6 +21,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <bitset>
 #include <cassert>
 #include <chrono>
 #include <cmath>
@@ -71,6 +72,7 @@ constexpr uint64_t NODES_LIMIT_OUTPUT = 10'000'000;
 
 constexpr int SEARCHEDLIST_CAPACITY = 32;
 using SearchedList                  = ValueList<Move, SEARCHEDLIST_CAPACITY>;
+using SearchedFlags                 = std::bitset<SEARCHEDLIST_CAPACITY>;
 
 // (*Scalers):
 // The values with Scaler asterisks have proven non-linear scaling.
@@ -144,7 +146,8 @@ void update_all_stats(const Position& pos,
                       SearchedList&   quietsSearched,
                       SearchedList&   capturesSearched,
                       Depth           depth,
-                      Move            ttMove);
+                      Move            ttMove,
+                      SearchedFlags   quietsLowConf);
 
 bool is_shuffling(Move move, Stack* const ss, const Position& pos) {
     if (pos.capture_stage(move) || pos.rule50_count() < 10)
@@ -685,8 +688,9 @@ Value Search::Worker::search(
     int   priorReduction;
     Piece movedPiece;
 
-    SearchedList capturesSearched;
-    SearchedList quietsSearched;
+    SearchedList  capturesSearched;
+    SearchedList  quietsSearched;
+    SearchedFlags quietsLowConf;
 
     // Step 1. Initialize node
     ss->inCheck   = pos.checkers();
@@ -1042,6 +1046,7 @@ moves_loop:  // When in check, search starts here
     // or a beta cutoff occurs.
     while ((move = mp.next_move()) != Move::none())
     {
+        bool lmrFailLowOnly = false;
         assert(move.is_ok());
 
         if (move == excludedMove)
@@ -1281,6 +1286,8 @@ moves_loop:  // When in check, search starts here
             value         = -search<NonPV>(pos, ss + 1, -(alpha + 1), -alpha, d, true);
             ss->reduction = 0;
 
+            lmrFailLowOnly = (value <= alpha) && (d <= newDepth / 3);
+
             // Do a full-depth search when reduced LMR search fails high
             // (*Scaler) Shallower searches here don't scale well
             if (value > alpha)
@@ -1432,7 +1439,11 @@ moves_loop:  // When in check, search starts here
             if (capture)
                 capturesSearched.push_back(move);
             else
+            {
+                if (lmrFailLowOnly)
+                    quietsLowConf.set(quietsSearched.size());
                 quietsSearched.push_back(move);
+            }
         }
     }
 
@@ -1455,7 +1466,7 @@ moves_loop:  // When in check, search starts here
     else if (bestMove)
     {
         update_all_stats(pos, ss, *this, bestMove, prevSq, quietsSearched, capturesSearched, depth,
-                         ttData.move);
+                         ttData.move, quietsLowConf);
         if (!PvNode)
             ttMoveHistory << (bestMove == ttData.move ? 792 : -779);
     }
@@ -1849,7 +1860,8 @@ void update_all_stats(const Position& pos,
                       SearchedList&   quietsSearched,
                       SearchedList&   capturesSearched,
                       Depth           depth,
-                      Move            ttMove) {
+                      Move            ttMove,
+                      SearchedFlags   quietsLowConf) {
 
     CapturePieceToHistory& captureHistory = workerThread.captureHistory;
     Piece                  movedPiece     = pos.moved_piece(bestMove);
@@ -1863,12 +1875,23 @@ void update_all_stats(const Position& pos,
     {
         update_quiet_histories(pos, ss, workerThread, bestMove, bonus * 824 / 1024);
 
-        int actualMalus = malus * 1136 / 1024;
         // Decrease stats for all non-best quiet moves
+        unsigned actualMalus  = unsigned(malus) * 1136 / 1024;
+        int      clampedDepth = std::clamp(depth - 11, 0, 19);
+        unsigned lowConfMul   = 725 + 279 * unsigned(clampedDepth) / 19;
+
+        size_t i = 0;
         for (Move move : quietsSearched)
         {
             actualMalus = actualMalus * 956 / 1024;
-            update_quiet_histories(pos, ss, workerThread, move, -actualMalus);
+
+            // Quiet moves rejected only by a heavily-reduced LMR search (no full-depth
+            // confirmation) have low-confidence fail-low verdicts, so their history
+            // malus contribution is dampened.
+            unsigned multiplier   = quietsLowConf[i++] ? lowConfMul : 1024;
+            int      contribution = actualMalus * multiplier / 1024;
+
+            update_quiet_histories(pos, ss, workerThread, move, -contribution);
         }
     }
     else
