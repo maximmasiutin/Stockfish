@@ -71,6 +71,7 @@ constexpr uint64_t NODES_LIMIT_OUTPUT = 10'000'000;
 
 constexpr int SEARCHEDLIST_CAPACITY = 32;
 using SearchedList                  = ValueList<Move, SEARCHEDLIST_CAPACITY>;
+using SearchedTiers                 = uint8_t[SEARCHEDLIST_CAPACITY];
 
 // (*Scalers):
 // The values with Scaler asterisks have proven non-linear scaling.
@@ -142,6 +143,7 @@ void update_all_stats(const Position& pos,
                       Move            bestMove,
                       Square          prevSq,
                       SearchedList&   quietsSearched,
+                      SearchedTiers&  quietsTier,
                       SearchedList&   capturesSearched,
                       Depth           depth,
                       Move            ttMove);
@@ -685,8 +687,9 @@ Value Search::Worker::search(
     int   priorReduction;
     Piece movedPiece;
 
-    SearchedList capturesSearched;
-    SearchedList quietsSearched;
+    SearchedList  capturesSearched;
+    SearchedList  quietsSearched;
+    SearchedTiers quietsTier = {};
 
     // Step 1. Initialize node
     ss->inCheck   = pos.checkers();
@@ -1042,6 +1045,7 @@ moves_loop:  // When in check, search starts here
     // or a beta cutoff occurs.
     while ((move = mp.next_move()) != Move::none())
     {
+        int lmrTier = 0;
         assert(move.is_ok());
 
         if (move == excludedMove)
@@ -1298,6 +1302,9 @@ moves_loop:  // When in check, search starts here
                 // Post LMR continuation history updates
                 update_continuation_histories(ss, movedPiece, move.to_sq(), 1415);
             }
+            else
+                lmrTier = (d * 3 <= newDepth) + (d * 2 <= newDepth) + (d * 3 <= newDepth * 2)
+                        + (d * 4 <= newDepth * 3) + (d < newDepth);
         }
 
         // Step 18. Full-depth search when LMR is skipped
@@ -1432,7 +1439,10 @@ moves_loop:  // When in check, search starts here
             if (capture)
                 capturesSearched.push_back(move);
             else
+            {
+                quietsTier[quietsSearched.size()] = uint8_t(lmrTier);
                 quietsSearched.push_back(move);
+            }
         }
     }
 
@@ -1454,8 +1464,8 @@ moves_loop:  // When in check, search starts here
     // we update the stats of searched moves.
     else if (bestMove)
     {
-        update_all_stats(pos, ss, *this, bestMove, prevSq, quietsSearched, capturesSearched, depth,
-                         ttData.move);
+        update_all_stats(pos, ss, *this, bestMove, prevSq, quietsSearched, quietsTier,
+                         capturesSearched, depth, ttData.move);
         if (!PvNode)
             ttMoveHistory << (bestMove == ttData.move ? 792 : -779);
     }
@@ -1847,6 +1857,7 @@ void update_all_stats(const Position& pos,
                       Move            bestMove,
                       Square          prevSq,
                       SearchedList&   quietsSearched,
+                      SearchedTiers&  quietsTier,
                       SearchedList&   capturesSearched,
                       Depth           depth,
                       Move            ttMove) {
@@ -1863,12 +1874,21 @@ void update_all_stats(const Position& pos,
     {
         update_quiet_histories(pos, ss, workerThread, bestMove, bonus * 824 / 1024);
 
-        int actualMalus = malus * 1136 / 1024;
         // Decrease stats for all non-best quiet moves
+        constexpr uint16_t tierMul[6]  = {1024, 1016, 998, 973, 922, 715};
+        unsigned           actualMalus = unsigned(malus) * 1136 / 1024;
+
+        size_t i = 0;
         for (Move move : quietsSearched)
         {
             actualMalus = actualMalus * 956 / 1024;
-            update_quiet_histories(pos, ss, workerThread, move, -actualMalus);
+
+            // Quiet moves rejected only by a heavily-reduced LMR search (no full-depth
+            // confirmation) have low-confidence fail-low verdicts, so their history
+            // malus contribution is dampened.
+            int contribution = actualMalus * tierMul[quietsTier[i++]] / 1024;
+
+            update_quiet_histories(pos, ss, workerThread, move, -contribution);
         }
     }
     else
