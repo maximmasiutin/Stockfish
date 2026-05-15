@@ -69,8 +69,10 @@ namespace {
 
 constexpr uint64_t NODES_LIMIT_OUTPUT = 10'000'000;
 
-constexpr int SEARCHEDLIST_CAPACITY = 32;
-using SearchedList                  = ValueList<Move, SEARCHEDLIST_CAPACITY>;
+constexpr int QUIETSLIST_CAPACITY   = 48;
+constexpr int CAPTURESLIST_CAPACITY = 32;
+using QuietsSearchedList            = ValueList<Move, QUIETSLIST_CAPACITY>;
+using CapturesSearchedList          = ValueList<Move, CAPTURESLIST_CAPACITY>;
 
 // (*Scalers):
 // The values with Scaler asterisks have proven non-linear scaling.
@@ -136,15 +138,15 @@ Value value_from_tt(Value v, int ply, int r50c);
 void  update_continuation_histories(Stack* ss, Piece pc, Square to, int bonus);
 void  update_quiet_histories(
    const Position& pos, Stack* ss, Search::Worker& workerThread, Move move, int bonus);
-void update_all_stats(const Position& pos,
-                      Stack*          ss,
-                      Search::Worker& workerThread,
-                      Move            bestMove,
-                      Square          prevSq,
-                      SearchedList&   quietsSearched,
-                      SearchedList&   capturesSearched,
-                      Depth           depth,
-                      Move            ttMove);
+void update_all_stats(const Position&       pos,
+                      Stack*                ss,
+                      Search::Worker&       workerThread,
+                      Move                  bestMove,
+                      Square                prevSq,
+                      QuietsSearchedList&   quietsSearched,
+                      CapturesSearchedList& capturesSearched,
+                      Depth                 depth,
+                      Move                  ttMove);
 
 bool is_shuffling(Move move, Stack* const ss, const Position& pos) {
     if (pos.capture_stage(move) || pos.rule50_count() < 10)
@@ -685,8 +687,8 @@ Value Search::Worker::search(
     int   priorReduction;
     Piece movedPiece;
 
-    SearchedList capturesSearched;
-    SearchedList quietsSearched;
+    CapturesSearchedList capturesSearched;
+    QuietsSearchedList   quietsSearched;
 
     // Step 1. Initialize node
     ss->inCheck   = pos.checkers();
@@ -1427,11 +1429,14 @@ moves_loop:  // When in check, search starts here
 
         // If the move is worse than some previously searched move,
         // remember it, to update its stats later.
-        if (move != bestMove && moveCount <= SEARCHEDLIST_CAPACITY)
+        if (move != bestMove)
         {
             if (capture)
-                capturesSearched.push_back(move);
-            else
+            {
+                if (moveCount <= CAPTURESLIST_CAPACITY)
+                    capturesSearched.push_back(move);
+            }
+            else if (moveCount <= QUIETSLIST_CAPACITY)
                 quietsSearched.push_back(move);
         }
     }
@@ -1841,15 +1846,15 @@ Value value_from_tt(Value v, int ply, int r50c) {
 
 
 // Updates stats at the end of search() when a bestMove is found
-void update_all_stats(const Position& pos,
-                      Stack*          ss,
-                      Search::Worker& workerThread,
-                      Move            bestMove,
-                      Square          prevSq,
-                      SearchedList&   quietsSearched,
-                      SearchedList&   capturesSearched,
-                      Depth           depth,
-                      Move            ttMove) {
+void update_all_stats(const Position&       pos,
+                      Stack*                ss,
+                      Search::Worker&       workerThread,
+                      Move                  bestMove,
+                      Square                prevSq,
+                      QuietsSearchedList&   quietsSearched,
+                      CapturesSearchedList& capturesSearched,
+                      Depth                 depth,
+                      Move                  ttMove) {
 
     CapturePieceToHistory& captureHistory = workerThread.captureHistory;
     Piece                  movedPiece     = pos.moved_piece(bestMove);
