@@ -65,6 +65,18 @@ void syzygy_extend_pv(const OptionsMap&            options,
 
 using namespace Search;
 
+int tierMul1 = 998;
+int tierMul2 = 973;
+int tierMul3 = 922;
+int tierMul4 = 819;
+int tierMul5 = 717;
+
+TUNE(SetRange(798, 1023), tierMul1, SetDefaultRange);
+TUNE(SetRange(778, 1023), tierMul2, SetDefaultRange);
+TUNE(SetRange(738, 1023), tierMul3, SetDefaultRange);
+TUNE(SetRange(655, 983), tierMul4, SetDefaultRange);
+TUNE(SetRange(574, 860), tierMul5, SetDefaultRange);
+
 namespace {
 
 constexpr uint64_t NODES_LIMIT_OUTPUT = 10'000'000;
@@ -1876,8 +1888,8 @@ void update_all_stats(const Position& pos,
         update_quiet_histories(pos, ss, workerThread, bestMove, bonus * 824 / 1024);
 
         // Decrease stats for all non-best quiet moves
-        constexpr uint16_t tierMul[6]  = {1024, 998, 973, 922, 819, 717};
-        unsigned           actualMalus = unsigned(malus) * 1136 / 1024;
+        const int tierMul[6]  = {1024, tierMul1, tierMul2, tierMul3, tierMul4, tierMul5};
+        unsigned  actualMalus = unsigned(malus) * 1136 / 1024;
 
         size_t i = 0;
         for (Move move : quietsSearched)
